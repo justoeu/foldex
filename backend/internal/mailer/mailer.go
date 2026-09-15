@@ -120,15 +120,31 @@ func (m *smtpMailer) Driver() string { return "smtp" }
 func (m *smtpMailer) Send(ctx context.Context, msg Message) error {
 	addr := net.JoinHostPort(m.cfg.Host, fmt.Sprint(m.cfg.Port))
 	body := m.render(msg)
+	conn, cancelClose, err := m.dialSMTP(ctx, addr)
+	if err != nil {
+		return err
+	}
+	defer cancelClose()
+	c, err := smtp.NewClient(conn, m.cfg.Host)
+	if err != nil {
+		_ = conn.Close()
+		return fmt.Errorf("mailer: smtp handshake: %w", err)
+	}
+	defer func() { _ = c.Close() }()
+	if err := m.maybeUpgradeAndAuth(c); err != nil {
+		return err
+	}
+	return writeSMTPMessage(c, m.cfg.From, msg.To, body)
+}
 
+func (m *smtpMailer) dialSMTP(ctx context.Context, addr string) (net.Conn, func() bool, error) {
 	dialer := &net.Dialer{Timeout: m.cfg.Timeout}
 	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
-		return fmt.Errorf("mailer: dial %s: %w", addr, err)
+		return nil, nil, fmt.Errorf("mailer: dial %s: %w", addr, err)
 	}
 	rawConn := conn
 	cancelClose := context.AfterFunc(ctx, func() { _ = rawConn.Close() })
-	defer cancelClose()
 	if m.cfg.TLS {
 		tlsConn := tls.Client(conn, m.tlsConfig())
 		handshakeCtx := ctx
@@ -138,27 +154,21 @@ func (m *smtpMailer) Send(ctx context.Context, msg Message) error {
 			defer cancel()
 		}
 		if err := tlsConn.HandshakeContext(handshakeCtx); err != nil {
+			cancelClose()
 			_ = conn.Close()
-			return fmt.Errorf("mailer: tls handshake: %w", err)
+			return nil, nil, fmt.Errorf("mailer: tls handshake: %w", err)
 		}
 		conn = tlsConn
 	}
-	// The deadline covers the whole SMTP conversation. Without it a server that
-	// accepts the connection and then stops responding pins the goroutine (and
-	// the caller's request) until the process dies.
 	if dl, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(dl)
 	} else {
 		_ = conn.SetDeadline(time.Now().Add(m.cfg.Timeout))
 	}
+	return conn, cancelClose, nil
+}
 
-	c, err := smtp.NewClient(conn, m.cfg.Host)
-	if err != nil {
-		_ = conn.Close()
-		return fmt.Errorf("mailer: smtp handshake: %w", err)
-	}
-	defer func() { _ = c.Close() }()
-
+func (m *smtpMailer) maybeUpgradeAndAuth(c *smtp.Client) error {
 	if m.cfg.STARTTLS && !m.cfg.TLS {
 		if ok, _ := c.Extension("STARTTLS"); !ok {
 			return errors.New("mailer: MAIL_STARTTLS=1 but the server does not advertise STARTTLS")
@@ -167,21 +177,21 @@ func (m *smtpMailer) Send(ctx context.Context, msg Message) error {
 			return fmt.Errorf("mailer: starttls: %w", err)
 		}
 	}
-
-	if m.cfg.Username != "" {
-		// PlainAuth refuses to send credentials over an unencrypted link unless
-		// the host is localhost. That check is net/smtp's, and we keep it:
-		// silently leaking SMTP credentials in cleartext is not a trade a
-		// convenience flag should be able to make.
-		auth := smtp.PlainAuth("", m.cfg.Username, m.cfg.Password, m.cfg.Host)
-		if err := c.Auth(auth); err != nil {
-			return fmt.Errorf("mailer: auth: %w", err)
-		}
+	if m.cfg.Username == "" {
+		return nil
 	}
-	if err := c.Mail(m.cfg.From); err != nil {
+	auth := smtp.PlainAuth("", m.cfg.Username, m.cfg.Password, m.cfg.Host)
+	if err := c.Auth(auth); err != nil {
+		return fmt.Errorf("mailer: auth: %w", err)
+	}
+	return nil
+}
+
+func writeSMTPMessage(c *smtp.Client, from, to, body string) error {
+	if err := c.Mail(from); err != nil {
 		return fmt.Errorf("mailer: MAIL FROM: %w", err)
 	}
-	if err := c.Rcpt(msg.To); err != nil {
+	if err := c.Rcpt(to); err != nil {
 		return fmt.Errorf("mailer: RCPT TO: %w", err)
 	}
 	w, err := c.Data()

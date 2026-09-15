@@ -14,6 +14,7 @@ import (
 	"foldex/internal/links"
 	"foldex/internal/notes"
 	"foldex/internal/pkg/domainerr"
+	"foldex/internal/settings"
 	"foldex/internal/tags"
 	"foldex/internal/testdb"
 
@@ -217,6 +218,32 @@ func TestRepository_DeleteCascadeReleasesOwnedNoteMediaRefs(t *testing.T) {
 
 // TestRepository_DeleteCascadeOnEmptyFolder confirms the cascade path also
 // handles the trivial "empty leaf" case — no links, no children.
+func TestRepository_DeleteCascadeRemovesNotesAndLinksTogether(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Shared(t)
+	uid := testdb.SeedUser(t, pool, "cascade-notes@test.local", "admin")
+	frepo := folders.NewRepository(pool)
+	lrepo := links.NewRepository(pool)
+	nrepo := notes.NewRepository(pool)
+
+	folder, err := frepo.Create(ctx, uid, folders.CreateInput{Name: "Mix", Color: "#abc"})
+	require.NoError(t, err)
+	link, err := lrepo.Create(ctx, uid, links.CreateInput{
+		URL: "https://cascade-notes.example", Title: "L", FolderID: &folder.ID,
+	})
+	require.NoError(t, err)
+	note, err := nrepo.Create(ctx, uid, notes.CreateInput{
+		Title: "N", FolderID: &folder.ID, BodyHTML: "<p>hi</p>",
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, frepo.DeleteCascade(ctx, uid, folder.ID, testUnlockKey, ""))
+	_, err = lrepo.Get(ctx, uid, link.ID)
+	assert.ErrorIs(t, err, domainerr.ErrNotFound)
+	_, err = nrepo.Get(ctx, uid, note.ID)
+	assert.ErrorIs(t, err, domainerr.ErrNotFound)
+}
+
 func TestRepository_DeleteCascadeOnEmptyFolder(t *testing.T) {
 	ctx, uid, frepo, _ := setup(t)
 
@@ -622,4 +649,119 @@ func TestRepository_Update_PasswordHintParentMatrix(t *testing.T) {
 func assertWrongPassword(t *testing.T, err error) {
 	t.Helper()
 	require.ErrorIs(t, err, folders.ErrWrongPassword)
+}
+
+func TestRepository_GetAndPasswordHashForMissing(t *testing.T) {
+	ctx, uid, frepo, _ := setup(t)
+	_, err := frepo.Get(ctx, uid, 999_999)
+	assert.ErrorIs(t, err, domainerr.ErrNotFound)
+	_, err = frepo.PasswordHashFor(ctx, uid, 999_999)
+	assert.ErrorIs(t, err, domainerr.ErrNotFound)
+	err = frepo.Delete(ctx, uid, 999_999, testUnlockKey, "")
+	assert.ErrorIs(t, err, domainerr.ErrNotFound)
+	err = frepo.DeleteCascade(ctx, uid, 999_999, testUnlockKey, "")
+	assert.ErrorIs(t, err, domainerr.ErrNotFound)
+}
+
+func TestRepository_UpdateRejectsParentEqualsID(t *testing.T) {
+	ctx, uid, frepo, _ := setup(t)
+	f, err := frepo.Create(ctx, uid, folders.CreateInput{Name: "self", Color: "#abc"})
+	require.NoError(t, err)
+	_, err = frepo.Update(ctx, uid, f.ID, folders.UpdateInput{ParentIDSet: true, ParentID: &f.ID})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "parent_id cannot equal id")
+}
+
+func TestRepository_CreateDropsHintWithoutPassword(t *testing.T) {
+	ctx, uid, frepo, _ := setup(t)
+	hint := "remember this"
+	f, err := frepo.Create(ctx, uid, folders.CreateInput{Name: "open", Color: "#abc", PasswordHint: &hint})
+	require.NoError(t, err)
+	assert.False(t, f.HasPassword)
+	assert.Nil(t, f.PasswordHint)
+}
+
+func TestRepository_ListSlimScopesToParent(t *testing.T) {
+	ctx, uid, frepo, _ := setup(t)
+	root, err := frepo.Create(ctx, uid, folders.CreateInput{Name: "Root", Color: "#111"})
+	require.NoError(t, err)
+	_, err = frepo.Create(ctx, uid, folders.CreateInput{Name: "Child", Color: "#222", ParentID: &root.ID})
+	require.NoError(t, err)
+
+	kids, err := frepo.List(ctx, uid, folders.ListQuery{ParentID: &root.ID, Slim: true})
+	require.NoError(t, err)
+	require.Len(t, kids, 1)
+	assert.Equal(t, "Child", kids[0].Name)
+	assert.Empty(t, kids[0].Previews)
+}
+
+func TestRepository_DeleteCascadeRefusesProtectedDescendant(t *testing.T) {
+	ctx, uid, frepo, _ := setup(t)
+	root, err := frepo.Create(ctx, uid, folders.CreateInput{Name: "Root", Color: "#abc"})
+	require.NoError(t, err)
+	pw := "child-secret"
+	_, err = frepo.Create(ctx, uid, folders.CreateInput{
+		Name: "Locked", Color: "#def", ParentID: &root.ID, Password: &pw,
+	})
+	require.NoError(t, err)
+
+	err = frepo.DeleteCascade(ctx, uid, root.ID, testUnlockKey, "")
+	assert.ErrorIs(t, err, folders.ErrDescendantProtected)
+	_, err = frepo.Get(ctx, uid, root.ID)
+	require.NoError(t, err)
+}
+
+func TestRepository_ResetPasswordByMaster(t *testing.T) {
+	pool := testdb.Shared(t)
+	ctx := context.Background()
+	uid := testdb.SeedUser(t, pool, "master-reset@test.local", "admin")
+	frepo := folders.NewRepository(pool)
+	pw := "folder-pass"
+	f, err := frepo.Create(ctx, uid, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &pw})
+	require.NoError(t, err)
+
+	err = frepo.ResetPasswordByMaster(ctx, uid, f.ID, "anything")
+	assert.ErrorIs(t, err, folders.ErrMasterNotConfigured)
+	err = frepo.ResetPasswordByMaster(ctx, 999_999, f.ID, "anything")
+	assert.ErrorIs(t, err, folders.ErrMasterNotConfigured)
+
+	srepo := settings.NewRepository(pool)
+	require.NoError(t, srepo.SetMasterPassword(ctx, uid, "master-pass-ok", nil))
+
+	err = frepo.ResetPasswordByMaster(ctx, uid, f.ID, "wrong-master")
+	assert.ErrorIs(t, err, folders.ErrStaleMasterProof)
+
+	err = frepo.ResetPasswordByMaster(ctx, uid, 999_999, "master-pass-ok")
+	assert.ErrorIs(t, err, domainerr.ErrNotFound)
+
+	require.NoError(t, frepo.ResetPasswordByMaster(ctx, uid, f.ID, "master-pass-ok"))
+	hash, err := frepo.PasswordHashFor(ctx, uid, f.ID)
+	require.NoError(t, err)
+	assert.Nil(t, hash)
+}
+
+func TestRepository_CancelledContextSurfacesErrors(t *testing.T) {
+	_, uid, frepo, _ := setup(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := frepo.Create(ctx, uid, folders.CreateInput{Name: "x", Color: "#abc"})
+	require.Error(t, err)
+	_, err = frepo.List(ctx, uid, folders.ListQuery{})
+	require.Error(t, err)
+	_, err = frepo.List(ctx, uid, folders.ListQuery{Slim: true})
+	require.Error(t, err)
+	_, err = frepo.Get(ctx, uid, 1)
+	require.Error(t, err)
+	_, err = frepo.PasswordHashFor(ctx, uid, 1)
+	require.Error(t, err)
+	name := "n"
+	_, err = frepo.Update(ctx, uid, 1, folders.UpdateInput{Name: &name})
+	require.Error(t, err)
+	err = frepo.Delete(ctx, uid, 1, testUnlockKey, "")
+	require.Error(t, err)
+	err = frepo.DeleteCascade(ctx, uid, 1, testUnlockKey, "")
+	require.Error(t, err)
+	err = frepo.ResetPasswordByMaster(ctx, uid, 1, "x")
+	require.Error(t, err)
 }

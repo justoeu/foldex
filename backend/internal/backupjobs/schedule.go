@@ -117,6 +117,16 @@ func ValidateJobConfig(job string, cfg JobConfig) error {
 	if !known {
 		return fmt.Errorf("unknown job %q", job)
 	}
+	if err := cfg.rejectShape(job, floor); err != nil {
+		return err
+	}
+	if cfg.Enabled != nil && !*cfg.Enabled {
+		return nil
+	}
+	return cfg.validateAgenda(job, floor)
+}
+
+func (cfg JobConfig) rejectShape(job string, floor jobFloor) error {
 	if cfg.Time != "" || cfg.Weekday != "" {
 		return fmt.Errorf("%q and %q are the previous schedule vocabulary and are read-only — send {\"mode\":\"times\",\"times\":[…],\"weekdays\":[…]}", "time", "weekday")
 	}
@@ -126,17 +136,16 @@ func ValidateJobConfig(job string, cfg JobConfig) error {
 	if cfg.Enabled != nil && !floor.mayDisable {
 		return fmt.Errorf("%s cannot be switched off — only user_zip carries \"enabled\", because it is the one job that is a product convenience rather than the instance's protection", job)
 	}
-	if cfg.Enabled != nil && !*cfg.Enabled {
+	if cfg.Enabled != nil && !*cfg.Enabled && (carriesAgendaDays(cfg) || cfg.IntervalMin != 0) {
 		// A disabled job needs no agenda, and must not carry one: a stored
 		// agenda beside enabled:false is two answers to the same question.
-		if carriesAgendaDays(cfg) || cfg.IntervalMin != 0 {
-			return fmt.Errorf("a disabled %s carries no agenda — send \"enabled\": false alone", job)
-		}
-		return nil
+		return fmt.Errorf("a disabled %s carries no agenda — send \"enabled\": false alone", job)
 	}
+	return nil
+}
 
-	switch cfg.Mode {
-	case modeTimes:
+func (cfg JobConfig) validateAgenda(job string, floor jobFloor) error {
+	if cfg.Mode == modeTimes {
 		if cfg.IntervalMin != 0 {
 			return fmt.Errorf("mode %q does not carry \"interval_min\"", modeTimes)
 		}
@@ -144,13 +153,12 @@ func ValidateJobConfig(job string, cfg JobConfig) error {
 			return err
 		}
 		return validateWeekdays(job, cfg.Weekdays, floor.minWeekdays)
-	default:
-		if carriesAgendaDays(cfg) {
-			return fmt.Errorf("mode %q does not carry \"times\" or \"weekdays\"", modeInterval)
-		}
-		if cfg.IntervalMin < MinIntervalMin || cfg.IntervalMin > MaxIntervalMin {
-			return fmt.Errorf("%s interval must be between %d and %d minutes — a row tunes the cadence, it cannot switch the job off", job, MinIntervalMin, MaxIntervalMin)
-		}
+	}
+	if carriesAgendaDays(cfg) {
+		return fmt.Errorf("mode %q does not carry \"times\" or \"weekdays\"", modeInterval)
+	}
+	if cfg.IntervalMin < MinIntervalMin || cfg.IntervalMin > MaxIntervalMin {
+		return fmt.Errorf("%s interval must be between %d and %d minutes — a row tunes the cadence, it cannot switch the job off", job, MinIntervalMin, MaxIntervalMin)
 	}
 	return nil
 }

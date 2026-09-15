@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
+import type { TFunction } from 'i18next'
 import { Icon, I } from './icons'
 import { FolderPicker } from './FolderPicker'
 import { SlugField, useSlugFieldState } from './SlugField'
@@ -110,6 +111,11 @@ function LinkDialogError({ message }: Readonly<{ message: string | null }>) {
   )
 }
 
+function duplicateWhere(folderName: string | undefined, t: TFunction): string {
+  if (folderName) return t('link_dialog.error_url_taken_in_folder', { name: folderName })
+  return t('link_dialog.error_url_taken_on_home')
+}
+
 function DuplicateURLNotice({
   link,
   onOpenExisting,
@@ -122,9 +128,7 @@ function DuplicateURLNotice({
   const folderName = link.folder_id != null
     ? folders.find((folder) => folder.id === link.folder_id)?.name
     : undefined
-  const where = folderName
-    ? t('link_dialog.error_url_taken_in_folder', { name: folderName })
-    : t('link_dialog.error_url_taken_on_home')
+  const where = duplicateWhere(folderName, t)
   return (
     <div className="fx-inline-error" role="alert">
       <Icon d={I.alert} size={14} />
@@ -489,12 +493,30 @@ function LinkImageUploadZone({ image }: Readonly<{ image: Image }>) {
           if (file) image.selectFile(file)
         }}
       >
-        {image.busy
-          ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><span className="fx-spinner" aria-hidden="true" /> {t('link_dialog.image_uploading')}</span>
-          : image.preview ? t('link_dialog.image_selected_hint') : t('link_dialog.image_drop_hint')}
+        {imageDropHint(image, t)}
       </div>
     </>
   )
+}
+
+function imageDropHint(image: Image, t: TFunction) {
+  if (image.busy) {
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+        <span className="fx-spinner" aria-hidden="true" /> {t('link_dialog.image_uploading')}
+      </span>
+    )
+  }
+  if (image.preview) return t('link_dialog.image_selected_hint')
+  return t('link_dialog.image_drop_hint')
+}
+
+function imageSubmitLabel(busy: boolean, isEdit: boolean, t: TFunction) {
+  if (busy) {
+    return <><span className="fx-spinner" aria-hidden="true" /> {t('link_dialog.image_uploading')}</>
+  }
+  const label = isEdit ? t('link_dialog.submit_save') : t('link_dialog.submit_create')
+  return <>{label}<Icon d={I.arrowR} size={14} stroke={2} /></>
 }
 
 function LinkDialogFooter({
@@ -519,9 +541,7 @@ function LinkDialogFooter({
     <footer className="fx-modal-foot">
       <button className="fx-confirm-btn" onClick={onClose}>{t('common.cancel')}</button>
       <button className="fx-confirm-btn fx-confirm-btn-primary" onClick={() => void onSubmit()} disabled={!form.url.trim() || busy || blocked}>
-        {image.busy
-          ? <><span className="fx-spinner" aria-hidden="true" /> {t('link_dialog.image_uploading')}</>
-          : <>{isEdit ? t('link_dialog.submit_save') : t('link_dialog.submit_create')}<Icon d={I.arrowR} size={14} stroke={2} /></>}
+        {imageSubmitLabel(image.busy, isEdit, t)}
       </button>
     </footer>
   )

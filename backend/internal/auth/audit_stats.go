@@ -161,17 +161,9 @@ func (r *Repository) AuditStatsSince(ctx context.Context, since time.Time) (Audi
 	if err != nil {
 		return out, fmt.Errorf("audit days: %w", err)
 	}
-	defer days.Close()
-	out.Days = []AuditDayBucket{}
-	for days.Next() {
-		var b AuditDayBucket
-		if err := days.Scan(&b.Day, &b.Logins, &b.Failed, &b.Admin, &b.Content); err != nil {
-			return out, fmt.Errorf("scan audit day: %w", err)
-		}
-		out.Days = append(out.Days, b)
-	}
-	if err := days.Err(); err != nil {
-		return out, fmt.Errorf("audit days: %w", err)
+	out.Days, err = scanAuditDayBuckets(days)
+	if err != nil {
+		return out, err
 	}
 
 	dist, err := r.pool.Query(ctx, `
@@ -180,18 +172,9 @@ func (r *Repository) AuditStatsSince(ctx context.Context, since time.Time) (Audi
 	if err != nil {
 		return out, fmt.Errorf("audit distribution: %w", err)
 	}
-	defer dist.Close()
-	out.Distribution = []AuditActionStat{}
-	for dist.Next() {
-		var s AuditActionStat
-		if err := dist.Scan(&s.Action, &s.Count); err != nil {
-			return out, fmt.Errorf("scan audit distribution: %w", err)
-		}
-		s.Category = AuditCategory(s.Action)
-		out.Distribution = append(out.Distribution, s)
-	}
-	if err := dist.Err(); err != nil {
-		return out, fmt.Errorf("audit distribution: %w", err)
+	out.Distribution, err = scanAuditDistribution(dist)
+	if err != nil {
+		return out, err
 	}
 
 	// Joined to app_user rather than reading the denormalized actor_email: this
@@ -207,17 +190,9 @@ func (r *Repository) AuditStatsSince(ctx context.Context, since time.Time) (Audi
 	if err != nil {
 		return out, fmt.Errorf("audit actors: %w", err)
 	}
-	defer actors.Close()
-	out.Actors = []AuditActorStat{}
-	for actors.Next() {
-		var s AuditActorStat
-		if err := actors.Scan(&s.Email, &s.Role, &s.Count); err != nil {
-			return out, fmt.Errorf("scan audit actor: %w", err)
-		}
-		out.Actors = append(out.Actors, s)
-	}
-	if err := actors.Err(); err != nil {
-		return out, fmt.Errorf("audit actors: %w", err)
+	out.Actors, err = scanAuditActors(actors)
+	if err != nil {
+		return out, err
 	}
 
 	// mode() for the user agent: one address is usually one device, and the
@@ -235,18 +210,9 @@ func (r *Repository) AuditStatsSince(ctx context.Context, since time.Time) (Audi
 	if err != nil {
 		return out, fmt.Errorf("audit origins: %w", err)
 	}
-	defer origins.Close()
-	out.Origins = []AuditOriginStat{}
-	for origins.Next() {
-		var s AuditOriginStat
-		if err := origins.Scan(&s.IP, &s.Trusted, &s.UserAgent, &s.Count,
-			&s.Failures, &s.LastSeen, &s.Blocked); err != nil {
-			return out, fmt.Errorf("scan audit origin: %w", err)
-		}
-		out.Origins = append(out.Origins, s)
-	}
-	if err := origins.Err(); err != nil {
-		return out, fmt.Errorf("audit origins: %w", err)
+	out.Origins, err = scanAuditOrigins(origins)
+	if err != nil {
+		return out, err
 	}
 
 	risk, err := r.worstBurst(ctx, since)
@@ -254,6 +220,72 @@ func (r *Repository) AuditStatsSince(ctx context.Context, since time.Time) (Audi
 		return out, err
 	}
 	out.Risk = risk
+	return out, nil
+}
+
+func scanAuditDayBuckets(rows pgx.Rows) ([]AuditDayBucket, error) {
+	defer rows.Close()
+	out := []AuditDayBucket{}
+	for rows.Next() {
+		var b AuditDayBucket
+		if err := rows.Scan(&b.Day, &b.Logins, &b.Failed, &b.Admin, &b.Content); err != nil {
+			return nil, fmt.Errorf("scan audit day: %w", err)
+		}
+		out = append(out, b)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("audit days: %w", err)
+	}
+	return out, nil
+}
+
+func scanAuditDistribution(rows pgx.Rows) ([]AuditActionStat, error) {
+	defer rows.Close()
+	out := []AuditActionStat{}
+	for rows.Next() {
+		var s AuditActionStat
+		if err := rows.Scan(&s.Action, &s.Count); err != nil {
+			return nil, fmt.Errorf("scan audit distribution: %w", err)
+		}
+		s.Category = AuditCategory(s.Action)
+		out = append(out, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("audit distribution: %w", err)
+	}
+	return out, nil
+}
+
+func scanAuditActors(rows pgx.Rows) ([]AuditActorStat, error) {
+	defer rows.Close()
+	out := []AuditActorStat{}
+	for rows.Next() {
+		var s AuditActorStat
+		if err := rows.Scan(&s.Email, &s.Role, &s.Count); err != nil {
+			return nil, fmt.Errorf("scan audit actor: %w", err)
+		}
+		out = append(out, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("audit actors: %w", err)
+	}
+	return out, nil
+}
+
+func scanAuditOrigins(rows pgx.Rows) ([]AuditOriginStat, error) {
+	defer rows.Close()
+	out := []AuditOriginStat{}
+	for rows.Next() {
+		var s AuditOriginStat
+		if err := rows.Scan(&s.IP, &s.Trusted, &s.UserAgent, &s.Count,
+			&s.Failures, &s.LastSeen, &s.Blocked); err != nil {
+			return nil, fmt.Errorf("scan audit origin: %w", err)
+		}
+		out = append(out, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("audit origins: %w", err)
+	}
 	return out, nil
 }
 

@@ -99,61 +99,27 @@ func (r *Repository) rotateOnce(ctx context.Context, hash []byte, ttl SessionTTL
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	var usedFamily string
-	var usedSession int64
-	var usedAt time.Time
-	err = tx.QueryRow(ctx,
-		`SELECT family_id::text, session_id, used_at FROM session_used_token WHERE token_hash = $1`, hash,
-	).Scan(&usedFamily, &usedSession, &usedAt)
-
-	switch {
-	case err == nil:
-		return r.handleConsumed(ctx, tx, usedFamily, usedSession, usedAt, ttl)
-	case errors.Is(err, pgx.ErrNoRows):
-		// Fresh token — fall through to the normal rotation below.
-	default:
-		return RotateResult{}, fmt.Errorf("rotate used lookup: %w", err)
-	}
-
-	var sid, uid int64
-	var familyID string
-	var createdAt time.Time
-	var status string
-	err = tx.QueryRow(ctx, `
-		SELECT s.id, s.user_id, s.family_id::text, s.created_at, u.status
-		FROM session s
-		JOIN app_user u ON u.id = s.user_id
-		WHERE s.refresh_token_hash = $1
-		  AND s.revoked_at IS NULL
-		  AND s.refresh_expires_at > now()
-		FOR UPDATE OF s`, hash).Scan(&sid, &uid, &familyID, &createdAt, &status)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return RotateResult{}, ErrSessionInvalid
-	}
+	usedFamily, usedSession, usedAt, consumed, err := lookupConsumedRefreshTx(ctx, tx, hash)
 	if err != nil {
-		return RotateResult{}, fmt.Errorf("rotate session lookup: %w", err)
+		return RotateResult{}, err
+	}
+	if consumed {
+		return r.handleConsumed(ctx, tx, usedFamily, usedSession, usedAt, ttl)
+	}
+
+	sid, uid, familyID, createdAt, status, err := lockLiveRefreshTx(ctx, tx, hash)
+	if err != nil {
+		return RotateResult{}, err
 	}
 
 	// The absolute ceiling is measured from the family's birth, not from the
 	// last rotation, which is the entire point of having it.
-	if time.Since(createdAt) > ttl.Absolute {
-		if err := revokeFamily(ctx, tx, familyID, "expired"); err != nil {
-			return RotateResult{}, err
-		}
-		if err := tx.Commit(ctx); err != nil {
-			return RotateResult{}, fmt.Errorf("rotate expire commit: %w", err)
-		}
-		return RotateResult{}, ErrSessionInvalid
+	if expired, err := expireFamilyIfAbsoluteTx(ctx, tx, familyID, createdAt, ttl.Absolute); expired || err != nil {
+		return RotateResult{}, err
 	}
 	// A user disabled mid-session must not be able to refresh their way back in.
-	if status != StatusActive {
-		if err := revokeFamily(ctx, tx, familyID, ReasonUserDisabled); err != nil {
-			return RotateResult{}, err
-		}
-		if err := tx.Commit(ctx); err != nil {
-			return RotateResult{}, fmt.Errorf("rotate disabled commit: %w", err)
-		}
-		return RotateResult{}, ErrUserNotActive
+	if inactive, err := revokeFamilyIfInactiveTx(ctx, tx, familyID, status); inactive || err != nil {
+		return RotateResult{}, err
 	}
 
 	if _, err := tx.Exec(ctx,
@@ -172,6 +138,64 @@ func (r *Repository) rotateOnce(ctx context.Context, hash []byte, ttl SessionTTL
 	return RotateResult{Tokens: tok, UserID: authctx.UserID(uid), Session: sid}, nil
 }
 
+func lookupConsumedRefreshTx(ctx context.Context, tx pgx.Tx, hash []byte) (family string, sessionID int64, usedAt time.Time, consumed bool, err error) {
+	err = tx.QueryRow(ctx,
+		`SELECT family_id::text, session_id, used_at FROM session_used_token WHERE token_hash = $1`, hash,
+	).Scan(&family, &sessionID, &usedAt)
+	switch {
+	case err == nil:
+		return family, sessionID, usedAt, true, nil
+	case errors.Is(err, pgx.ErrNoRows):
+		return "", 0, time.Time{}, false, nil
+	default:
+		return "", 0, time.Time{}, false, fmt.Errorf("rotate used lookup: %w", err)
+	}
+}
+
+func lockLiveRefreshTx(ctx context.Context, tx pgx.Tx, hash []byte) (sid, uid int64, familyID string, createdAt time.Time, status string, err error) {
+	err = tx.QueryRow(ctx, `
+		SELECT s.id, s.user_id, s.family_id::text, s.created_at, u.status
+		FROM session s
+		JOIN app_user u ON u.id = s.user_id
+		WHERE s.refresh_token_hash = $1
+		  AND s.revoked_at IS NULL
+		  AND s.refresh_expires_at > now()
+		FOR UPDATE OF s`, hash).Scan(&sid, &uid, &familyID, &createdAt, &status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, 0, "", time.Time{}, "", ErrSessionInvalid
+	}
+	if err != nil {
+		return 0, 0, "", time.Time{}, "", fmt.Errorf("rotate session lookup: %w", err)
+	}
+	return sid, uid, familyID, createdAt, status, nil
+}
+
+func expireFamilyIfAbsoluteTx(ctx context.Context, tx pgx.Tx, familyID string, createdAt time.Time, absolute time.Duration) (bool, error) {
+	if time.Since(createdAt) <= absolute {
+		return false, nil
+	}
+	if err := revokeFamily(ctx, tx, familyID, "expired"); err != nil {
+		return true, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return true, fmt.Errorf("rotate expire commit: %w", err)
+	}
+	return true, ErrSessionInvalid
+}
+
+func revokeFamilyIfInactiveTx(ctx context.Context, tx pgx.Tx, familyID, status string) (bool, error) {
+	if status == StatusActive {
+		return false, nil
+	}
+	if err := revokeFamily(ctx, tx, familyID, ReasonUserDisabled); err != nil {
+		return true, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return true, fmt.Errorf("rotate disabled commit: %w", err)
+	}
+	return true, ErrUserNotActive
+}
+
 func isSerializationFailure(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "40001"
@@ -180,27 +204,34 @@ func isSerializationFailure(err error) bool {
 // handleConsumed decides between "racing tab" and "replay attack".
 func (r *Repository) handleConsumed(ctx context.Context, tx pgx.Tx, familyID string, sessionID int64, usedAt time.Time, ttl SessionTTL) (RotateResult, error) {
 	if time.Since(usedAt) > ttl.Grace {
-		// Outside the window: revoke the family and wipe its consumed-token
-		// trail, so the attacker's rotated token dies with it.
-		//
-		// The owner is read BEFORE the purge. The handler needs it to send the
-		// "your sessions were signed out" warning, and after the DELETE below
-		// there is no row left that ties this token to a user.
-		var owner int64
-		if err := tx.QueryRow(ctx,
-			`SELECT user_id FROM session WHERE id = $1`, sessionID).Scan(&owner); err != nil &&
-			!errors.Is(err, pgx.ErrNoRows) {
-			return RotateResult{}, fmt.Errorf("rotate reuse owner: %w", err)
-		}
-		if err := revokeAndPurgeFamily(ctx, tx, familyID); err != nil {
-			return RotateResult{}, err
-		}
-		if err := tx.Commit(ctx); err != nil {
-			return RotateResult{}, fmt.Errorf("rotate reuse commit: %w", err)
-		}
-		return RotateResult{UserID: authctx.UserID(owner)}, ErrSessionReuse
+		return r.replayOutsideGraceTx(ctx, tx, familyID, sessionID)
 	}
+	return r.graceSiblingTx(ctx, tx, familyID, sessionID, ttl)
+}
 
+func (r *Repository) replayOutsideGraceTx(ctx context.Context, tx pgx.Tx, familyID string, sessionID int64) (RotateResult, error) {
+	// Outside the window: revoke the family and wipe its consumed-token
+	// trail, so the attacker's rotated token dies with it.
+	//
+	// The owner is read BEFORE the purge. The handler needs it to send the
+	// "your sessions were signed out" warning, and after the DELETE below
+	// there is no row left that ties this token to a user.
+	var owner int64
+	if err := tx.QueryRow(ctx,
+		`SELECT user_id FROM session WHERE id = $1`, sessionID).Scan(&owner); err != nil &&
+		!errors.Is(err, pgx.ErrNoRows) {
+		return RotateResult{}, fmt.Errorf("rotate reuse owner: %w", err)
+	}
+	if err := revokeAndPurgeFamily(ctx, tx, familyID); err != nil {
+		return RotateResult{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return RotateResult{}, fmt.Errorf("rotate reuse commit: %w", err)
+	}
+	return RotateResult{UserID: authctx.UserID(owner)}, ErrSessionReuse
+}
+
+func (r *Repository) graceSiblingTx(ctx context.Context, tx pgx.Tx, familyID string, sessionID int64, ttl SessionTTL) (RotateResult, error) {
 	// Inside the window. The session the token belonged to must still be live —
 	// a grace hit on an already-revoked family is not a racing tab, it is a
 	// replay against a session someone deliberately killed.

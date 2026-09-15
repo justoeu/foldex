@@ -114,6 +114,12 @@ export function StatsPage() {
   )
 }
 
+function momDeltaLabel(s: StatsSummary | undefined, mom: number): string {
+  if (!s) return ''
+  const sign = mom >= 0 ? '+' : ''
+  return `${sign}${mom}%`
+}
+
 function StatsKpiStrip({
   s,
   mom,
@@ -134,7 +140,7 @@ function StatsKpiStrip({
       <KpiCard
         label={t('stats.kpi_clicks_30d')}
         value={s ? s.clicks_last_30d.toLocaleString() : '—'}
-        delta={s ? (mom >= 0 ? '+' : '') + mom + '%' : ''}
+        delta={momDeltaLabel(s, mom)}
         deltaKind={mom >= 0 ? 'up' : 'down'}
         spark={daily?.slice(-14).map((p) => p.clicks)}
       />
@@ -169,6 +175,8 @@ function StatsKpiStrip({
   )
 }
 
+const DELTA_GLYPH = { up: '▲', down: '▼', neutral: '·' } as const
+
 function KpiCard({
   label,
   value,
@@ -190,7 +198,7 @@ function KpiCard({
       <div className={'fx-kpi-value ' + valueClass}>{value}</div>
       <div className="fx-kpi-row">
         <span className={'fx-kpi-delta fx-kpi-delta-' + deltaKind}>
-          {deltaKind === 'up' ? '▲' : deltaKind === 'down' ? '▼' : '·'} {delta}
+          {DELTA_GLYPH[deltaKind]} {delta}
         </span>
         {spark && spark.length > 1 && <Sparkline data={spark} width={70} height={22} />}
       </div>
@@ -255,17 +263,7 @@ function AreaChart({ data, width, height, t }: Readonly<{ data: DailyPoint[]; wi
     const y = py(series[hover])
     const nearLeft = x < 80
     const nearRight = x > width - 80
-    tooltipStyle = {
-      position: 'absolute',
-      top: y,
-      left: nearRight ? undefined : x,
-      right: nearRight ? width - x : undefined,
-      transform: nearLeft
-        ? 'translate(8px, calc(-100% - 12px))'
-        : nearRight
-          ? 'translate(-8px, calc(-100% - 12px))'
-          : 'translate(-50%, calc(-100% - 12px))',
-    }
+    tooltipStyle = chartTooltipStyle(x, y, width, nearLeft, nearRight)
   }
 
   return (
@@ -410,22 +408,40 @@ function MomCompare({ prev, curr, t }: Readonly<{ prev: number; curr: number; t:
   )
 }
 
+function chartTooltipStyle(x: number, y: number, width: number, nearLeft: boolean, nearRight: boolean): CSSProperties {
+  const style: CSSProperties = {
+    position: 'absolute',
+    top: y,
+    transform: chartTooltipTransform(nearLeft, nearRight),
+  }
+  if (nearRight) style.right = width - x
+  else style.left = x
+  return style
+}
+
+function chartTooltipTransform(nearLeft: boolean, nearRight: boolean): string {
+  if (nearLeft) return 'translate(8px, calc(-100% - 12px))'
+  if (nearRight) return 'translate(-8px, calc(-100% - 12px))'
+  return 'translate(-50%, calc(-100% - 12px))'
+}
+
+function topLinkDelta(clicks30d: number, prev30d: number): string {
+  if (prev30d === 0) {
+    if (clicks30d > 0) return '+100%'
+    return '—'
+  }
+  const delta = (clicks30d - prev30d) / prev30d
+  const sign = delta >= 0 ? '+' : ''
+  return sign + Math.round(delta * 100) + '%'
+}
+
 function TopLinksList({ links }: Readonly<{ links: TopLink[] }>) {
   const maxClicks = Math.max(...links.map((l) => l.clicks), 1)
   return (
     <ol className="fx-toplinks">
       {links.map((l, i) => {
-        const delta =
-          l.clicks_prev_30d === 0
-            ? l.clicks_30d > 0
-              ? '+100%'
-              : '—'
-            : (l.clicks_30d - l.clicks_prev_30d) / l.clicks_prev_30d
-        const deltaStr =
-          typeof delta === 'string'
-            ? delta
-            : (delta >= 0 ? '+' : '') + Math.round(delta * 100) + '%'
-        const deltaDown = typeof delta === 'number' && delta < 0
+        const deltaStr = topLinkDelta(l.clicks_30d, l.clicks_prev_30d)
+        const deltaDown = l.clicks_prev_30d > 0 && l.clicks_30d < l.clicks_prev_30d
         return (
           <li key={l.id} className="fx-toplink">
             <span className="fx-toplink-rank">{String(i + 1).padStart(2, '0')}</span>

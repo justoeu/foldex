@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import type { TFunction } from 'i18next'
 import { Icon, I } from './icons'
 import { useEscape } from '../hooks/useEscape'
 import { useFocusTrap } from '../hooks/useFocusTrap'
@@ -70,61 +71,15 @@ export function NoteViewDialog({
         </header>
 
         <div className="fx-noteview-body">
-          {noteQuery.isError ? (
-            <div className="fx-noteview-empty">
-              <Icon d={I.alert} size={16} />
-              <span>{t('note_view.load_failed')}</span>
-              <button
-                type="button"
-                className="fx-confirm-btn"
-                onClick={() => { void noteQuery.refetch() }}
-                disabled={noteQuery.isFetching}
-              >
-                <Icon d={I.refresh} size={13} /> {t('note_dialog.load_retry')}
-              </button>
-            </div>
-          ) : !note ? (
-            <div className="fx-noteview-empty">{t('note_view.loading')}</div>
-          ) : (
-            <>
-              {note.cover_url && !coverErrored && (
-                <img
-                  className="fx-noteview-cover"
-                  src={note.cover_url}
-                  alt=""
-                  onError={() => setCoverErrored(true)}
-                />
-              )}
-
-              {/* Everything ABOUT the note, before the note itself: tags decide
-                  whether this is the one you meant, and the dates answer "is
-                  this current?" — both questions come before reading. */}
-              <div className="fx-noteview-meta">
-                <span className="fx-noteview-meta-item">
-                  <Icon d={I.clock} size={12} /> {t('note_view.updated', { when: relativeTime(note.updated_at, t) })}
-                </span>
-                <span className="fx-noteview-meta-item">
-                  <Icon d={I.eye} size={12} /> {t('note_view.views', { count: note.click_count })}
-                </span>
-              </div>
-
-              {note.tags.length > 0 && (
-                <div className="fx-noteview-tags">
-                  {note.tags.map((tag) => (
-                    <TagChip key={tag.id} tag={tag} />
-                  ))}
-                </div>
-              )}
-
-              {/* Safe because the server sanitizes on every write path — see the
-                  component doc and CLAUDE.md §4. Never render an unsanitized
-                  string here. */}
-              <article
-                className="fx-noteview-content"
-                dangerouslySetInnerHTML={{ __html: note.body_html }}
-              />
-            </>
-          )}
+          <NoteViewBody
+            isError={noteQuery.isError}
+            isFetching={noteQuery.isFetching}
+            note={note}
+            coverErrored={coverErrored}
+            onRetry={() => { void noteQuery.refetch() }}
+            onCoverError={() => setCoverErrored(true)}
+            t={t}
+          />
         </div>
 
         <footer className="fx-modal-foot">
@@ -184,5 +139,74 @@ export function NoteViewDialog({
         </footer>
       </div>
     </div>
+  )
+}
+
+function NoteViewBody({
+  isError,
+  isFetching,
+  note,
+  coverErrored,
+  onRetry,
+  onCoverError,
+  t,
+}: Readonly<{
+  isError: boolean
+  isFetching: boolean
+  note: Note | undefined
+  coverErrored: boolean
+  onRetry: () => void
+  onCoverError: () => void
+  t: TFunction
+}>) {
+  if (isError) {
+    return (
+      <div className="fx-noteview-empty">
+        <Icon d={I.alert} size={16} />
+        <span>{t('note_view.load_failed')}</span>
+        <button
+          type="button"
+          className="fx-confirm-btn"
+          onClick={onRetry}
+          disabled={isFetching}
+        >
+          <Icon d={I.refresh} size={13} /> {t('note_dialog.load_retry')}
+        </button>
+      </div>
+    )
+  }
+  if (!note) {
+    return <div className="fx-noteview-empty">{t('note_view.loading')}</div>
+  }
+  return (
+    <>
+      {note.cover_url && !coverErrored && (
+        <img
+          className="fx-noteview-cover"
+          src={note.cover_url}
+          alt=""
+          onError={onCoverError}
+        />
+      )}
+      <div className="fx-noteview-meta">
+        <span className="fx-noteview-meta-item">
+          <Icon d={I.clock} size={12} /> {t('note_view.updated', { when: relativeTime(note.updated_at, t) })}
+        </span>
+        <span className="fx-noteview-meta-item">
+          <Icon d={I.eye} size={12} /> {t('note_view.views', { count: note.click_count })}
+        </span>
+      </div>
+      {note.tags.length > 0 && (
+        <div className="fx-noteview-tags">
+          {note.tags.map((tag) => (
+            <TagChip key={tag.id} tag={tag} />
+          ))}
+        </div>
+      )}
+      <article
+        className="fx-noteview-content"
+        dangerouslySetInnerHTML={{ __html: note.body_html }}
+      />
+    </>
   )
 }

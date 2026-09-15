@@ -17,6 +17,18 @@ import { ConflictModePicker } from './ConflictModePicker'
 const MAX_RENDERED_WARNINGS = 50
 const MAX_RENDERED_FOLDERS = 200
 
+function importSubmitLabel(phase: string, mode: string, count: number, t: TFunction) {
+  if (phase === 'applying') {
+    return (
+      <>
+        <span className="fx-spinner" aria-hidden="true" /> {t('import.submit_importing')}
+      </>
+    )
+  }
+  if (mode === 'wipe') return t('import.submit_wipe')
+  return t('import.submit_apply', { count })
+}
+
 type Props = Readonly<{
   file: File
   format: ImportFormat
@@ -130,15 +142,7 @@ export function ImportPreviewDialog({ file, format, onClose, onApplied }: Props)
                 onClick={() => { void apply() }}
                 disabled={!canApply}
               >
-                {phase === 'applying' ? (
-                  <>
-                    <span className="fx-spinner" aria-hidden="true" /> {t('import.submit_importing')}
-                  </>
-                ) : mode === 'wipe' ? (
-                  t('import.submit_wipe')
-                ) : (
-                  t('import.submit_apply', { count: effectiveCounts.links })
-                )}
+                {importSubmitLabel(phase, mode, effectiveCounts.links, t)}
                 {phase !== 'applying' && <Icon d={I.arrowR} size={14} stroke={2} />}
               </button>
             </>
@@ -189,10 +193,13 @@ function WarningList({ warnings, t }: Readonly<{ warnings: string[]; t: TFunctio
 }
 
 function Row({ label, value, accent }: Readonly<{ label: string; value: string; accent?: boolean }>) {
+  const valueStyle = accent
+    ? { color: 'var(--fx-accent)', fontFamily: 'var(--fx-mono)', fontWeight: 700 as const }
+    : { color: 'var(--fx-ink)', fontFamily: 'var(--fx-mono)', fontWeight: 400 as const }
   return (
     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
       <span style={{ color: 'var(--fx-ink-4)' }}>{label}</span>
-      <span style={{ color: accent ? 'var(--fx-accent)' : 'var(--fx-ink)', fontFamily: 'var(--fx-mono)', fontWeight: accent ? 700 : 400 }}>{value}</span>
+      <span style={valueStyle}>{value}</span>
     </div>
   )
 }

@@ -51,19 +51,29 @@ type GFSPolicy struct {
 // parse are always kept — a foreign object in the namespace is a surprise,
 // never a deletion target.
 func (p GFSPolicy) keep(keys []string) map[string]bool {
-	type dated struct {
-		key string
-		at  time.Time
-	}
+	kept, days := newestDumpPerDay(keys)
+	p.claimGFSSlots(days, kept)
+	// Same-day extras (older keys of an already-kept day) stay prunable; the
+	// dump that just landed is safe because its day is the newest and the
+	// daily ladder always claims it first.
+	return kept
+}
+
+type datedDump struct {
+	key string
+	at  time.Time
+}
+
+func newestDumpPerDay(keys []string) (map[string]bool, []datedDump) {
 	kept := make(map[string]bool, len(keys))
-	newestPerDay := map[string]dated{}
+	newestPerDay := map[string]datedDump{}
 	for _, k := range keys {
 		at, ok := dumpKeyDate(k)
 		if !ok {
 			kept[k] = true
 			continue
 		}
-		d := dated{key: k, at: at}
+		d := datedDump{key: k, at: at}
 		day := at.Format("2006-01-02")
 		// Several dumps on one day (manual runs, catch-up): the ladder slots
 		// are per-day, and the newest key of the day represents it.
@@ -71,12 +81,15 @@ func (p GFSPolicy) keep(keys []string) map[string]bool {
 			newestPerDay[day] = d
 		}
 	}
-	days := make([]dated, 0, len(newestPerDay))
+	days := make([]datedDump, 0, len(newestPerDay))
 	for _, d := range newestPerDay {
 		days = append(days, d)
 	}
 	sort.Slice(days, func(i, j int) bool { return days[i].at.After(days[j].at) })
+	return kept, days
+}
 
+func (p GFSPolicy) claimGFSSlots(days []datedDump, kept map[string]bool) {
 	daily, weekly, monthly := 0, 0, 0
 	for _, d := range days {
 		hold := false
@@ -96,10 +109,6 @@ func (p GFSPolicy) keep(keys []string) map[string]bool {
 			kept[d.key] = true
 		}
 	}
-	// Same-day extras (older keys of an already-kept day) stay prunable; the
-	// dump that just landed is safe because its day is the newest and the
-	// daily ladder always claims it first.
-	return kept
 }
 
 // prunable returns the keys keep() rejected, the actual deletion list.

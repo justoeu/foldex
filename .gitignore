@@ -58,3 +58,4 @@ docs/audit/
 certs/*
 !certs/.gitkeep
 docker-compose.override.yml
+.worktrees/

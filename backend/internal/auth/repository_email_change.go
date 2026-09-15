@@ -155,53 +155,9 @@ func (r *Repository) ConsumeEmailChange(ctx context.Context, tokenHash []byte) (
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	var id, userID int64
-	var newEmail, newNorm string
-	var rowVersion int
-	var sessionID *int64
-	err = tx.QueryRow(ctx, `
-		SELECT id, user_id, new_email, new_email_normalized, token_version, session_id
-		FROM email_change
-		WHERE token_hash = $1 AND consumed_at IS NULL AND expires_at > now()
-		FOR UPDATE`, tokenHash).Scan(&id, &userID, &newEmail, &newNorm, &rowVersion, &sessionID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return User{}, ErrEmailChangeInvalid
-	}
+	id, userID, newEmail, newNorm, err := loadLiveEmailChangeTx(ctx, tx, tokenHash)
 	if err != nil {
-		return User{}, fmt.Errorf("load email change: %w", err)
-	}
-
-	var liveVersion int
-	var status string
-	if err := tx.QueryRow(ctx, `
-		SELECT token_version, status FROM app_user WHERE id = $1
-		FOR NO KEY UPDATE`, userID).Scan(&liveVersion, &status); err != nil {
-		return User{}, fmt.Errorf("email change lock target: %w", err)
-	}
-	// Fails closed on a password change, a reset or a logout-all since the
-	// request — the same epoch binding every other credential proof carries.
-	if liveVersion != rowVersion || status != StatusActive {
-		return User{}, ErrEmailChangeInvalid
-	}
-
-	// And on the ONE session that proved the password, which the epoch alone
-	// does not cover: revoking a single session does not bump `token_version`.
-	// Someone who spots a strange device in their session list and revokes just
-	// that one — the proportionate response, since they still trust their
-	// password — would otherwise leave the pending move alive for whoever was
-	// on it. Same binding `oauth_state` already carries for linking an identity.
-	if sessionID != nil {
-		var live bool
-		if err := tx.QueryRow(ctx,
-			`SELECT revoked_at IS NULL FROM session WHERE id = $1`, *sessionID).Scan(&live); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return User{}, ErrEmailChangeInvalid
-			}
-			return User{}, fmt.Errorf("email change session check: %w", err)
-		}
-		if !live {
-			return User{}, ErrEmailChangeInvalid
-		}
+		return User{}, err
 	}
 
 	// Spending the token and moving the address are ONE statement for the same
@@ -241,6 +197,75 @@ func (r *Repository) ConsumeEmailChange(ctx context.Context, tokenHash []byte) (
 		return User{}, fmt.Errorf("consume email change commit: %w", err)
 	}
 	return u, nil
+}
+
+type liveEmailChange struct {
+	id, userID        int64
+	newEmail, newNorm string
+	rowVersion        int
+	sessionID         *int64
+}
+
+func loadLiveEmailChangeTx(ctx context.Context, tx pgx.Tx, tokenHash []byte) (id, userID int64, newEmail, newNorm string, err error) {
+	var row liveEmailChange
+	err = tx.QueryRow(ctx, `
+		SELECT id, user_id, new_email, new_email_normalized, token_version, session_id
+		FROM email_change
+		WHERE token_hash = $1 AND consumed_at IS NULL AND expires_at > now()
+		FOR UPDATE`, tokenHash).Scan(&row.id, &row.userID, &row.newEmail, &row.newNorm, &row.rowVersion, &row.sessionID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, 0, "", "", ErrEmailChangeInvalid
+	}
+	if err != nil {
+		return 0, 0, "", "", fmt.Errorf("load email change: %w", err)
+	}
+	if err := lockEmailChangeTargetTx(ctx, tx, row.userID, row.rowVersion); err != nil {
+		return 0, 0, "", "", err
+	}
+	if err := requireLiveEmailChangeSessionTx(ctx, tx, row.sessionID); err != nil {
+		return 0, 0, "", "", err
+	}
+	return row.id, row.userID, row.newEmail, row.newNorm, nil
+}
+
+func lockEmailChangeTargetTx(ctx context.Context, tx pgx.Tx, userID int64, rowVersion int) error {
+	var liveVersion int
+	var status string
+	if err := tx.QueryRow(ctx, `
+		SELECT token_version, status FROM app_user WHERE id = $1
+		FOR NO KEY UPDATE`, userID).Scan(&liveVersion, &status); err != nil {
+		return fmt.Errorf("email change lock target: %w", err)
+	}
+	// Fails closed on a password change, a reset or a logout-all since the
+	// request — the same epoch binding every other credential proof carries.
+	if liveVersion != rowVersion || status != StatusActive {
+		return ErrEmailChangeInvalid
+	}
+	return nil
+}
+
+func requireLiveEmailChangeSessionTx(ctx context.Context, tx pgx.Tx, sessionID *int64) error {
+	// And on the ONE session that proved the password, which the epoch alone
+	// does not cover: revoking a single session does not bump `token_version`.
+	// Someone who spots a strange device in their session list and revokes just
+	// that one — the proportionate response, since they still trust their
+	// password — would otherwise leave the pending move alive for whoever was
+	// on it. Same binding `oauth_state` already carries for linking an identity.
+	if sessionID == nil {
+		return nil
+	}
+	var live bool
+	if err := tx.QueryRow(ctx,
+		`SELECT revoked_at IS NULL FROM session WHERE id = $1`, *sessionID).Scan(&live); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrEmailChangeInvalid
+		}
+		return fmt.Errorf("email change session check: %w", err)
+	}
+	if !live {
+		return ErrEmailChangeInvalid
+	}
+	return nil
 }
 
 // PendingEmailChangeFor returns the caller's live request, if any.

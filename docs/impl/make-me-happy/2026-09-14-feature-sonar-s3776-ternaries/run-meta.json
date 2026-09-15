@@ -1,0 +1,17 @@
+{
+  "app": "foldex",
+  "branch": "feature/sonar-s3776-ternaries",
+  "into": "feature/sonar-s3776-ternaries",
+  "head": "9a647372754a52f07e30676098b0dc9256d9cfe7",
+  "kind": "refactor",
+  "loop": "full",
+  "worktree_n": 3,
+  "spec": "docs/SDD-SONAR-S3776-TERNARIES.md",
+  "spec_status": "confirmed",
+  "status": "in_progress",
+  "next_step": "score",
+  "prefix": "mmh",
+  "test_cmd": "( cd backend && go vet ./... && go test ./internal/... ) && ( cd web && bun run typecheck && bun run test )",
+  "closable": false,
+  "note": "User chose product PR over chasing MMH 95% coverage of whole touched files (repo gate 85% holds; measured 85.9%)."
+}

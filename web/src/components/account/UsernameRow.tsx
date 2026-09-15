@@ -15,6 +15,12 @@ import type { AuthUser } from '../../auth/types'
  *  authorities — this only saves the user a wait. */
 export const MAX_USERNAME = 32
 
+function usernameActionLabel(open: boolean, current: string, t: (key: string) => string): string {
+  if (open) return t('common.cancel')
+  if (current) return t('common.edit')
+  return t('account.username_set')
+}
+
 /**
  * The username, as a way to SIGN IN.
  *
@@ -85,7 +91,7 @@ export function UsernameRow({ user }: Readonly<{ user: AuthUser }>) {
             setOpen((v) => !v)
           }}
         >
-          {open ? t('common.cancel') : current ? t('common.edit') : t('account.username_set')}
+          {usernameActionLabel(open, current, t)}
         </button>
       }
     >

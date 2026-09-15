@@ -114,24 +114,14 @@ func (h *Handler) ConfirmEmailFactor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The confirming code is GUESSABLE, and that is what separates this endpoint
-	// from its TOTP twin. Confirming a TOTP enrollment needs a code derived from
-	// the seed the same caller was just handed, so there is nothing to brute
-	// force. Here the code goes to the account's mailbox and never to the
-	// caller — so on the pre-auth path an attacker who knows only the password
-	// could start an enrollment against the victim's address and then grind six
-	// digits until one confirms, and confirming ISSUES THE SESSION.
-	//
-	// Charged BEFORE the digest is compared, for the same reason Verify2FA
-	// charges first: an attempt that costs nothing when cancelled mid-flight
-	// turns a budget of five into no budget at all.
-	var challenge *Challenge
-	var enrollKey string
+	challenge, enrollKey, ok := h.reserveEmailFactorConfirm(w, r, uid)
+	if !ok {
+		return
+	}
 	// Settled by DEFER rather than at each return. attemptlimit.Begin reserves a
 	// slot that exactly one of CommitFail/CommitSuccess/Release must return, and
 	// Sweep skips in-flight entries — so a single unsettled exit path drifts the
-	// key toward a lockout nothing earned. Settling inline works only while
-	// every future return remembers to; a defer covers the ones not written yet.
+	// key toward a lockout nothing earned.
 	//
 	// `settleErr` starts as a sentinel that matches no branch of settleStepUp,
 	// whose default is Release: a failure before the caller's code was examined
@@ -142,35 +132,6 @@ func (h *Handler) ConfirmEmailFactor(w http.ResponseWriter, r *http.Request) {
 			h.settleStepUp(enrollKey, settleErr)
 		}
 	}()
-	if _, authenticated := authctx.FromContext(r.Context()); !authenticated {
-		ch, err := h.repo.ResolveChallenge(r.Context(), cookieValue(r, CookiePreAuth), PurposeEnroll2FA)
-		if err != nil {
-			h.writeChallengeError(w, err)
-			return
-		}
-		// The cap lives in BumpChallengeAttempt's own UPDATE (`attempts < max`),
-		// which answers ErrChallengeExhausted rather than incrementing past it;
-		// writeChallengeError turns that into 429 and clears the pre-auth
-		// cookie, leaving the row live until its window ends so another correct
-		// password cannot mint a fresh set of guesses.
-		if _, err := h.repo.BumpChallengeAttempt(r.Context(), ch.ID); err != nil {
-			h.writeChallengeError(w, err)
-			return
-		}
-		challenge = &ch
-	} else {
-		// The session path has no challenge to carry a budget, so it uses the
-		// in-memory per-user limiter — the same reason the step-up paths do.
-		// A separate key from "stepup:": a wrong enrollment code should not
-		// spend the budget that guards disabling a factor.
-		key := userBucketKey("enroll", uid)
-		until, ok := h.stepUpUser.Begin(key)
-		if !ok {
-			writeRateLimited(w, until)
-			return
-		}
-		enrollKey = key
-	}
 
 	codes, hashes, err := h.newRecoveryCodeSet(uid)
 	if err != nil {
@@ -186,17 +147,7 @@ func (h *Handler) ConfirmEmailFactor(w http.ResponseWriter, r *http.Request) {
 		UID: uid, TokenVersion: tokenVersion, RecoveryHashes: hashes, Session: session,
 	}, h.codeMAC.EmailOTPDigest(uid, OTPPurposeEnrollEmail2FA, nil, normalizeOTPCode(in.Code)))
 	settleErr = err
-	switch {
-	case errors.Is(err, ErrBadCredentials):
-		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_code",
-			msgInvalidCode))
-		return
-	case errors.Is(err, ErrNoPendingFactor):
-		httperr.Write(w, httperr.New(http.StatusBadRequest, "no_enrollment",
-			"start an enrollment first"))
-		return
-	}
-	if h.writeFactorTxnError(w, err, "email factor confirm") {
+	if writeEmailFactorConfirmError(w, err) || h.writeFactorTxnError(w, err, "email factor confirm") {
 		return
 	}
 
@@ -212,6 +163,62 @@ func (h *Handler) ConfirmEmailFactor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httperr.JSON(w, http.StatusOK, map[string]any{"recovery_codes": codes})
+}
+
+func (h *Handler) reserveEmailFactorConfirm(w http.ResponseWriter, r *http.Request, uid authctx.UserID) (*Challenge, string, bool) {
+	// The confirming code is GUESSABLE, and that is what separates this endpoint
+	// from its TOTP twin. Confirming a TOTP enrollment needs a code derived from
+	// the seed the same caller was just handed, so there is nothing to brute
+	// force. Here the code goes to the account's mailbox and never to the
+	// caller — so on the pre-auth path an attacker who knows only the password
+	// could start an enrollment against the victim's address and then grind six
+	// digits until one confirms, and confirming ISSUES THE SESSION.
+	//
+	// Charged BEFORE the digest is compared, for the same reason Verify2FA
+	// charges first: an attempt that costs nothing when cancelled mid-flight
+	// turns a budget of five into no budget at all.
+	if _, authenticated := authctx.FromContext(r.Context()); !authenticated {
+		ch, err := h.repo.ResolveChallenge(r.Context(), cookieValue(r, CookiePreAuth), PurposeEnroll2FA)
+		if err != nil {
+			h.writeChallengeError(w, err)
+			return nil, "", false
+		}
+		// The cap lives in BumpChallengeAttempt's own UPDATE (`attempts < max`),
+		// which answers ErrChallengeExhausted rather than incrementing past it;
+		// writeChallengeError turns that into 429 and clears the pre-auth
+		// cookie, leaving the row live until its window ends so another correct
+		// password cannot mint a fresh set of guesses.
+		if _, err := h.repo.BumpChallengeAttempt(r.Context(), ch.ID); err != nil {
+			h.writeChallengeError(w, err)
+			return nil, "", false
+		}
+		return &ch, "", true
+	}
+	// The session path has no challenge to carry a budget, so it uses the
+	// in-memory per-user limiter — the same reason the step-up paths do.
+	// A separate key from "stepup:": a wrong enrollment code should not
+	// spend the budget that guards disabling a factor.
+	key := userBucketKey("enroll", uid)
+	until, ok := h.stepUpUser.Begin(key)
+	if !ok {
+		writeRateLimited(w, until)
+		return nil, "", false
+	}
+	return nil, key, true
+}
+
+func writeEmailFactorConfirmError(w http.ResponseWriter, err error) bool {
+	switch {
+	case errors.Is(err, ErrBadCredentials):
+		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_code",
+			msgInvalidCode))
+		return true
+	case errors.Is(err, ErrNoPendingFactor):
+		httperr.Write(w, httperr.New(http.StatusBadRequest, "no_enrollment",
+			"start an enrollment first"))
+		return true
+	}
+	return false
 }
 
 // SendStepUpEmailOTP mails a code that an ENROLLED e-mail factor can present to

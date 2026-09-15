@@ -578,35 +578,8 @@ func (h *Handler) ConfirmTOTP(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	row, err := h.repo.LoadTOTPSecret(r.Context(), uid)
-	if err != nil {
-		httperr.Write(w, httperr.New(http.StatusBadRequest, "no_enrollment",
-			"start an enrollment first"))
-		return
-	}
-	if row.Confirmed {
-		httperr.Write(w, httperr.New(http.StatusConflict, "totp_already_enabled",
-			"two-factor authentication is already enabled"))
-		return
-	}
-	if row.EnrollmentTokenVersion == nil || *row.EnrollmentTokenVersion != tokenVersion {
-		h.writeChallengeError(w, ErrChallengeInvalid)
-		return
-	}
-	if !enrollmentSessionMatches(row.EnrollmentSessionID, sessionID) {
-		h.writeChallengeError(w, ErrChallengeInvalid)
-		return
-	}
-	secret, err := h.cipher.Decrypt(row.Ciphertext, row.Nonce)
-	if err != nil {
-		h.logger.Error("totp confirm decrypt", "err", err)
-		httperr.Write(w, httperr.ErrInternal)
-		return
-	}
-	counter, err := verifyTOTP(string(secret), in.Code, row.Params, time.Now())
-	if err != nil {
-		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_code",
-			msgInvalidCode))
+	row, counter, ok := h.pendingTOTPEnrollment(w, r, uid, tokenVersion, sessionID, in.Code)
+	if !ok {
 		return
 	}
 	codes, hashes, err := h.newRecoveryCodeSet(uid)
@@ -615,38 +588,14 @@ func (h *Handler) ConfirmTOTP(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
-	var challenge *Challenge
-	if _, authenticated := authctx.FromContext(r.Context()); !authenticated {
-		ch, err := h.repo.ResolveChallenge(r.Context(), cookieValue(r, CookiePreAuth), PurposeEnroll2FA)
-		if err != nil {
-			h.writeChallengeError(w, err)
-			return
-		}
-		challenge = &ch
-	}
-	var session SessionIssue = LiveSession{ID: sessionID}
-	if challenge != nil {
-		session = PreAuth{Challenge: *challenge, TTL: h.ttl, IP: clientIP(r), UA: r.UserAgent()}
+	challenge, session, ok := h.confirmEnrollmentSession(w, r, sessionID)
+	if !ok {
+		return
 	}
 	user, tok, err := h.repo.CompleteTOTPEnrollment(r.Context(), EnrollmentComplete{
 		UID: uid, TokenVersion: tokenVersion, RecoveryHashes: hashes, Session: session,
 	}, TOTPProof{Counter: counter, Ciphertext: row.Ciphertext, Nonce: row.Nonce})
-	if err != nil {
-		if errors.Is(err, ErrTOTPEnrollmentChanged) {
-			httperr.Write(w, httperr.New(http.StatusConflict, "enrollment_changed",
-				"the enrollment changed; verify the current authenticator secret"))
-			return
-		}
-		if errors.Is(err, ErrChallengeInvalid) {
-			h.writeChallengeError(w, err)
-			return
-		}
-		if errors.Is(err, ErrSessionInvalid) {
-			h.writeSessionInvalid(w)
-			return
-		}
-		h.logger.Error("totp confirm", "err", err)
-		httperr.Write(w, httperr.ErrInternal)
+	if writeTOTPConfirmError(w, h, err) {
 		return
 	}
 
@@ -663,6 +612,82 @@ func (h *Handler) ConfirmTOTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httperr.JSON(w, http.StatusOK, map[string]any{"recovery_codes": codes})
+}
+
+func (h *Handler) pendingTOTPEnrollment(w http.ResponseWriter, r *http.Request,
+	uid authctx.UserID, tokenVersion int, sessionID int64, code string) (TOTPRow, int64, bool) {
+
+	row, err := h.repo.LoadTOTPSecret(r.Context(), uid)
+	if err != nil {
+		httperr.Write(w, httperr.New(http.StatusBadRequest, "no_enrollment",
+			"start an enrollment first"))
+		return TOTPRow{}, 0, false
+	}
+	if row.Confirmed {
+		httperr.Write(w, httperr.New(http.StatusConflict, "totp_already_enabled",
+			"two-factor authentication is already enabled"))
+		return TOTPRow{}, 0, false
+	}
+	if row.EnrollmentTokenVersion == nil || *row.EnrollmentTokenVersion != tokenVersion {
+		h.writeChallengeError(w, ErrChallengeInvalid)
+		return TOTPRow{}, 0, false
+	}
+	if !enrollmentSessionMatches(row.EnrollmentSessionID, sessionID) {
+		h.writeChallengeError(w, ErrChallengeInvalid)
+		return TOTPRow{}, 0, false
+	}
+	secret, err := h.cipher.Decrypt(row.Ciphertext, row.Nonce)
+	if err != nil {
+		h.logger.Error("totp confirm decrypt", "err", err)
+		httperr.Write(w, httperr.ErrInternal)
+		return TOTPRow{}, 0, false
+	}
+	counter, err := verifyTOTP(string(secret), code, row.Params, time.Now())
+	if err != nil {
+		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_code",
+			msgInvalidCode))
+		return TOTPRow{}, 0, false
+	}
+	return row, counter, true
+}
+
+func (h *Handler) confirmEnrollmentSession(w http.ResponseWriter, r *http.Request, sessionID int64) (*Challenge, SessionIssue, bool) {
+	var challenge *Challenge
+	if _, authenticated := authctx.FromContext(r.Context()); !authenticated {
+		ch, err := h.repo.ResolveChallenge(r.Context(), cookieValue(r, CookiePreAuth), PurposeEnroll2FA)
+		if err != nil {
+			h.writeChallengeError(w, err)
+			return nil, nil, false
+		}
+		challenge = &ch
+	}
+	var session SessionIssue = LiveSession{ID: sessionID}
+	if challenge != nil {
+		session = PreAuth{Challenge: *challenge, TTL: h.ttl, IP: clientIP(r), UA: r.UserAgent()}
+	}
+	return challenge, session, true
+}
+
+func writeTOTPConfirmError(w http.ResponseWriter, h *Handler, err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrTOTPEnrollmentChanged) {
+		httperr.Write(w, httperr.New(http.StatusConflict, "enrollment_changed",
+			"the enrollment changed; verify the current authenticator secret"))
+		return true
+	}
+	if errors.Is(err, ErrChallengeInvalid) {
+		h.writeChallengeError(w, err)
+		return true
+	}
+	if errors.Is(err, ErrSessionInvalid) {
+		h.writeSessionInvalid(w)
+		return true
+	}
+	h.logger.Error("totp confirm", "err", err)
+	httperr.Write(w, httperr.ErrInternal)
+	return true
 }
 
 type totpDisableInput struct {
@@ -859,30 +884,45 @@ func (h *Handler) TwoFactorStatus(w http.ResponseWriter, r *http.Request) {
 // credential rather than a 30-second counter.
 func (h *Handler) tryStepUpProof(ctx context.Context, uid authctx.UserID, user User, code string) (SecondFactorProof, error) {
 	if digits, numeric := numericOTP(code); numeric {
-		if h.cipher != nil {
-			if p := h.verifyTOTPProof(ctx, uid, digits); p != nil {
-				return SecondFactorProof{Method: MethodTOTP, TOTP: p}, nil
-			}
+		return h.tryNumericStepUpProof(ctx, uid, user, digits)
+	}
+	normalized := normalizeRecoveryCode(code)
+	if len(normalized) != recoveryCodeChars {
+		return SecondFactorProof{}, ErrBadCredentials
+	}
+	return h.tryRecoveryStepUpProof(ctx, uid, normalized)
+}
+
+func (h *Handler) tryNumericStepUpProof(ctx context.Context, uid authctx.UserID, user User, digits string) (SecondFactorProof, error) {
+	if h.cipher != nil {
+		if p := h.verifyTOTPProof(ctx, uid, digits); p != nil {
+			return SecondFactorProof{Method: MethodTOTP, TOTP: p}, nil
 		}
-		if user.Email2FAEnabled && h.codeMAC != nil {
-			digest := h.codeMAC.EmailOTPDigest(uid, OTPPurposeStepUp2FA, nil, digits)
-			live, err := h.repo.StepUpEmailOTPIsLive(ctx, uid, digest)
-			if err != nil {
-				h.logger.Error("step-up mailed code lookup", "err", err)
-			}
-			if err == nil && live {
-				return SecondFactorProof{Method: MethodEmailOTP, Digest: digest}, nil
-			}
-		}
-	} else if normalized := normalizeRecoveryCode(code); len(normalized) == recoveryCodeChars && h.codeMAC != nil {
-		digest := h.codeMAC.RecoveryCodeDigest(uid, normalized)
-		live, err := h.repo.RecoveryCodeIsLive(ctx, uid, digest)
+	}
+	if user.Email2FAEnabled && h.codeMAC != nil {
+		digest := h.codeMAC.EmailOTPDigest(uid, OTPPurposeStepUp2FA, nil, digits)
+		live, err := h.repo.StepUpEmailOTPIsLive(ctx, uid, digest)
 		if err != nil {
-			h.logger.Error("step-up recovery code lookup", "err", err)
+			h.logger.Error("step-up mailed code lookup", "err", err)
 		}
 		if err == nil && live {
-			return SecondFactorProof{Method: MethodRecovery, Digest: digest}, nil
+			return SecondFactorProof{Method: MethodEmailOTP, Digest: digest}, nil
 		}
+	}
+	return SecondFactorProof{}, ErrBadCredentials
+}
+
+func (h *Handler) tryRecoveryStepUpProof(ctx context.Context, uid authctx.UserID, normalized string) (SecondFactorProof, error) {
+	if h.codeMAC == nil {
+		return SecondFactorProof{}, ErrBadCredentials
+	}
+	digest := h.codeMAC.RecoveryCodeDigest(uid, normalized)
+	live, err := h.repo.RecoveryCodeIsLive(ctx, uid, digest)
+	if err != nil {
+		h.logger.Error("step-up recovery code lookup", "err", err)
+	}
+	if err == nil && live {
+		return SecondFactorProof{Method: MethodRecovery, Digest: digest}, nil
 	}
 	return SecondFactorProof{}, ErrBadCredentials
 }

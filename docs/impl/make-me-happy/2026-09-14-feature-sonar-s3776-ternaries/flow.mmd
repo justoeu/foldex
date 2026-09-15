@@ -1,0 +1,37 @@
+flowchart TB
+  subgraph spec [SDD-SONAR-S3776-TERNARIES]
+    G[63 production Go funcs gocognit greater than 15]
+    T[production nested ternaries in web/src]
+  end
+
+  subgraph wt1 [Worktree 1 auth]
+    T001[T-001 charter 18 funcs]
+    T001 --> Aext[T-002 to T-011 extract by file]
+    Aext --> Agate[gocognit auth empty]
+  end
+
+  subgraph wt2 [Worktree 2 backup plus folders]
+    T101[T-101 charter backup/agent/jobs/status/folders]
+    T101 --> Bext[T-102 to T-112 extract by file]
+    Bext --> Bgate[gocognit those packages empty]
+  end
+
+  subgraph wt3 [Worktree 3 remaining Go plus web]
+    T201[T-201 charter remaining Go]
+    T202[T-202 charter nested-ternary copy]
+    T201 --> Cgo[T-203 to T-215 extract]
+    T202 --> Cts[T-216 to T-220 flatten lookup or if/else]
+    Cgo --> CgateG[gocognit remaining empty]
+    Cts --> CgateT[no nested ternary in web/src production]
+  end
+
+  G --> T001
+  G --> T101
+  G --> T201
+  T --> T202
+
+  Agate --> MERGE[merge slices into feature/sonar-s3776-ternaries never main]
+  Bgate --> MERGE
+  CgateG --> MERGE
+  CgateT --> MERGE
+  MERGE --> DONE[gocognit -over 15 empty AND no typescript:S3358]

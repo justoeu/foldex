@@ -10,6 +10,22 @@ import (
 	"foldex/internal/policy"
 )
 
+func TestWithDefaults_FillsZeroFactorAndRole(t *testing.T) {
+	p := policy.Policy{
+		PasswordMinLength:  policy.MinPasswordFloor,
+		OTPTTLMinutes:      5,
+		OTPCooldownSeconds: 60,
+	}
+	got := p.WithDefaults()
+	assert.Equal(t, policy.AdminFactorAny, got.AdminSecondFactor)
+	assert.Equal(t, authctx.RoleEditor, got.GoogleDefaultRole)
+	assert.False(t, got.RequiresTOTPForAdmins())
+
+	strict := got
+	strict.AdminSecondFactor = policy.AdminFactorTOTPOnly
+	assert.True(t, strict.RequiresTOTPForAdmins())
+}
+
 func TestDefault_IsTheHistoricalBehaviour(t *testing.T) {
 	d := policy.Default()
 	assert.Equal(t, policy.MinPasswordFloor, d.PasswordMinLength)

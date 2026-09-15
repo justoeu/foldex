@@ -108,6 +108,7 @@ export function Home({
     entries.some((entry) => entry.kind === revealTarget.kind && entry.id === revealTarget.id)
   useRevealEntry(revealTarget, revealReady, clearReveal)
   const currentFolder = openFolder !== null ? allFolders.find((f) => f.id === openFolder) : null
+  const breadcrumbFolder = currentFolder ? { id: currentFolder.id, name: currentFolder.name } : null
   // Esc goes back one level (matches the breadcrumb "← Pastas" affordance).
   useEscape(onNavigateBack, openFolder !== null)
 
@@ -119,7 +120,7 @@ export function Home({
       <div className="fx-mainarea">
         {openFolder !== null && (
           <FolderBreadcrumb
-            folder={currentFolder ? { id: currentFolder.id, name: currentFolder.name } : null}
+            folder={breadcrumbFolder}
             onBack={onNavigateBack}
             onEdit={() => currentFolder && onEditFolder(currentFolder)}
             onReload={onReload}
@@ -135,7 +136,7 @@ export function Home({
     <div className="fx-mainarea" style={{ '--fx-cols': String(gridCols) } as CSSProperties}>
       {openFolder !== null ? (
         <FolderBreadcrumb
-          folder={currentFolder ? { id: currentFolder.id, name: currentFolder.name } : null}
+          folder={breadcrumbFolder}
           onBack={onNavigateBack}
           onEdit={() => currentFolder && onEditFolder(currentFolder)}
           onReload={onReload}

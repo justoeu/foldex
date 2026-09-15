@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"foldex/internal/pkg/pwhash"
 )
 
 func TestCreateInput_Normalize(t *testing.T) {
@@ -49,6 +51,12 @@ func TestCreateInput_Validate(t *testing.T) {
 		require.Error(t, err, "color %q must be refused", hostile)
 		assert.Contains(t, err.Error(), "color must be")
 	}
+}
+
+func TestUpdateInput_UnmarshalJSON_RejectsGarbage(t *testing.T) {
+	var u UpdateInput
+	err := json.Unmarshal([]byte(`{`), &u)
+	require.Error(t, err)
 }
 
 func TestUpdateInput_Empty(t *testing.T) {
@@ -98,6 +106,11 @@ func TestCreateInput_Validate_Password(t *testing.T) {
 	err := CreateInput{Name: "Docs", Color: "#abc", Password: &short}.Validate()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "at least 4 characters")
+
+	tooLong := strings.Repeat("a", pwhash.MaxPlainBytes+1)
+	err = CreateInput{Name: "Docs", Color: "#abc", Password: &tooLong}.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "at most")
 }
 
 func TestUpdateInput_UnmarshalJSON_PasswordTriState(t *testing.T) {
@@ -121,6 +134,12 @@ func TestUpdateInput_UnmarshalJSON_PasswordTriState(t *testing.T) {
 	assert.True(t, set.PasswordSet)
 	require.NotNil(t, set.Password)
 	assert.Equal(t, "new-pass", *set.Password)
+
+	var bad UpdateInput
+	require.Error(t, json.Unmarshal([]byte(`{`), &bad))
+	require.Error(t, json.Unmarshal([]byte(`{"parent_id":"x"}`), &bad))
+	require.Error(t, json.Unmarshal([]byte(`{"password":1}`), &bad))
+	require.Error(t, json.Unmarshal([]byte(`{"password_hint":1}`), &bad))
 }
 
 func TestUpdateInput_Empty_PasswordSet(t *testing.T) {
@@ -140,6 +159,13 @@ func TestUpdateInput_Validate_Password(t *testing.T) {
 	var removed UpdateInput
 	require.NoError(t, json.Unmarshal([]byte(`{"password":null}`), &removed))
 	require.NoError(t, removed.Validate(), "removing a password (null) never needs the length check")
+
+	tooLong := strings.Repeat("a", pwhash.MaxPlainBytes+1)
+	var setLong UpdateInput
+	require.NoError(t, json.Unmarshal([]byte(`{"password":"`+tooLong+`"}`), &setLong))
+	err = setLong.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "at most")
 }
 
 // ── password_hint (ADR-29) ────────────────────────────────────────────────

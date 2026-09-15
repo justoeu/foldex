@@ -40,6 +40,23 @@ interface PrecacheState {
   previous?: string
 }
 
+function pushCopy(payload: { kind?: string; title?: string }): { title: string; body: string } {
+  if (payload.kind === 'test') {
+    return { title: 'Foldex test notification', body: 'Push setup is working.' }
+  }
+  return {
+    title: payload.title || 'Foldex update',
+    body: 'This page was updated — click to open',
+  }
+}
+
+function previousPrecache(storedState: PrecacheState | null | undefined, cacheNames: string[]): string | undefined {
+  if (storedState?.current === PRECACHE) return storedState.previous
+  if (storedState?.current) return storedState.current
+  if (cacheNames.includes(LEGACY_PRECACHE)) return LEGACY_PRECACHE
+  return undefined
+}
+
 let precacheState: PrecacheState | undefined
 
 function manifestHash(entries: Array<{ url: string; revision: string | null }>): string {
@@ -86,9 +103,7 @@ self.addEventListener('install', (event) => {
     (async () => {
       const storedState = await readPrecacheState()
       const cacheNames = await caches.keys()
-      const previous = storedState?.current === PRECACHE
-        ? storedState.previous
-        : storedState?.current ?? (cacheNames.includes(LEGACY_PRECACHE) ? LEGACY_PRECACHE : undefined)
+      const previous = previousPrecache(storedState, cacheNames)
       const cache = await caches.open(PRECACHE)
       // Fetch each precache target with explicit Request so the cache key
       // ("?rev=..." suffix) matches what `match()` will lookup later.
@@ -269,11 +284,7 @@ self.addEventListener('push', (event) => {
     event.waitUntil(showGenericNotification())
     return
   }
-  const isTest = payload.kind === 'test'
-  const title = isTest ? 'Foldex test notification' : payload.title || 'Foldex update'
-  const body = isTest
-    ? 'Push setup is working.'
-    : `This page was updated — click to open`
+  const { title, body } = pushCopy(payload)
   event.waitUntil(
     self.registration.showNotification(title, {
       body,

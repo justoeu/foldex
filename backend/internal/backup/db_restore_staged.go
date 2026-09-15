@@ -90,29 +90,48 @@ func restoreDuplicateStaged(ctx context.Context, tx pgx.Tx, uid authctx.UserID, 
 	mapping := newIDMapping()
 	warnings := make([]string, 0)
 
-	tagNames, err := allocateDuplicateTagNames(ctx, tx, uid, snap.Tags)
-	if err != nil {
-		return inserted, warnings, mapping, err
-	}
-	existingLinks, err := loadExistingRestoreLinks(ctx, tx, uid, snap.Links)
-	if err != nil {
-		return inserted, warnings, mapping, err
-	}
-	linkSlugs, err := allocateRestoreLinkSlugs(ctx, tx, snap.Links, existingLinks)
-	if err != nil {
-		return inserted, warnings, mapping, err
-	}
-	noteSlugs, err := allocateRestoreNoteSlugs(ctx, tx, snap.Notes)
+	prep, err := prepareDuplicateRestore(ctx, tx, uid, snap)
 	if err != nil {
 		return inserted, warnings, mapping, err
 	}
 	if err := createRestoreStagingTables(ctx, tx); err != nil {
 		return inserted, warnings, mapping, err
 	}
-	if err := copyRestoreStaging(ctx, tx, snap, tagNames, linkSlugs, noteSlugs); err != nil {
+	if err := copyRestoreStaging(ctx, tx, snap, prep.tagNames, prep.linkSlugs, prep.noteSlugs); err != nil {
 		return inserted, warnings, mapping, err
 	}
+	return insertDuplicateRestore(ctx, tx, uid, snap, prep, mapping)
+}
 
+type duplicateRestorePrep struct {
+	tagNames      []string
+	linkSlugs     []string
+	noteSlugs     []string
+	existingLinks map[string]existingRestoreLink
+}
+
+func prepareDuplicateRestore(ctx context.Context, tx pgx.Tx, uid authctx.UserID, snap *Snapshot) (duplicateRestorePrep, error) {
+	var prep duplicateRestorePrep
+	var err error
+	prep.tagNames, err = allocateDuplicateTagNames(ctx, tx, uid, snap.Tags)
+	if err != nil {
+		return prep, err
+	}
+	prep.existingLinks, err = loadExistingRestoreLinks(ctx, tx, uid, snap.Links)
+	if err != nil {
+		return prep, err
+	}
+	prep.linkSlugs, err = allocateRestoreLinkSlugs(ctx, tx, snap.Links, prep.existingLinks)
+	if err != nil {
+		return prep, err
+	}
+	prep.noteSlugs, err = allocateRestoreNoteSlugs(ctx, tx, snap.Notes)
+	return prep, err
+}
+
+func insertDuplicateRestore(ctx context.Context, tx pgx.Tx, uid authctx.UserID, snap *Snapshot, prep duplicateRestorePrep, mapping idMapping) (Counts, []string, idMapping, error) {
+	var inserted Counts
+	warnings := make([]string, 0)
 	ct, err := tx.Exec(ctx, `
 		INSERT INTO tag (id, user_id, name, color, icon, created_at)
 		SELECT new_id, $1, name, color, icon, created_at
@@ -127,8 +146,8 @@ func restoreDuplicateStaged(ctx context.Context, tx pgx.Tx, uid authctx.UserID, 
 		return inserted, warnings, mapping, fmt.Errorf("map staged duplicate tags: %w", err)
 	}
 	for i, tag := range snap.Tags {
-		if tagNames[i] != tag.Name {
-			warnings = append(warnings, fmt.Sprintf("tag %q renomeada para %q", tag.Name, tagNames[i]))
+		if prep.tagNames[i] != tag.Name {
+			warnings = append(warnings, fmt.Sprintf("tag %q renomeada para %q", tag.Name, prep.tagNames[i]))
 		}
 	}
 
@@ -137,7 +156,7 @@ func restoreDuplicateStaged(ctx context.Context, tx pgx.Tx, uid authctx.UserID, 
 		return inserted, warnings, mapping, err
 	}
 
-	links, err := restoreConflictLinks(ctx, tx, uid, snap.Links, existingLinks, mapping, ModeDuplicate)
+	links, err := restoreConflictLinks(ctx, tx, uid, snap.Links, prep.existingLinks, mapping, ModeDuplicate)
 	if err != nil {
 		return inserted, warnings, mapping, err
 	}
@@ -148,7 +167,6 @@ func restoreDuplicateStaged(ctx context.Context, tx pgx.Tx, uid authctx.UserID, 
 	if err != nil {
 		return inserted, warnings, mapping, err
 	}
-
 	if err := attachPolymorphicTags(ctx, tx, mapping, snap, &inserted, nil, false); err != nil {
 		return inserted, warnings, mapping, err
 	}
@@ -441,75 +459,114 @@ func createRestoreStagingTables(ctx context.Context, tx pgx.Tx) error {
 }
 
 func copyRestoreStaging(ctx context.Context, tx pgx.Tx, snap *Snapshot, tagNames, linkSlugs, noteSlugs []string) error {
-	tagIDs, err := reserveRestoreIDs(ctx, tx, "tag_id_seq", len(snap.Tags))
+	ids, err := reserveRestoreStagingIDs(ctx, tx, snap)
 	if err != nil {
 		return err
 	}
-	folderIDs, err := reserveRestoreIDs(ctx, tx, "folder_id_seq", len(snap.Folders))
-	if err != nil {
+	if err := copyRestoreTags(ctx, tx, snap.Tags, tagNames, ids.tags); err != nil {
 		return err
 	}
-	linkIDs, err := reserveRestoreIDs(ctx, tx, "link_id_seq", len(snap.Links))
-	if err != nil {
+	if err := copyRestoreFolders(ctx, tx, snap.Folders, ids.folders); err != nil {
 		return err
 	}
-	noteIDs, err := reserveRestoreIDs(ctx, tx, "note_id_seq", len(snap.Notes))
-	if err != nil {
+	if err := copyRestoreLinks(ctx, tx, snap.Links, linkSlugs, ids.links); err != nil {
 		return err
 	}
-	folderParents, _ := normalizeRestoreFolderParents(snap.Folders)
+	return copyRestoreNotes(ctx, tx, snap.Notes, noteSlugs, ids.notes)
+}
 
-	if len(snap.Tags) > 0 {
-		_, err = tx.CopyFrom(ctx, pgx.Identifier{"_backup_restore_tag"},
-			[]string{"ordinal", "old_id", "new_id", "name", "color", "icon", "created_at"},
-			pgx.CopyFromSlice(len(snap.Tags), func(i int) ([]any, error) {
-				row := snap.Tags[i]
-				name := row.Name
-				if tagNames != nil {
-					name = tagNames[i]
-				}
-				return []any{i, row.ID, tagIDs[i], name, row.Color, row.Icon, row.CreatedAt}, nil
-			}))
-		if err != nil {
-			return fmt.Errorf("copy restore tags: %w", err)
-		}
+type restoreStagingIDs struct {
+	tags, folders, links, notes []int64
+}
+
+func reserveRestoreStagingIDs(ctx context.Context, tx pgx.Tx, snap *Snapshot) (restoreStagingIDs, error) {
+	var ids restoreStagingIDs
+	var err error
+	ids.tags, err = reserveRestoreIDs(ctx, tx, "tag_id_seq", len(snap.Tags))
+	if err != nil {
+		return ids, err
 	}
-	if len(snap.Folders) > 0 {
-		_, err = tx.CopyFrom(ctx, pgx.Identifier{"_backup_restore_folder"},
-			[]string{"ordinal", "old_id", "new_id", "name", "color", "parent_old_id", "password_hash", "password_hint", "created_at"},
-			pgx.CopyFromSlice(len(snap.Folders), func(i int) ([]any, error) {
-				row := snap.Folders[i]
-				return []any{i, row.ID, folderIDs[i], row.Name, row.Color, folderParents[i], row.PasswordHash, row.PasswordHint, row.CreatedAt}, nil
-			}))
-		if err != nil {
-			return fmt.Errorf("copy restore folders: %w", err)
-		}
+	ids.folders, err = reserveRestoreIDs(ctx, tx, "folder_id_seq", len(snap.Folders))
+	if err != nil {
+		return ids, err
 	}
-	if len(snap.Links) > 0 {
-		_, err = tx.CopyFrom(ctx, pgx.Identifier{"_backup_restore_link"},
-			[]string{"ordinal", "old_id", "new_id", "url", "title", "slug", "description", "favicon_url", "og_image_url", "pinned", "preview_status", "preview_error", "folder_old_id", "is_public", "created_at", "updated_at"},
-			pgx.CopyFromSlice(len(snap.Links), func(i int) ([]any, error) {
-				row := snap.Links[i]
-				return []any{i, row.ID, linkIDs[i], row.URL, row.Title, linkSlugs[i], row.Description,
-					row.FaviconURL, row.OGImageURL, row.Pinned, row.PreviewStatus, row.PreviewError,
-					row.FolderID, row.IsPublic, row.CreatedAt, row.UpdatedAt}, nil
-			}))
-		if err != nil {
-			return fmt.Errorf("copy restore links: %w", err)
-		}
+	ids.links, err = reserveRestoreIDs(ctx, tx, "link_id_seq", len(snap.Links))
+	if err != nil {
+		return ids, err
 	}
-	if len(snap.Notes) > 0 {
-		_, err = tx.CopyFrom(ctx, pgx.Identifier{"_backup_restore_note"},
-			[]string{"ordinal", "old_id", "new_id", "title", "slug", "body_html", "body_text", "pinned", "folder_old_id", "cover_url", "is_public", "created_at", "updated_at"},
-			pgx.CopyFromSlice(len(snap.Notes), func(i int) ([]any, error) {
-				row := snap.Notes[i]
-				bodyHTML, bodyText := htmlsanitize.SanitizeAndPlain(row.BodyHTML)
-				return []any{i, row.ID, noteIDs[i], row.Title, noteSlugs[i], bodyHTML, bodyText,
-					row.Pinned, row.FolderID, row.CoverURL, row.IsPublic, row.CreatedAt, row.UpdatedAt}, nil
-			}))
-		if err != nil {
-			return fmt.Errorf("copy restore notes: %w", err)
-		}
+	ids.notes, err = reserveRestoreIDs(ctx, tx, "note_id_seq", len(snap.Notes))
+	return ids, err
+}
+
+func copyRestoreTags(ctx context.Context, tx pgx.Tx, tags []TagRow, tagNames []string, newIDs []int64) error {
+	if len(tags) == 0 {
+		return nil
+	}
+	_, err := tx.CopyFrom(ctx, pgx.Identifier{"_backup_restore_tag"},
+		[]string{"ordinal", "old_id", "new_id", "name", "color", "icon", "created_at"},
+		pgx.CopyFromSlice(len(tags), func(i int) ([]any, error) {
+			row := tags[i]
+			name := row.Name
+			if tagNames != nil {
+				name = tagNames[i]
+			}
+			return []any{i, row.ID, newIDs[i], name, row.Color, row.Icon, row.CreatedAt}, nil
+		}))
+	if err != nil {
+		return fmt.Errorf("copy restore tags: %w", err)
+	}
+	return nil
+}
+
+func copyRestoreFolders(ctx context.Context, tx pgx.Tx, folders []FolderRow, newIDs []int64) error {
+	if len(folders) == 0 {
+		return nil
+	}
+	folderParents, _ := normalizeRestoreFolderParents(folders)
+	_, err := tx.CopyFrom(ctx, pgx.Identifier{"_backup_restore_folder"},
+		[]string{"ordinal", "old_id", "new_id", "name", "color", "parent_old_id", "password_hash", "password_hint", "created_at"},
+		pgx.CopyFromSlice(len(folders), func(i int) ([]any, error) {
+			row := folders[i]
+			return []any{i, row.ID, newIDs[i], row.Name, row.Color, folderParents[i], row.PasswordHash, row.PasswordHint, row.CreatedAt}, nil
+		}))
+	if err != nil {
+		return fmt.Errorf("copy restore folders: %w", err)
+	}
+	return nil
+}
+
+func copyRestoreLinks(ctx context.Context, tx pgx.Tx, links []LinkRow, slugs []string, newIDs []int64) error {
+	if len(links) == 0 {
+		return nil
+	}
+	_, err := tx.CopyFrom(ctx, pgx.Identifier{"_backup_restore_link"},
+		[]string{"ordinal", "old_id", "new_id", "url", "title", "slug", "description", "favicon_url", "og_image_url", "pinned", "preview_status", "preview_error", "folder_old_id", "is_public", "created_at", "updated_at"},
+		pgx.CopyFromSlice(len(links), func(i int) ([]any, error) {
+			row := links[i]
+			return []any{i, row.ID, newIDs[i], row.URL, row.Title, slugs[i], row.Description,
+				row.FaviconURL, row.OGImageURL, row.Pinned, row.PreviewStatus, row.PreviewError,
+				row.FolderID, row.IsPublic, row.CreatedAt, row.UpdatedAt}, nil
+		}))
+	if err != nil {
+		return fmt.Errorf("copy restore links: %w", err)
+	}
+	return nil
+}
+
+func copyRestoreNotes(ctx context.Context, tx pgx.Tx, notes []NoteRow, slugs []string, newIDs []int64) error {
+	if len(notes) == 0 {
+		return nil
+	}
+	_, err := tx.CopyFrom(ctx, pgx.Identifier{"_backup_restore_note"},
+		[]string{"ordinal", "old_id", "new_id", "title", "slug", "body_html", "body_text", "pinned", "folder_old_id", "cover_url", "is_public", "created_at", "updated_at"},
+		pgx.CopyFromSlice(len(notes), func(i int) ([]any, error) {
+			row := notes[i]
+			bodyHTML, bodyText := htmlsanitize.SanitizeAndPlain(row.BodyHTML)
+			return []any{i, row.ID, newIDs[i], row.Title, slugs[i], bodyHTML, bodyText,
+				row.Pinned, row.FolderID, row.CoverURL, row.IsPublic, row.CreatedAt, row.UpdatedAt}, nil
+		}))
+	if err != nil {
+		return fmt.Errorf("copy restore notes: %w", err)
 	}
 	return nil
 }

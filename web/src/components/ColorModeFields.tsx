@@ -18,6 +18,11 @@ type Props = Readonly<{
   i18nPrefix: 'tag_dialog' | 'folder_dialog'
 }>
 
+function swatchBorder(c: string, solid: string): string {
+  if (c === solid) return '2px solid var(--fx-ink)'
+  return '1px solid var(--fx-border)'
+}
+
 export function ColorModeFields({
   mode,
   onModeChange,
@@ -68,7 +73,7 @@ export function ColorModeFields({
                 height: 26,
                 borderRadius: 8,
                 background: c,
-                border: c === solid ? '2px solid var(--fx-ink)' : '1px solid var(--fx-border)',
+                border: swatchBorder(c, solid),
                 cursor: 'pointer',
               }}
             />

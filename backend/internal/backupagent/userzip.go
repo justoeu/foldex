@@ -110,75 +110,90 @@ func (j *UserZipJob) Run(ctx context.Context) (*backupjobs.Artifact, map[string]
 		return nil, nil, backupjobs.ReasonUserZipFailed, err
 	}
 
-	var (
-		failed     []int64
-		deferred   []int64
-		shipped    int
-		bytesTotal int64
-		pruneErr   bool
-	)
+	var progress userZipProgress
 	for _, uid := range uids {
 		if err := ctx.Err(); err != nil {
 			return nil, nil, backupjobs.ReasonUserZipFailed, err
 		}
-		// The Export reads the source bucket while a per-user restore leaves
-		// it mid-write (the database is transactional, the bucket is not —
-		// INV-104). Busy ⇒ this user skips THIS cycle and is counted, never
-		// failed: the next anchor retries.
-		busy, err := j.restoreBusy(ctx)
-		if err != nil {
-			failed = append(failed, int64(uid))
-			j.logger.Error("restore probe failed", "user_id", int64(uid), "err", err)
-			continue
-		}
-		if busy {
-			deferred = append(deferred, int64(uid))
-			j.logger.Info("user zip deferred: a restore is in flight", "user_id", int64(uid))
-			continue
-		}
-
-		key, size, sha, err := j.shipOne(ctx, uid)
-		if err != nil {
-			failed = append(failed, int64(uid))
-			j.logger.Error("user zip failed", "user_id", int64(uid), "err", err)
-			continue
-		}
-		shipped++
-		bytesTotal += size
-		j.logger.Info("user zip shipped", "user_id", int64(uid), "key", key, "bytes", size, "sha256", sha)
-
-		if j.cfg.RetentionMode == "agent" {
-			if pruned, err := j.pruneUser(ctx, uid); err != nil {
-				// The archive landed; a failed prune degrades to run metadata
-				// exactly like the dump job's — never a failed backup.
-				pruneErr = true
-				j.logger.Warn("user zip retention prune failed", "user_id", int64(uid), "err", err)
-			} else if pruned > 0 {
-				j.logger.Info("user zip retention pruned", "user_id", int64(uid), "count", pruned)
-			}
-		}
+		j.exportOneUser(ctx, uid, &progress)
 	}
-
-	if len(failed) > 0 && shipped == 0 {
+	if len(progress.failed) > 0 && progress.shipped == 0 {
 		return nil, nil, backupjobs.ReasonUserZipFailed,
-			fmt.Errorf("all %d attempted user exports failed", len(failed))
+			fmt.Errorf("all %d attempted user exports failed", len(progress.failed))
+	}
+	return nil, progress.meta(len(uids)), "", nil
+}
+
+type userZipProgress struct {
+	failed     []int64
+	deferred   []int64
+	shipped    int
+	bytesTotal int64
+	pruneErr   bool
+}
+
+func (j *UserZipJob) exportOneUser(ctx context.Context, uid authctx.UserID, p *userZipProgress) {
+	// The Export reads the source bucket while a per-user restore leaves
+	// it mid-write (the database is transactional, the bucket is not —
+	// INV-104). Busy ⇒ this user skips THIS cycle and is counted, never
+	// failed: the next anchor retries.
+	busy, err := j.restoreBusy(ctx)
+	if err != nil {
+		p.failed = append(p.failed, int64(uid))
+		j.logger.Error("restore probe failed", "user_id", int64(uid), "err", err)
+		return
+	}
+	if busy {
+		p.deferred = append(p.deferred, int64(uid))
+		j.logger.Info("user zip deferred: a restore is in flight", "user_id", int64(uid))
+		return
 	}
 
-	meta := map[string]any{
-		"users":       len(uids),
-		"shipped":     shipped,
-		"bytes_total": bytesTotal,
+	key, size, sha, err := j.shipOne(ctx, uid)
+	if err != nil {
+		p.failed = append(p.failed, int64(uid))
+		j.logger.Error("user zip failed", "user_id", int64(uid), "err", err)
+		return
 	}
-	if len(failed) > 0 {
-		meta["failed_users"] = failed
+	p.shipped++
+	p.bytesTotal += size
+	j.logger.Info("user zip shipped", "user_id", int64(uid), "key", key, "bytes", size, "sha256", sha)
+	j.pruneShippedUser(ctx, uid, p)
+}
+
+func (j *UserZipJob) pruneShippedUser(ctx context.Context, uid authctx.UserID, p *userZipProgress) {
+	if j.cfg.RetentionMode != "agent" {
+		return
 	}
-	if len(deferred) > 0 {
-		meta["deferred_users"] = deferred
+	pruned, err := j.pruneUser(ctx, uid)
+	if err != nil {
+		// The archive landed; a failed prune degrades to run metadata
+		// exactly like the dump job's — never a failed backup.
+		p.pruneErr = true
+		j.logger.Warn("user zip retention prune failed", "user_id", int64(uid), "err", err)
+		return
 	}
-	if pruneErr {
-		meta["prune_error"] = backupjobs.ReasonPruneFailed
+	if pruned > 0 {
+		j.logger.Info("user zip retention pruned", "user_id", int64(uid), "count", pruned)
 	}
-	return nil, meta, "", nil
+}
+
+func (p userZipProgress) meta(users int) map[string]any {
+	out := map[string]any{
+		"users":       users,
+		"shipped":     p.shipped,
+		"bytes_total": p.bytesTotal,
+	}
+	if len(p.failed) > 0 {
+		out["failed_users"] = p.failed
+	}
+	if len(p.deferred) > 0 {
+		out["deferred_users"] = p.deferred
+	}
+	if p.pruneErr {
+		out["prune_error"] = backupjobs.ReasonPruneFailed
+	}
+	return out
 }
 
 // shipOne exports one user's ZIP through the same spool→encrypt→hash→upload

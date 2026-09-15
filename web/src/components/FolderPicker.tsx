@@ -12,6 +12,24 @@ type Props = Readonly<{
 
 type Controller = ReturnType<typeof useFolderPickerController>
 
+const PICKER_ROW_ICON = {
+  create: I.plus,
+  folder: I.folder,
+  none: I.x,
+} as const
+
+function pickerRowIcon(kind: FolderPickerRow['kind']) {
+  return PICKER_ROW_ICON[kind]
+}
+
+function pickerRowClass(active: boolean, kind: FolderPickerRow['kind'], selected: boolean): string {
+  let className = 'fx-folderpicker-row'
+  if (active) className += ' fx-folderpicker-row-active'
+  if (kind === 'create') className += ' fx-folderpicker-row-create'
+  if (selected) className += ' fx-folderpicker-row-chosen'
+  return className
+}
+
 export function FolderPicker(props: Props) {
   const { t } = useTranslation()
   const picker = useFolderPickerController(props)
@@ -99,12 +117,7 @@ function FolderPickerOption({
     <li
       role="option"
       aria-selected={selected}
-      className={
-        'fx-folderpicker-row' +
-        (active ? ' fx-folderpicker-row-active' : '') +
-        (row.kind === 'create' ? ' fx-folderpicker-row-create' : '') +
-        (selected ? ' fx-folderpicker-row-chosen' : '')
-      }
+      className={pickerRowClass(active, row.kind, selected)}
       onMouseDown={(event) => {
         event.preventDefault()
         void onCommit(row)
@@ -112,7 +125,7 @@ function FolderPickerOption({
       onMouseEnter={() => onHighlight(index)}
     >
       <span className="fx-folderpicker-row-icon" aria-hidden="true">
-        <Icon d={row.kind === 'create' ? I.plus : row.kind === 'folder' ? I.folder : I.x} size={row.kind === 'none' ? 11 : 13} />
+        <Icon d={pickerRowIcon(row.kind)} size={row.kind === 'none' ? 11 : 13} />
       </span>
       <span className="fx-folderpicker-row-label">
         {row.kind === 'folder' && row.hasPassword && (

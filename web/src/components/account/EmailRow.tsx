@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { I } from '../icons'
@@ -70,24 +70,18 @@ export function EmailRow({ user }: Readonly<{ user: AuthUser }>) {
           ? { label: t('account.state_verified'), on: true }
           : { label: t('account.state_unverified'), on: false }
       }
-      action={
-        loading ? null : live ? (
-          <button className="fx-btn" onClick={() => cancel.mutate()} disabled={cancel.isPending}>
-            {t('account.email_change_cancel')}
-          </button>
-        ) : (
-          <button
-            className="fx-btn"
-            aria-expanded={open}
-            onClick={() => {
-              setError('')
-              setOpen((v) => !v)
-            }}
-          >
-            {open ? t('common.cancel') : t('account.change_email')}
-          </button>
-        )
-      }
+      action={emailAction({
+        loading,
+        live: !!live,
+        open,
+        busy: cancel.isPending,
+        onCancel: () => cancel.mutate(),
+        onToggle: () => {
+          setError('')
+          setOpen((v) => !v)
+        },
+        t,
+      })}
     >
       {/* A live request outranks the form: the next useful action is opening
           the link, or cancelling — not typing another address. */}
@@ -135,6 +129,30 @@ export function EmailRow({ user }: Readonly<{ user: AuthUser }>) {
         </>
       )}
     </SectionRow>
+  )
+}
+
+function emailAction(opts: {
+  loading: boolean
+  live: boolean
+  open: boolean
+  busy: boolean
+  onCancel: () => void
+  onToggle: () => void
+  t: (k: string) => string
+}): ReactNode {
+  if (opts.loading) return null
+  if (opts.live) {
+    return (
+      <button className="fx-btn" onClick={opts.onCancel} disabled={opts.busy}>
+        {opts.t('account.email_change_cancel')}
+      </button>
+    )
+  }
+  return (
+    <button className="fx-btn" aria-expanded={opts.open} onClick={opts.onToggle}>
+      {opts.open ? opts.t('common.cancel') : opts.t('account.change_email')}
+    </button>
   )
 }
 

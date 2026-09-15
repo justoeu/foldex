@@ -256,33 +256,9 @@ func loadAssets(fsys fs.FS) (*assets, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse text layout: %w", err)
 	}
-	names, err := fs.Glob(fsys, "templates/strings.*.json")
+	catalogs, err := loadCatalogs(fsys)
 	if err != nil {
-		return nil, fmt.Errorf("glob catalogues: %w", err)
-	}
-	catalogs := make(map[string]map[string]compiledMessage, len(names))
-	for _, name := range names {
-		raw, err := fs.ReadFile(fsys, name)
-		if err != nil {
-			return nil, fmt.Errorf("read %s: %w", name, err)
-		}
-		var cat map[string]messageStrings
-		if err := json.Unmarshal(raw, &cat); err != nil {
-			return nil, fmt.Errorf("parse %s: %w", name, err)
-		}
-		compiled := make(map[string]compiledMessage, len(cat))
-		for template, ms := range cat {
-			c, cerr := compileMessage(ms)
-			if cerr != nil {
-				return nil, fmt.Errorf("%s/%s: %w", name, template, cerr)
-			}
-			compiled[template] = c
-		}
-		locale := strings.TrimSuffix(strings.TrimPrefix(name, "templates/strings."), ".json")
-		catalogs[locale] = compiled
-	}
-	if _, ok := catalogs[DefaultLocale]; !ok {
-		return nil, fmt.Errorf("catalogue for the default locale %q is missing", DefaultLocale)
+		return nil, err
 	}
 	// A layout must not redefine a shared block, and that is checked here
 	// because nothing else can catch it.
@@ -306,25 +282,67 @@ func loadAssets(fsys fs.FS) (*assets, error) {
 	// condition — it is a binary that shipped wrong, and the failure belongs
 	// where a developer sees it instead of in a queued password reset that
 	// fails to render at three in the morning.
+	if err := requireLayoutParity(catalogs, html, text); err != nil {
+		return nil, err
+	}
+	return &assets{catalogs: catalogs, html: html, text: text}, nil
+}
+
+func loadCatalogs(fsys fs.FS) (map[string]map[string]compiledMessage, error) {
+	names, err := fs.Glob(fsys, "templates/strings.*.json")
+	if err != nil {
+		return nil, fmt.Errorf("glob catalogues: %w", err)
+	}
+	catalogs := make(map[string]map[string]compiledMessage, len(names))
+	for _, name := range names {
+		compiled, locale, err := loadOneCatalogue(fsys, name)
+		if err != nil {
+			return nil, err
+		}
+		catalogs[locale] = compiled
+	}
+	if _, ok := catalogs[DefaultLocale]; !ok {
+		return nil, fmt.Errorf("catalogue for the default locale %q is missing", DefaultLocale)
+	}
+	return catalogs, nil
+}
+
+func loadOneCatalogue(fsys fs.FS, name string) (map[string]compiledMessage, string, error) {
+	raw, err := fs.ReadFile(fsys, name)
+	if err != nil {
+		return nil, "", fmt.Errorf("read %s: %w", name, err)
+	}
+	var cat map[string]messageStrings
+	if err := json.Unmarshal(raw, &cat); err != nil {
+		return nil, "", fmt.Errorf("parse %s: %w", name, err)
+	}
+	compiled := make(map[string]compiledMessage, len(cat))
+	for template, ms := range cat {
+		c, cerr := compileMessage(ms)
+		if cerr != nil {
+			return nil, "", fmt.Errorf("%s/%s: %w", name, template, cerr)
+		}
+		compiled[template] = c
+	}
+	locale := strings.TrimSuffix(strings.TrimPrefix(name, "templates/strings."), ".json")
+	return compiled, locale, nil
+}
+
+func requireLayoutParity(catalogs map[string]map[string]compiledMessage, html *htmltemplate.Template, text *texttemplate.Template) error {
 	for name := range catalogs[DefaultLocale] {
 		if isReservedKey(name) {
 			continue
 		}
 		if html.Lookup(name) == nil {
-			return nil, fmt.Errorf("message %q has copy but no HTML layout "+
+			return fmt.Errorf("message %q has copy but no HTML layout "+
 				"(add templates/%s.html.tmpl)", name, name)
 		}
-		// BOTH arms, for the same reason the check exists at all: a message
-		// with no text layout used to render an empty text part, and `render`
-		// only emits multipart/alternative when both arms exist — so the
-		// message would silently go out HTML-only, to an audience that
-		// self-hosts and disproportionately refuses HTML.
 		if text.Lookup("text."+name) == nil {
-			return nil, fmt.Errorf("message %q has copy but no text layout "+
+			return fmt.Errorf("message %q has copy but no text layout "+
 				"(add a text.%s definition to templates/layout.txt.tmpl)", name, name)
 		}
 	}
-	return &assets{catalogs: catalogs, html: html, text: text}, nil
+	return nil
 }
 
 // refuseDuplicateDefinitions fails when two files define the same template name.
@@ -444,60 +462,73 @@ func (a *assets) render(env Envelope, locale string) (Message, error) {
 	if err != nil {
 		return Message{}, err
 	}
+	doc, subject, err := a.composeDoc(ms, env, locale)
+	if err != nil {
+		return Message{}, err
+	}
+	htmlOut, textOut, err := a.executeLayouts(env.Template, doc)
+	if err != nil {
+		return Message{}, err
+	}
+	return Message{
+		To:      env.To,
+		Subject: subject,
+		Text:    strings.TrimSpace(textOut) + "\n",
+		HTML:    htmlOut,
+	}, nil
+}
+
+func (a *assets) composeDoc(ms compiledMessage, env Envelope, locale string) (mailDoc, string, error) {
 	doc := mailDoc{
 		Locale:    NormalizeLocale(locale),
 		Code:      env.Params[ParamCode],
 		ActionURL: env.Params[ParamActionURL],
 	}
-	// The footer resolves through the same per-message locale fallback, and an
-	// absent entry simply renders no footer — a locale that has not been given
-	// the sign-off yet degrades to a message without one, never to a broken
-	// render.
 	if f, ferr := a.strings(footerKey, locale); ferr == nil && len(f.body) > 0 {
-		if doc.Footer, err = f.body[0].render(env.Params); err != nil {
-			return Message{}, err
+		footer, err := f.body[0].render(env.Params)
+		if err != nil {
+			return mailDoc{}, "", err
 		}
+		doc.Footer = footer
 	}
+	var err error
 	if doc.Eyebrow, err = ms.eyebrow.render(env.Params); err != nil {
-		return Message{}, err
+		return mailDoc{}, "", err
 	}
 	subject, err := ms.subject.render(env.Params)
 	if err != nil {
-		return Message{}, err
+		return mailDoc{}, "", err
 	}
 	if doc.Heading, err = ms.heading.render(env.Params); err != nil {
-		return Message{}, err
+		return mailDoc{}, "", err
 	}
 	if doc.Action, err = ms.action.render(env.Params); err != nil {
-		return Message{}, err
+		return mailDoc{}, "", err
 	}
 	if doc.Footnote, err = ms.footnote.render(env.Params); err != nil {
-		return Message{}, err
+		return mailDoc{}, "", err
 	}
 	for _, p := range ms.body {
 		para, perr := p.render(env.Params)
 		if perr != nil {
-			return Message{}, perr
+			return mailDoc{}, "", perr
 		}
 		if para != "" {
 			doc.Body = append(doc.Body, para)
 		}
 	}
+	return doc, subject, nil
+}
 
+func (a *assets) executeLayouts(template string, doc mailDoc) (string, string, error) {
 	var htmlOut, textOut strings.Builder
-	// ExecuteTemplate, not Execute: each message owns its layout now.
-	if err := a.html.ExecuteTemplate(&htmlOut, env.Template, doc); err != nil {
-		return Message{}, fmt.Errorf("mailer: render html %q: %w", env.Template, err)
+	if err := a.html.ExecuteTemplate(&htmlOut, template, doc); err != nil {
+		return "", "", fmt.Errorf("mailer: render html %q: %w", template, err)
 	}
-	if err := a.text.ExecuteTemplate(&textOut, "text."+env.Template, doc); err != nil {
-		return Message{}, fmt.Errorf("mailer: render text %q: %w", env.Template, err)
+	if err := a.text.ExecuteTemplate(&textOut, "text."+template, doc); err != nil {
+		return "", "", fmt.Errorf("mailer: render text %q: %w", template, err)
 	}
-	return Message{
-		To:      env.To,
-		Subject: subject,
-		Text:    strings.TrimSpace(textOut.String()) + "\n",
-		HTML:    htmlOut.String(),
-	}, nil
+	return htmlOut.String(), textOut.String(), nil
 }
 
 // strings resolves the copy for one message, falling back to DefaultLocale when

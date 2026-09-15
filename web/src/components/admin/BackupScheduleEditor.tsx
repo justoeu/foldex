@@ -1,6 +1,7 @@
 import { memo, useState, type ReactNode, type RefObject } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
+import type { TFunction } from 'i18next'
 import { useConfirm } from '../ConfirmDialog'
 import {
   backupScheduleQueryKey,
@@ -15,6 +16,18 @@ import {
 import { reducesProtection } from './backupSchedule'
 import { formatMinutes } from './backupFormat'
 import { apiErrorMessage } from '../../lib/apiError'
+
+function scheduleEditorError(
+  saveFailed: boolean,
+  saveErr: unknown,
+  resetFailed: boolean,
+  resetErr: unknown,
+  t: TFunction,
+): string | null {
+  if (saveFailed) return apiErrorMessage(saveErr) ?? t('common.error')
+  if (resetFailed) return apiErrorMessage(resetErr) ?? t('common.error')
+  return null
+}
 
 /** The two schedule modes, in render order — also the arrow-key order. */
 const MODES = ['times', 'interval'] as const
@@ -124,6 +137,29 @@ function withinTimesCeiling(
  * fallback — `payloadOf` is what trims the document on the way out, so the
  * extra half costs nothing on the wire.
  */
+function scheduleSourceChip(report: BackupAgentJobReport | null | undefined, t: TFunction) {
+  if (!report) {
+    return <span className="fx-chip fx-chip-warn">{t('admin.backup_schedule_no_report')}</span>
+  }
+  const on = report.source === 'db' ? ' fx-chip-ok' : ''
+  return (
+    <span className={'fx-chip' + on}>
+      {t(`admin.backup_schedule_source_${report.source}`)}
+    </span>
+  )
+}
+
+function seedWithoutStored(
+  job: BackupJob,
+  env: BackupScheduleConfig | null,
+  baseline: BackupScheduleConfig | null | undefined,
+  fallback: BackupScheduleConfig,
+): BackupScheduleConfig {
+  if (env) return env
+  if (baseline && job === 'user_zip') return { ...fallback, enabled: false }
+  return fallback
+}
+
 export function seedDraft(
   job: BackupJob,
   stored: BackupScheduleConfig | null,
@@ -139,7 +175,7 @@ export function seedDraft(
   // as the effect of merely looking at it.
   const seed = stored
     ? { ...(env ?? fallback), ...stored }
-    : (env ?? (baseline && job === 'user_zip' ? { ...fallback, enabled: false } : fallback))
+    : seedWithoutStored(job, env, baseline, fallback)
   return withinTimesCeiling(seed, bounds)
 }
 
@@ -248,13 +284,7 @@ export const ScheduleCard = memo(function ScheduleCard({
             </p>
           ) : null}
         </div>
-        {report ? (
-          <span className={'fx-chip' + (report.source === 'db' ? ' fx-chip-ok' : '')}>
-            {t(`admin.backup_schedule_source_${report.source}`)}
-          </span>
-        ) : (
-          <span className="fx-chip fx-chip-warn">{t('admin.backup_schedule_no_report')}</span>
-        )}
+        {scheduleSourceChip(report, t)}
       </div>
 
       <div className="fx-bkp-tabs" role="tablist">
@@ -353,11 +383,7 @@ function ScheduleEditor({
   // The server's own message, verbatim: the bounds are configurable
   // (compiled, but the message names the real numbers) and a client
   // restatement would drift — same reasoning as the password floor.
-  const error = save.isError
-    ? (apiErrorMessage(save.error) ?? t('common.error'))
-    : reset.isError
-      ? (apiErrorMessage(reset.error) ?? t('common.error'))
-      : null
+  const error = scheduleEditorError(save.isError, save.error, reset.isError, reset.error, t)
 
   // A job the agent reports it CANNOT run gets no editors: a schedule for it
   // would be a promise the process already said it cannot keep. A job MISSING

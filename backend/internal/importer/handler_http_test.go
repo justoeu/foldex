@@ -121,6 +121,21 @@ func TestHandler_Validate_TooManyJSONLinks(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "too_many_items")
 }
 
+func TestParseNetscapeUpload_TooManyItems(t *testing.T) {
+	rec := httptest.NewRecorder()
+	_, err := parseNetscapeUpload(rec, strings.NewReader(netscapeLinks(maxImportItems+1)), "netscape")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrTooManyItems)
+	assert.Contains(t, rec.Body.String(), "too_many_items")
+}
+
+func TestParseNetscapeUpload_ParseFailed(t *testing.T) {
+	rec := httptest.NewRecorder()
+	_, err := parseNetscapeUpload(rec, &failingReader{content: strings.NewReader(`<A HREF="https://kept.example">Kept</A>`)}, "netscape")
+	require.Error(t, err)
+	assert.Contains(t, rec.Body.String(), "parse_failed")
+}
+
 func TestHandler_Validate_JSONParseFailed(t *testing.T) {
 	r := mountImporter(t)
 	body, ct := multipartBody(t, map[string]string{"format": "json"}, "file", "b.json", "{not-json")
