@@ -136,6 +136,34 @@ func TestExtractedHelpers_WalkEachTxStep(t *testing.T) {
 	walk(func(tx pgx.Tx) { _ = lockEmailChangeTargetTx(ctx, tx, 1, 1) })
 	sid := int64(1)
 	walk(func(tx pgx.Tx) { _ = requireLiveEmailChangeSessionTx(ctx, tx, &sid) })
+	proof := TOTPProof{Counter: 1, Ciphertext: hash, Nonce: hash[:12]}
+	walk(func(tx pgx.Tx) {
+		_, _ = consumeChallengeProofTx(ctx, tx, Challenge{ID: 1, UserID: 1}, challengeProof{totp: &proof})
+	})
+	walk(func(tx pgx.Tx) {
+		_, _ = consumeChallengeProofTx(ctx, tx, Challenge{ID: 1, UserID: 1}, challengeProof{emailDigest: hash})
+	})
+	walk(func(tx pgx.Tx) {
+		_, _ = consumeChallengeProofTx(ctx, tx, Challenge{ID: 1, UserID: 1}, challengeProof{recoveryDigest: hash})
+	})
+	walk(func(tx pgx.Tx) { _, _ = consumeTOTPProofIfCurrentTx(ctx, tx, 1, proof) })
+	walk(func(tx pgx.Tx) {
+		_ = consumeSecondFactorTx(ctx, tx, 1, SecondFactorProof{Method: MethodTOTP, TOTP: &proof})
+	})
+	walk(func(tx pgx.Tx) {
+		_ = consumeSecondFactorTx(ctx, tx, 1, SecondFactorProof{Method: MethodRecovery, Digest: hash})
+	})
+	walk(func(tx pgx.Tx) {
+		_ = consumeSecondFactorTx(ctx, tx, 1, SecondFactorProof{Method: MethodEmailOTP, Digest: hash})
+	})
+	walk(func(tx pgx.Tx) { _ = consumeSingleUseTx(ctx, tx, "update x", 1) })
+	walk(func(tx pgx.Tx) { _ = disableFactorTx(ctx, tx, 1, 1, 1, disableKindTOTP) })
+	walk(func(tx pgx.Tx) { _ = disableFactorTx(ctx, tx, 1, 1, 1, disableKindEmail) })
+	walk(func(tx pgx.Tx) { _ = guardLastAdminTx(ctx, tx, 1) })
+	issue := sessionIssue{hashes: issuedSessionHashes{access: hash, refresh: hash, csrf: hash}}
+	walk(func(tx pgx.Tx) { _, _ = issueSessionTx(ctx, tx, 1, issue, "127.0.0.1", "ua") })
+	walk(func(tx pgx.Tx) { _, _ = insertSessionTx(ctx, tx, 1, issue, "fam", nil, nil, nil) })
+	walk(func(tx pgx.Tx) { _ = requireLiveSessionTx(ctx, tx, 1, 1) })
 }
 
 func TestChallengeIdentityArgs_NilAndSet(t *testing.T) {

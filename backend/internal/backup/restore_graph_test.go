@@ -94,4 +94,23 @@ func TestRestoreSkipAndDuplicate_FailClosedOnBadTx(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestRestoreStaged_WalkEachTxStep(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	uid := authctx.UserID(1)
+	snap := &Snapshot{
+		Tags:    []TagRow{{ID: 1, Name: "t", Color: "#abc"}},
+		Folders: []FolderRow{{ID: 2, Name: "f"}},
+		Links:   []LinkRow{{ID: 3, URL: "https://ex.test", Title: "L", Slug: "l"}},
+		Notes:   []NoteRow{{ID: 4, Title: "N", Slug: "n", BodyHTML: "<p>x</p>"}},
+	}
+	for n := 1; n <= 16; n++ {
+		_, _, _, _ = restoreSkipStaged(ctx, &seqRestoreTx{failAt: n}, uid, snap)
+		_, _, _, _ = restoreDuplicateStaged(ctx, &seqRestoreTx{failAt: n}, uid, snap)
+		_ = copyRestoreStaging(ctx, &seqRestoreTx{failAt: n}, snap, []string{"a"}, []string{"l"}, []string{"n"})
+		_, _ = insertStagedFolders(ctx, &seqRestoreTx{failAt: n}, uid, newIDMapping())
+		_, _ = loadExistingRestoreLinks(ctx, &seqRestoreTx{failAt: n}, uid, snap.Links)
+	}
+}
+
 func ptrInt64(v int64) *int64 { return &v }
