@@ -248,34 +248,46 @@ func (j *MirrorJob) copyDelta(ctx context.Context, delta []ObjectInfo) (int64, e
 	if len(delta) == 0 {
 		return 0, nil
 	}
-	workers := len(delta)
-	if workers > resourcebudget.BackgroundWorkerConcurrency {
-		workers = resourcebudget.BackgroundWorkerConcurrency
-	}
-
 	copyCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	var firstErr error
+	var bytesCopied atomic.Int64
+	jobs, wg := j.startCopyWorkers(copyCtx, cancel, copyWorkerCount(len(delta)), &firstErr, &bytesCopied)
+	feedCopyJobs(copyCtx, jobs, delta)
+	close(jobs)
+	wg.Wait()
+	if firstErr != nil {
+		return bytesCopied.Load(), firstErr
+	}
+	return bytesCopied.Load(), ctx.Err()
+}
+
+func copyWorkerCount(n int) int {
+	if n > resourcebudget.BackgroundWorkerConcurrency {
+		return resourcebudget.BackgroundWorkerConcurrency
+	}
+	return n
+}
+
+func (j *MirrorJob) startCopyWorkers(ctx context.Context, cancel context.CancelFunc, workers int, firstErr *error, bytesCopied *atomic.Int64) (chan ObjectInfo, *sync.WaitGroup) {
 	jobs := make(chan ObjectInfo)
 	var wg sync.WaitGroup
 	var errOnce sync.Once
-	var firstErr error
-	var bytesCopied atomic.Int64
 	fail := func(err error) {
 		errOnce.Do(func() {
-			firstErr = err
+			*firstErr = err
 			cancel()
 		})
 	}
-
 	wg.Add(workers)
 	for range workers {
 		go func() {
 			defer wg.Done()
 			for o := range jobs {
-				if copyCtx.Err() != nil {
+				if ctx.Err() != nil {
 					return
 				}
-				if err := j.copyOne(copyCtx, o); err != nil {
+				if err := j.copyOne(ctx, o); err != nil {
 					fail(err)
 					return
 				}
@@ -283,21 +295,19 @@ func (j *MirrorJob) copyDelta(ctx context.Context, delta []ObjectInfo) (int64, e
 			}
 		}()
 	}
+	return jobs, &wg
+}
+
+func feedCopyJobs(ctx context.Context, jobs chan<- ObjectInfo, delta []ObjectInfo) {
 	for _, o := range delta {
 		select {
 		case jobs <- o:
-		case <-copyCtx.Done():
+		case <-ctx.Done():
 		}
-		if copyCtx.Err() != nil {
-			break
+		if ctx.Err() != nil {
+			return
 		}
 	}
-	close(jobs)
-	wg.Wait()
-	if firstErr != nil {
-		return bytesCopied.Load(), firstErr
-	}
-	return bytesCopied.Load(), ctx.Err()
 }
 
 func (j *MirrorJob) copyOne(ctx context.Context, o ObjectInfo) error {
