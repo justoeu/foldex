@@ -120,43 +120,50 @@ func NewScreenshotHandler(repo screenshotRepo, sc Screenshotter, st Uploader, ur
 // CaptureAndStore captures a screenshot of the link's URL, optimizes it, saves
 // it to object storage under an operation-owned link key, and publishes that URL.
 func (h *ScreenshotHandler) CaptureAndStore(w http.ResponseWriter, r *http.Request) {
+	id, uid, link, ok := h.admitCapture(w, r)
+	if !ok {
+		return
+	}
+	defer h.releaseCapture(uid)
+	png, opt, ok := h.captureOptimized(w, r, id, link)
+	if !ok {
+		return
+	}
+	h.publishScreenshot(w, r, uid, id, link, png, opt)
+}
+
+func (h *ScreenshotHandler) admitCapture(w http.ResponseWriter, r *http.Request) (int64, authctx.UserID, Link, bool) {
 	id, err := httperr.ParseID(chi.URLParam(r, "id"))
 	if err != nil {
 		httperr.Write(w, err)
-		return
+		return 0, 0, Link{}, false
 	}
-
 	uid := authctx.MustUser(r.Context())
 	if !h.acquireCapture(uid) {
 		w.Header().Set("Retry-After", "5")
 		httperr.Write(w, httperr.New(http.StatusTooManyRequests, "screenshot_busy", "too many screenshot captures in flight"))
-		return
+		return 0, 0, Link{}, false
 	}
-	defer h.releaseCapture(uid)
-
 	link, err := h.repo.Get(r.Context(), uid, id)
 	if err != nil {
+		h.releaseCapture(uid)
 		httperr.Write(w, repositoryHTTPError(err))
-		return
+		return 0, 0, Link{}, false
 	}
-
-	// SSRF gate. Without this, Chromium happily navigates to file://,
-	// 169.254.169.254 (IMDS), 127.0.0.1, RFC1918 hosts, etc., and the
-	// resulting screenshot would be served back to the caller via
-	// /api/files/screenshots/{id} — a read-anywhere primitive.
 	if !isHTTPScheme(link.URL) {
+		h.releaseCapture(uid)
 		h.logger.Warn("screenshot rejected: non-http scheme", "id", id)
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_scheme", "screenshot target must use http or https"))
-		return
+		return 0, 0, Link{}, false
 	}
-	// Nil policy = misconfiguration (handler mounted without the SSRF gate
-	// wired in main.go). Distinct error code so ops can tell apart
-	// "operator forgot to set ScreenshotURL" from "user picked a private URL".
-	// Router boot validation should catch this — guard remains for defense.
+	return id, uid, link, true
+}
+
+func (h *ScreenshotHandler) captureOptimized(w http.ResponseWriter, r *http.Request, id int64, link Link) ([]byte, imageopt.Result, bool) {
 	if h.urlPolicy == nil {
 		h.logger.Error("screenshot rejected: URLPolicy not configured", "id", id)
 		httperr.Write(w, httperr.New(http.StatusInternalServerError, "policy_unconfigured", "screenshot policy is not configured"))
-		return
+		return nil, imageopt.Result{}, false
 	}
 	capCtx, cancel := context.WithTimeout(r.Context(), captureTimeout)
 	defer cancel()
@@ -166,25 +173,25 @@ func (h *ScreenshotHandler) CaptureAndStore(w http.ResponseWriter, r *http.Reque
 	if !allowed {
 		h.logger.Warn("screenshot rejected: non-public target", "id", id)
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "private_target", "screenshot target must resolve to a public address"))
-		return
+		return nil, imageopt.Result{}, false
 	}
 	png, err := h.screenshotter.Capture(capCtx, link.URL)
 	if err != nil {
-		// Chromium errors may contain credential-bearing URLs or local paths;
-		// logs and the wire response therefore use stable classifications.
 		h.logger.Error("screenshot capture failed", "id", id, "reason", screenshotOperationErrorReason(err))
 		httperr.Write(w, httperr.New(http.StatusInternalServerError, "screenshot_failed", "failed to capture screenshot"))
-		return
+		return nil, imageopt.Result{}, false
 	}
-
 	opt, err := imageopt.OptimizeForStore(png)
 	if err != nil {
 		h.logger.Warn("screenshot rejected: optimize failed", "id", id, "err", err)
 		status, code, msg := imageopt.RejectHTTP(err)
 		httperr.Write(w, httperr.New(status, code, msg))
-		return
+		return nil, imageopt.Result{}, false
 	}
+	return png, opt, true
+}
 
+func (h *ScreenshotHandler) publishScreenshot(w http.ResponseWriter, r *http.Request, uid authctx.UserID, id int64, link Link, png []byte, opt imageopt.Result) {
 	storageCtx, storageCancel := context.WithTimeout(r.Context(), captureStorageTimeout)
 	defer storageCancel()
 	stored, err := linkimage.Store(storageCtx, h.storage, "screenshots", id, opt.Ext, opt.Data, opt.ContentType)
@@ -195,12 +202,7 @@ func (h *ScreenshotHandler) CaptureAndStore(w http.ResponseWriter, r *http.Reque
 	}
 	applied, err := h.repo.UpdateOGImageIfUnchanged(storageCtx, uid, id, stored.URL, link.UpdatedAt)
 	if err != nil || !applied {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), captureStorageTimeout)
-		cleanupErr := h.storage.DeleteObject(cleanupCtx, stored.Key)
-		cleanupCancel()
-		if cleanupErr != nil {
-			h.logger.Warn("screenshot orphan cleanup failed", "id", id)
-		}
+		h.cleanupUnpublishedScreenshot(id, stored.Key)
 		if err != nil {
 			h.logger.Error("screenshot database publish failed", "id", id)
 			httperr.Write(w, httperr.New(http.StatusInternalServerError, "publish_failed", "failed to publish screenshot"))
@@ -213,15 +215,21 @@ func (h *ScreenshotHandler) CaptureAndStore(w http.ResponseWriter, r *http.Reque
 		h.logger.Warn("purge legacy screenshot failed", "id", id, "err", purgeErr)
 	}
 	h.deletePreviousLinkImage(storageCtx, link.OGImageURL, stored.Key, id)
-
 	h.logger.Info("screenshot stored",
 		"id", id,
 		"source_bytes", len(png), "stored_bytes", len(opt.Data),
 		"resized", opt.Resized, "reencoded", opt.Reencoded,
 	)
-	httperr.JSON(w, http.StatusOK, map[string]string{
-		"url": stored.URL,
-	})
+	httperr.JSON(w, http.StatusOK, map[string]string{"url": stored.URL})
+}
+
+func (h *ScreenshotHandler) cleanupUnpublishedScreenshot(id int64, key string) {
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), captureStorageTimeout)
+	cleanupErr := h.storage.DeleteObject(cleanupCtx, key)
+	cleanupCancel()
+	if cleanupErr != nil {
+		h.logger.Warn("screenshot orphan cleanup failed", "id", id)
+	}
 }
 
 func (h *ScreenshotHandler) acquireCapture(uid authctx.UserID) bool {
