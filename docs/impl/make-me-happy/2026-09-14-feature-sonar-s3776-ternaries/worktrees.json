@@ -1,0 +1,36 @@
+{
+  "prefix": "mmh",
+  "count": 3,
+  "into": "feature/sonar-s3776-ternaries",
+  "base": "feature/sonar-s3776-ternaries",
+  "head": "8062d8e2e39fae5bcbd969b0c9d6507e3f1783c1",
+  "gitignore_appended": true,
+  "gitignore_path": "/Users/justoeu/Developer/Workspace/foldex/.gitignore",
+  "baseline_green": true,
+  "slices": [
+    {
+      "index": 1,
+      "branch": "mmh/slice-1",
+      "dir": "/Users/justoeu/Developer/Workspace/foldex/.worktrees/mmh-1",
+      "base": "feature/sonar-s3776-ternaries",
+      "head": "8062d8e2e39fae5bcbd969b0c9d6507e3f1783c1",
+      "merged": false
+    },
+    {
+      "index": 2,
+      "branch": "mmh/slice-2",
+      "dir": "/Users/justoeu/Developer/Workspace/foldex/.worktrees/mmh-2",
+      "base": "feature/sonar-s3776-ternaries",
+      "head": "8062d8e2e39fae5bcbd969b0c9d6507e3f1783c1",
+      "merged": false
+    },
+    {
+      "index": 3,
+      "branch": "mmh/slice-3",
+      "dir": "/Users/justoeu/Developer/Workspace/foldex/.worktrees/mmh-3",
+      "base": "feature/sonar-s3776-ternaries",
+      "head": "8062d8e2e39fae5bcbd969b0c9d6507e3f1783c1",
+      "merged": false
+    }
+  ]
+}
