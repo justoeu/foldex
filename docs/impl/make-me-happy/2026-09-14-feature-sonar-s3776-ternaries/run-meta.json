@@ -1,0 +1,15 @@
+{
+  "app": "foldex",
+  "branch": "feature/sonar-s3776-ternaries",
+  "into": "feature/sonar-s3776-ternaries",
+  "head": "ea40a18b2b10d19efe3d22256e7a1bf70a263bec",
+  "kind": "refactor",
+  "loop": "full",
+  "worktree_n": 3,
+  "spec": "docs/SDD-SONAR-S3776-TERNARIES.md",
+  "spec_status": "confirmed",
+  "status": "in_progress",
+  "next_step": "worktrees-add",
+  "prefix": "mmh",
+  "test_cmd": "( cd backend && go vet ./... && go test ./internal/... ) && ( cd web && bun run typecheck && bun run test )"
+}

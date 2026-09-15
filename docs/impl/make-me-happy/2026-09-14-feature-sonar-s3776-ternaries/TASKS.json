@@ -1,0 +1,600 @@
+{
+  "kind": "refactor",
+  "spec": "docs/SDD-SONAR-S3776-TERNARIES.md",
+  "tasks": [
+    {
+      "id": "T-001",
+      "title": "Characterize auth complexity functions before extract",
+      "slice": "backend/internal/auth/** \u2014 lock current HTTP/repo outcomes of the 18 in-scope functions. Production code unchanged.",
+      "worktree": 1,
+      "status": "OPEN",
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": true,
+      "depends_on": [],
+      "red_test": "backend/internal/auth/s3776_charter_test.go \u2014 table of success+error paths that already hold today. Must pass on current code."
+    },
+    {
+      "id": "T-002",
+      "title": "Extract CompleteEmailFactorEnrollment + ConfirmEmailFactor to \u226415",
+      "slice": "backend/internal/auth/repository_email_factor.go, email_factor_handler.go",
+      "worktree": 1,
+      "status": "OPEN",
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": false,
+      "depends_on": [
+        "T-001"
+      ],
+      "red_test": "backend/internal/auth/gocognit_test.go CompleteEmailFactorEnrollment (25) and ConfirmEmailFactor (17) \u226415."
+    },
+    {
+      "id": "T-003",
+      "title": "Extract tryStepUpProof + ConfirmTOTP to \u226415",
+      "slice": "backend/internal/auth/twofa_handler.go",
+      "worktree": 1,
+      "status": "OPEN",
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": false,
+      "depends_on": [
+        "T-001"
+      ],
+      "red_test": "gocognit_test.go tryStepUpProof (23) and ConfirmTOTP (22) \u226415."
+    },
+    {
+      "id": "T-004",
+      "title": "Extract CompleteTOTPEnrollment + CreateChallenge* to \u226415",
+      "slice": "backend/internal/auth/repository_2fa.go",
+      "worktree": 1,
+      "status": "OPEN",
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": false,
+      "depends_on": [
+        "T-001"
+      ],
+      "red_test": "gocognit_test.go CompleteTOTPEnrollment (22), CreateChallengeEmailOTP (19), CreateChallenge (17) \u226415."
+    },
+    {
+      "id": "T-005",
+      "title": "Extract UpdateUser + SetPassword + acceptInvite to \u226415",
+      "slice": "backend/internal/auth/repository.go",
+      "worktree": 1,
+      "status": "OPEN",
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": false,
+      "depends_on": [
+        "T-001"
+      ],
+      "red_test": "gocognit_test.go UpdateUser (23), SetPassword (19), acceptInvite (17) \u226415."
+    },
+    {
+      "id": "T-006",
+      "title": "Extract rotateOnce + handleConsumed to \u226415",
+      "slice": "backend/internal/auth/rotate.go",
+      "worktree": 1,
+      "status": "OPEN",
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": false,
+      "depends_on": [
+        "T-001"
+      ],
+      "red_test": "gocognit_test.go rotateOnce (17) and handleConsumed (20) \u226415."
+    },
+    {
+      "id": "T-007",
+      "title": "Extract AuditStatsSince + ExportAudit to \u226415",
+      "slice": "backend/internal/auth/audit_stats.go, audit_handler.go",
+      "worktree": 1,
+      "status": "OPEN",
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": false,
+      "depends_on": [
+        "T-001"
+      ],
+      "red_test": "gocognit_test.go AuditStatsSince (23) and ExportAudit (17) \u226415."
+    },
+    {
+      "id": "T-008",
+      "title": "Extract ConvertToProvider to \u226415",
+      "slice": "backend/internal/auth/repository_oauth.go",
+      "worktree": 1,
+      "status": "OPEN",
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": false,
+      "depends_on": [
+        "T-001"
+      ],
+      "red_test": "gocognit_test.go ConvertToProvider (18) \u226415."
+    },
+    {
+      "id": "T-009",
+      "title": "Extract ConsumeEmailChange to \u226415",
+      "slice": "backend/internal/auth/repository_email_change.go",
+      "worktree": 1,
+      "status": "OPEN",
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": false,
+      "depends_on": [
+        "T-001"
+      ],
+      "red_test": "gocognit_test.go ConsumeEmailChange (18) \u226415."
+    },
+    {
+      "id": "T-010",
+      "title": "Extract AdminHandler.UpdateUser to \u226415",
+      "slice": "backend/internal/auth/admin_handler.go",
+      "worktree": 1,
+      "status": "OPEN",
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": false,
+      "depends_on": [
+        "T-001"
+      ],
+      "red_test": "gocognit_test.go AdminHandler.UpdateUser (18) \u226415."
+    },
+    {
+      "id": "T-011",
+      "title": "Extract Handler.Login to \u226415",
+      "slice": "backend/internal/auth/handler.go",
+      "worktree": 1,
+      "status": "OPEN",
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": false,
+      "depends_on": [
+        "T-001"
+      ],
+      "red_test": "gocognit_test.go Login (16) \u226415."
+    },
+    {
+      "id": "T-101",
+      "title": "Characterize backup/folders complexity functions before extract",
+      "slice": "backend/internal/{backup,backupagent,backupjobs,backupstatus,folders} \u2014 lock current outcomes. Production unchanged.",
+      "worktree": 2,
+      "status": "OPEN",
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": true,
+      "depends_on": [],
+      "red_test": "s3776_charter_test.go in backup/backupagent/backupjobs/backupstatus/folders. Must pass on current code."
+    },
+    {
+      "id": "T-102",
+      "title": "Extract folders List, Update, deleteCascade, UpdateInput.Validate to \u226415",
+      "slice": "backend/internal/folders/repository.go, dto.go",
+      "worktree": 2,
+      "status": "OPEN",
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": false,
+      "depends_on": [
+        "T-101"
+      ],
+      "red_test": "folders/gocognit_test.go List(23)/Update(21)/deleteCascade(19)/Validate(16) \u226415."
+    },
+    {
+      "id": "T-103",
+      "title": "Extract ValidateJobConfig to \u226415",
+      "slice": "backend/internal/backupjobs/schedule.go",
+      "worktree": 2,
+      "status": "OPEN",
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": false,
+      "depends_on": [
+        "T-101"
+      ],
+      "red_test": "backupjobs/gocognit_test.go ValidateJobConfig (22) \u226415."
+    },
+    {
+      "id": "T-104",
+      "title": "Extract backupstatus Handler.Download to \u226415",
+      "slice": "backend/internal/backupstatus/download_handler.go",
+      "worktree": 2,
+      "status": "OPEN",
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": false,
+      "depends_on": [
+        "T-101"
+      ],
+      "red_test": "backupstatus/gocognit_test.go Download (18) \u226415."
+    },
+    {
+      "id": "T-105",
+      "title": "Extract Service.Export + inspectArchive to \u226415",
+      "slice": "backend/internal/backup/service.go, archive.go",
+      "worktree": 2,
+      "status": "OPEN",
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": false,
+      "depends_on": [
+        "T-101"
+      ],
+      "red_test": "backup/gocognit_test.go Export (22) and inspectArchive (20) \u226415."
+    },
+    {
+      "id": "T-106",
+      "title": "Extract loadRestoreLedger + validateManifestIntegrity to \u226415",
+      "slice": "backend/internal/backup/restore_ledger.go, restore_preflight.go",
+      "worktree": 2,
+      "status": "OPEN",
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": false,
+      "depends_on": [
+        "T-101"
+      ],
+      "red_test": "backup/gocognit_test.go loadRestoreLedger (22) and validateManifestIntegrity (16) \u226415."
+    },
+    {
+      "id": "T-107",
+      "title": "Extract restoreDuplicateStaged + copyRestoreStaging to \u226415",
+      "slice": "backend/internal/backup/db_restore_staged.go",
+      "worktree": 2,
+      "status": "OPEN",
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": false,
+      "depends_on": [
+        "T-101"
+      ],
+      "red_test": "backup/gocognit_test.go restoreDuplicateStaged (16) and copyRestoreStaging (19) \u226415."
+    },
+    {
+      "id": "T-108",
+      "title": "Extract spoolNoteMedia + attachPolymorphicTags + copyPolymorphicClicks to \u226415",
+      "slice": "backend/internal/backup/restore_helpers.go",
+      "worktree": 2,
+      "status": "OPEN",
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": false,
+      "depends_on": [
+        "T-101"
+      ],
+      "red_test": "backup/gocognit_test.go spoolNoteMedia (16), attachPolymorphicTags (19), copyPolymorphicClicks (19) \u226415."
+    },
+    {
+      "id": "T-109",
+      "title": "Extract DrillJob.Run + DumpJob.Run + UserZipJob.Run to \u226415",
+      "slice": "backend/internal/backupagent/drill.go, dump.go, userzip.go",
+      "worktree": 2,
+      "status": "OPEN",
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": false,
+      "depends_on": [
+        "T-101"
+      ],
+      "red_test": "backupagent/gocognit_test.go DrillJob.Run (24), DumpJob.Run (21), UserZipJob.Run (21) \u226415."
+    },
+    {
+      "id": "T-110",
+      "title": "Extract MirrorJob.copyDelta to \u226415",
+      "slice": "backend/internal/backupagent/mirror.go",
+      "worktree": 2,
+      "status": "OPEN",
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": false,
+      "depends_on": [
+        "T-101"
+      ],
+      "red_test": "backupagent/gocognit_test.go copyDelta (20) \u226415."
+    },
+    {
+      "id": "T-111",
+      "title": "Extract scheduleLoop + execute + computeTimings to \u226415",
+      "slice": "backend/internal/backupagent/agent.go",
+      "worktree": 2,
+      "status": "OPEN",
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": false,
+      "depends_on": [
+        "T-101"
+      ],
+      "red_test": "backupagent/gocognit_test.go scheduleLoop (21), execute (19), computeTimings (17) \u226415."
+    },
+    {
+      "id": "T-112",
+      "title": "Extract GFSPolicy.keep to \u226415",
+      "slice": "backend/internal/backupagent/retention.go",
+      "worktree": 2,
+      "status": "OPEN",
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": false,
+      "depends_on": [
+        "T-101"
+      ],
+      "red_test": "backupagent/gocognit_test.go GFSPolicy.keep (18) \u226415."
+    },
+    {
+      "id": "T-201",
+      "title": "Characterize remaining Go complexity functions before extract",
+      "slice": "backend/internal remaining packages \u2014 lock current outcomes. Production unchanged.",
+      "worktree": 3,
+      "status": "OPEN",
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": true,
+      "depends_on": [],
+      "red_test": "s3776_charter_test.go in screenshot, preview, mailer, changecheck, mailoutbox, importer, push, pkg/keyfile, tags, roleperm, policy, links, depstatus. Must pass on current code."
+    },
+    {
+      "id": "T-202",
+      "title": "Characterize production nested-ternary copy/state before flatten",
+      "slice": "web/src production files with nested ternaries \u2014 lock visible copy, tone, role, icons. Production unchanged.",
+      "worktree": 3,
+      "status": "OPEN",
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": true,
+      "depends_on": [],
+      "red_test": "web/src/s3358.charter.test.tsx \u2014 one assertion per arm, passing today."
+    },
+    {
+      "id": "T-203",
+      "title": "Extract acquireBrowser + Pool.Close to \u226415",
+      "slice": "backend/internal/screenshot/pool.go",
+      "worktree": 3,
+      "status": "OPEN",
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": false,
+      "depends_on": [
+        "T-201"
+      ],
+      "red_test": "screenshot/gocognit_test.go acquireBrowser (24) and Close (16) \u226415."
+    },
+    {
+      "id": "T-204",
+      "title": "Extract preview Worker.process + Fetch + parseHead to \u226415",
+      "slice": "backend/internal/preview/worker.go, fetcher.go",
+      "worktree": 3,
+      "status": "OPEN",
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": false,
+      "depends_on": [
+        "T-201"
+      ],
+      "red_test": "preview/gocognit_test.go process (24), Fetch (16), parseHead (16) \u226415."
+    },
+    {
+      "id": "T-205",
+      "title": "Extract smtpMailer.Send + loadAssets + assets.render to \u226415",
+      "slice": "backend/internal/mailer/mailer.go, render.go",
+      "worktree": 3,
+      "status": "OPEN",
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": false,
+      "depends_on": [
+        "T-201"
+      ],
+      "red_test": "mailer/gocognit_test.go Send (23), loadAssets (22), render (17) \u226415."
+    },
+    {
+      "id": "T-206",
+      "title": "Extract extractMainContent + extractFeedURL + pushLoop to \u226415",
+      "slice": "backend/internal/changecheck/fingerprint.go, worker.go",
+      "worktree": 3,
+      "status": "OPEN",
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": false,
+      "depends_on": [
+        "T-201"
+      ],
+      "red_test": "changecheck/gocognit_test.go extractMainContent (21), extractFeedURL (19), pushLoop (16) \u226415."
+    },
+    {
+      "id": "T-207",
+      "title": "Extract Relay.drain + Ping to \u226415",
+      "slice": "backend/internal/mailoutbox/relay.go, sink_amqp.go",
+      "worktree": 3,
+      "status": "OPEN",
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": false,
+      "depends_on": [
+        "T-201"
+      ],
+      "red_test": "mailoutbox/gocognit_test.go drain (19) and Ping (16) \u226415."
+    },
+    {
+      "id": "T-208",
+      "title": "Extract JSONFile.validateLinks + Handler.parseUpload to \u226415",
+      "slice": "backend/internal/importer/json.go, handler.go",
+      "worktree": 3,
+      "status": "OPEN",
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": false,
+      "depends_on": [
+        "T-201"
+      ],
+      "red_test": "importer/gocognit_test.go validateLinks (19) and parseUpload (16) \u226415."
+    },
+    {
+      "id": "T-209",
+      "title": "Extract push.LoadOrGenerate to \u226415",
+      "slice": "backend/internal/push/vapid.go",
+      "worktree": 3,
+      "status": "OPEN",
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": false,
+      "depends_on": [
+        "T-201"
+      ],
+      "red_test": "push/gocognit_test.go LoadOrGenerate (18) \u226415."
+    },
+    {
+      "id": "T-210",
+      "title": "Extract keyfile.Load to \u226415",
+      "slice": "backend/internal/pkg/keyfile/keyfile.go",
+      "worktree": 3,
+      "status": "OPEN",
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": false,
+      "depends_on": [
+        "T-201"
+      ],
+      "red_test": "pkg/keyfile/gocognit_test.go Load (18) \u226415."
+    },
+    {
+      "id": "T-211",
+      "title": "Extract SetEntityTagsWithPending to \u226415",
+      "slice": "backend/internal/tags/entity_tags.go",
+      "worktree": 3,
+      "status": "OPEN",
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": false,
+      "depends_on": [
+        "T-201"
+      ],
+      "red_test": "tags/gocognit_test.go SetEntityTagsWithPending (17) \u226415."
+    },
+    {
+      "id": "T-212",
+      "title": "Extract roleperm.Resolve to \u226415",
+      "slice": "backend/internal/roleperm/roleperm.go",
+      "worktree": 3,
+      "status": "OPEN",
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": false,
+      "depends_on": [
+        "T-201"
+      ],
+      "red_test": "roleperm/gocognit_test.go Resolve (17) \u226415."
+    },
+    {
+      "id": "T-213",
+      "title": "Extract Policy.Validate to \u226415",
+      "slice": "backend/internal/policy/policy.go",
+      "worktree": 3,
+      "status": "OPEN",
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": false,
+      "depends_on": [
+        "T-201"
+      ],
+      "red_test": "policy/gocognit_test.go Validate (16) \u226415."
+    },
+    {
+      "id": "T-214",
+      "title": "Extract ScreenshotHandler.CaptureAndStore to \u226415",
+      "slice": "backend/internal/links/screenshot_handler.go",
+      "worktree": 3,
+      "status": "OPEN",
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": false,
+      "depends_on": [
+        "T-201"
+      ],
+      "red_test": "links/gocognit_test.go CaptureAndStore (16) \u226415."
+    },
+    {
+      "id": "T-215",
+      "title": "Extract Checker.refresh to \u226415",
+      "slice": "backend/internal/depstatus/status.go",
+      "worktree": 3,
+      "status": "OPEN",
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": false,
+      "depends_on": [
+        "T-201"
+      ],
+      "red_test": "depstatus/gocognit_test.go refresh (16) \u226415."
+    },
+    {
+      "id": "T-216",
+      "title": "Flatten account nested ternaries",
+      "slice": "web/src/components/AvailabilityHint.tsx, account/{UsernameRow,EmailRow,SectionCard}.tsx, hooks/useAvailability.ts",
+      "worktree": 3,
+      "status": "OPEN",
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": false,
+      "depends_on": [
+        "T-202"
+      ],
+      "red_test": "web/src/s3358.contracts.test.ts nested-ternary regex on those files must fail today and pass after flatten."
+    },
+    {
+      "id": "T-217",
+      "title": "Flatten folder nested ternaries",
+      "slice": "web/src/components/FolderDialog.tsx, FolderPicker.tsx, FolderCard.tsx",
+      "worktree": 3,
+      "status": "OPEN",
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": false,
+      "depends_on": [
+        "T-202"
+      ],
+      "red_test": "s3358.contracts.test.ts on FolderDialog/FolderPicker/FolderCard."
+    },
+    {
+      "id": "T-218",
+      "title": "Flatten backup nested ternaries",
+      "slice": "web/src/components/ConflictModePicker.tsx, BackupRestoreDialog.tsx, admin/BackupSection.tsx, admin/BackupScheduleEditor.tsx",
+      "worktree": 3,
+      "status": "OPEN",
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": false,
+      "depends_on": [
+        "T-202"
+      ],
+      "red_test": "s3358.contracts.test.ts on those backup UI files."
+    },
+    {
+      "id": "T-219",
+      "title": "Flatten audit + stats nested ternaries",
+      "slice": "web/src/components/admin/AuditSignals.tsx, pages/StatsPage.tsx",
+      "worktree": 3,
+      "status": "OPEN",
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": false,
+      "depends_on": [
+        "T-202"
+      ],
+      "red_test": "s3358.contracts.test.ts on AuditSignals and StatsPage."
+    },
+    {
+      "id": "T-220",
+      "title": "Flatten remaining dialog + SW nested ternaries",
+      "slice": "web/src/components/LinkDialog.tsx, ImportPreviewDialog.tsx, sw.ts plus production-wide empty scan",
+      "worktree": 3,
+      "status": "OPEN",
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": false,
+      "depends_on": [
+        "T-202"
+      ],
+      "red_test": "s3358.contracts.test.ts on LinkDialog/ImportPreviewDialog/sw.ts and a production-wide empty nested-ternary scan."
+    }
+  ]
+}
