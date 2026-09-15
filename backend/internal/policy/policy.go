@@ -155,6 +155,23 @@ func (p Policy) WithDefaults() Policy {
 // has learned the floor, while one whose 4 is quietly stored as 8 believes the
 // instance is configured a way it is not.
 func (p Policy) Validate() error {
+	if err := p.validateNumericBounds(); err != nil {
+		return err
+	}
+	if err := p.validateGoogle(); err != nil {
+		return err
+	}
+	// Rejected on WRITE, resolved leniently on READ. A value this binary does
+	// not know must never be stored, but one already in the document — written
+	// by a newer binary, or by hand — must not be read as "totp_only" and lock
+	// every administrator out of the screen that would fix it.
+	if p.AdminSecondFactor != AdminFactorAny && p.AdminSecondFactor != AdminFactorTOTPOnly {
+		return fmt.Errorf("admin_second_factor must be %q or %q", AdminFactorAny, AdminFactorTOTPOnly)
+	}
+	return nil
+}
+
+func (p Policy) validateNumericBounds() error {
 	if p.PasswordMinLength < MinPasswordFloor || p.PasswordMinLength > maxStoredPasswordFloor {
 		return fmt.Errorf("password_min_length must be between %d and %d",
 			MinPasswordFloor, maxStoredPasswordFloor)
@@ -167,6 +184,10 @@ func (p Policy) Validate() error {
 		return fmt.Errorf("otp_cooldown_seconds must be between %d and %d",
 			MinOTPCooldownSecs, MaxOTPCooldownSecs)
 	}
+	return nil
+}
+
+func (p Policy) validateGoogle() error {
 	if len(p.GoogleAllowedDomains) > MaxAllowedDomains {
 		return fmt.Errorf("at most %d allowed domains", MaxAllowedDomains)
 	}
@@ -180,13 +201,6 @@ func (p Policy) Validate() error {
 	}
 	if p.GoogleDefaultRole != authctx.RoleEditor && p.GoogleDefaultRole != authctx.RoleViewer {
 		return fmt.Errorf("google_default_role must be editor or viewer")
-	}
-	// Rejected on WRITE, resolved leniently on READ. A value this binary does
-	// not know must never be stored, but one already in the document — written
-	// by a newer binary, or by hand — must not be read as "totp_only" and lock
-	// every administrator out of the screen that would fix it.
-	if p.AdminSecondFactor != AdminFactorAny && p.AdminSecondFactor != AdminFactorTOTPOnly {
-		return fmt.Errorf("admin_second_factor must be %q or %q", AdminFactorAny, AdminFactorTOTPOnly)
 	}
 	return nil
 }
