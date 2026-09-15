@@ -63,55 +63,7 @@ func TestS3776_InspectArchiveAcceptsBoundedAndRefusesHostile(t *testing.T) {
 // Skip and duplicate restore used to copy INSERT statements. One helper each
 // is the lock; a second literal is a drift waiting to happen after extract.
 func TestS3776_RestoreModesShareFolderAndNoteInsertSQL(t *testing.T) {
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "db_restore_staged.go", nil, 0)
-	require.NoError(t, err)
-
-	folderSQL, noteSQL := 0, 0
-	calls := map[string]map[string]int{
-		"restoreSkipStaged":      {},
-		"restoreDuplicateStaged": {},
-		"insertDuplicateRestore": {},
-	}
-	ast.Inspect(file, func(n ast.Node) bool {
-		switch n := n.(type) {
-		case *ast.BasicLit:
-			if n.Kind != token.STRING {
-				return true
-			}
-			s, err := strconv.Unquote(n.Value)
-			if err != nil {
-				return true
-			}
-			if strings.Contains(s, "INSERT INTO folder") {
-				folderSQL++
-			}
-			if strings.Contains(s, "INSERT INTO note") {
-				noteSQL++
-			}
-		case *ast.FuncDecl:
-			if n.Body == nil {
-				return true
-			}
-			if _, watched := calls[n.Name.Name]; !watched {
-				return true
-			}
-			ast.Inspect(n.Body, func(inner ast.Node) bool {
-				call, ok := inner.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-				id, ok := call.Fun.(*ast.Ident)
-				if !ok {
-					return true
-				}
-				calls[n.Name.Name][id.Name]++
-				return true
-			})
-		}
-		return true
-	})
-
+	folderSQL, noteSQL, calls := restoreInsertSQLCharter(t)
 	require.Equal(t, 1, folderSQL, "one INSERT INTO folder helper — skip and duplicate must share it")
 	require.Equal(t, 1, noteSQL, "one INSERT INTO note helper — skip and duplicate must share it")
 	require.Greater(t, calls["restoreSkipStaged"]["insertStagedFolders"], 0, "restoreSkipStaged must call insertStagedFolders")
@@ -119,4 +71,61 @@ func TestS3776_RestoreModesShareFolderAndNoteInsertSQL(t *testing.T) {
 	require.Greater(t, calls["insertDuplicateRestore"]["insertStagedFolders"], 0, "insertDuplicateRestore must call insertStagedFolders")
 	require.Greater(t, calls["insertDuplicateRestore"]["insertStagedNotes"], 0, "insertDuplicateRestore must call insertStagedNotes")
 	require.Greater(t, calls["restoreDuplicateStaged"]["insertDuplicateRestore"], 0, "restoreDuplicateStaged must call insertDuplicateRestore")
+}
+
+func restoreInsertSQLCharter(t *testing.T) (folderSQL, noteSQL int, calls map[string]map[string]int) {
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "db_restore_staged.go", nil, 0)
+	require.NoError(t, err)
+	calls = map[string]map[string]int{
+		"restoreSkipStaged":      {},
+		"restoreDuplicateStaged": {},
+		"insertDuplicateRestore": {},
+	}
+	ast.Inspect(file, func(n ast.Node) bool {
+		countRestoreInsertLit(n, &folderSQL, &noteSQL)
+		countRestoreHelperCalls(n, calls)
+		return true
+	})
+	return folderSQL, noteSQL, calls
+}
+
+func countRestoreInsertLit(n ast.Node, folderSQL, noteSQL *int) {
+	lit, ok := n.(*ast.BasicLit)
+	if !ok || lit.Kind != token.STRING {
+		return
+	}
+	s, err := strconv.Unquote(lit.Value)
+	if err != nil {
+		return
+	}
+	if strings.Contains(s, "INSERT INTO folder") {
+		*folderSQL++
+	}
+	if strings.Contains(s, "INSERT INTO note") {
+		*noteSQL++
+	}
+}
+
+func countRestoreHelperCalls(n ast.Node, calls map[string]map[string]int) {
+	fn, ok := n.(*ast.FuncDecl)
+	if !ok || fn.Body == nil {
+		return
+	}
+	if _, watched := calls[fn.Name.Name]; !watched {
+		return
+	}
+	ast.Inspect(fn.Body, func(inner ast.Node) bool {
+		call, ok := inner.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		id, ok := call.Fun.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		calls[fn.Name.Name][id.Name]++
+		return true
+	})
 }
