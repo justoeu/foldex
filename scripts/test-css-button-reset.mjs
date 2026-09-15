@@ -96,6 +96,8 @@ const GUARDED = [
   'fx-chip-close',
   'fx-overlay-backdrop',
   'fx-drawer-backdrop',
+  'fx-backup-dropzone',
+  'fx-import-dropzone',
 ]
 
 const css = FILES.map((f) => readFileSync(join(STYLES, f), 'utf8')).join('\n').replace(

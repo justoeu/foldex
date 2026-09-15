@@ -1912,9 +1912,24 @@ button.fx-btn-danger:hover:not(:disabled) {
   .fx-importpage-grid { grid-template-columns: 1fr; }
 }
 
-.fx-backup-dropzone-drag {
-  border-color: var(--fx-accent) !important;
-  background: rgba(99, 102, 241, 0.06) !important;
+button.fx-backup-dropzone,
+button.fx-import-dropzone {
+  display: block;
+  width: 100%;
+  font: inherit;
+  color: inherit;
+  text-align: center;
+  cursor: pointer;
+  border: 1.5px dashed var(--fx-border);
+  border-radius: 12px;
+  background: var(--fx-surface);
+  padding: 22px;
+}
+button.fx-import-dropzone { padding: 28px; }
+button.fx-backup-dropzone-drag,
+button.fx-import-dropzone.fx-backup-dropzone-drag {
+  border-color: var(--fx-accent);
+  background: rgba(99, 102, 241, 0.06);
 }
 .fx-backup-history-row {
   background: var(--fx-surface);

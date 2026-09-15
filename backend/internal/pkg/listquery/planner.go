@@ -14,6 +14,7 @@ const (
 	noteKind     entityKind = "note"
 	colTitle                = ".title"
 	orderDescSep            = " DESC, "
+	sqlCoalesce             = "COALESCE("
 )
 
 type Entity struct {
@@ -36,7 +37,7 @@ func LinkEntity(unlockedFolder string) Entity {
 	const alias = "l"
 	return Entity{
 		alias: alias, kind: linkKind,
-		search:         []string{alias + colTitle, alias + ".url", "COALESCE(" + alias + ".description,'')"},
+		search:         []string{alias + colTitle, alias + ".url", sqlCoalesce + alias + ".description,'')"},
 		unlockedFolder: unlockedFolder,
 	}
 }
@@ -62,7 +63,7 @@ func tableOrder(entityAlias string) OrderColumns {
 	const clickAlias = "cl"
 	return OrderColumns{
 		pinned: entityAlias + ".pinned", createdAt: entityAlias + ".created_at",
-		clickCount: "COALESCE(" + clickAlias + ".cnt, 0)", lastClickedAt: clickAlias + ".last_at",
+		clickCount: sqlCoalesce + clickAlias + ".cnt, 0)", lastClickedAt: clickAlias + ".last_at",
 		title: entityAlias + colTitle, stable: entityAlias + ".id ASC",
 	}
 }
@@ -141,7 +142,7 @@ func (p *Planner) AddPage(columns OrderColumns) Page {
 		order = columns.pinned + orderDescSep + columns.clickCount + orderDescSep + columns.createdAt + " DESC"
 		clickRanking = true
 	case "recent":
-		order = columns.pinned + orderDescSep + "COALESCE(" + columns.lastClickedAt + ", " + columns.createdAt + ") DESC"
+		order = columns.pinned + orderDescSep + sqlCoalesce + columns.lastClickedAt + ", " + columns.createdAt + ") DESC"
 		clickRanking = true
 	case "alpha":
 		order = columns.pinned + orderDescSep + "lower(" + columns.title + ") ASC, " + columns.createdAt + " DESC"
