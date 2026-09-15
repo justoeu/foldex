@@ -225,7 +225,7 @@ async function navigateBackupDownload(): Promise<BackupHistoryEntry> {
   a.referrerPolicy = 'no-referrer'
   document.body.appendChild(a)
   a.click()
-  document.body.removeChild(a)
+  a.remove()
 
   const deadline = performance.now() + BACKUP_REQUEST_TIMEOUT_MS
   let pollDelay = DOWNLOAD_STATUS_INITIAL_POLL_MS
@@ -367,7 +367,7 @@ function createdAtFromHeaders(headers: HeaderSource | undefined): string | null 
   const filename = headerGet(headers, 'x-foldex-backup-filename')
   if (!filename) return null
   // foldex-backup-20060102T150405Z.zip
-  const m = filename.match(/foldex-backup-(\d{8}T\d{6}Z)\.zip$/i)
+  const m = /foldex-backup-(\d{8}T\d{6}Z)\.zip$/i.exec(filename)
   if (!m) return null
   const raw = m[1]!
   // 20060102T150405Z → 2006-01-02T15:04:05Z

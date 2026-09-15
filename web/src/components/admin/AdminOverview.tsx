@@ -107,7 +107,7 @@ export function AdminOverview({ onOpen }: Props) {
             {attention.slice(0, 5).map((e) => (
               <div className={'fx-attn-item ' + attentionTone(e.action)} key={e.id}>
                 <div style={{ minWidth: 0 }}>
-                  <div className="fx-attn-title">{t(`admin.action_${e.action.replace(/\./g, '_')}`, e.action)}</div>
+                  <div className="fx-attn-title">{t(`admin.action_${e.action.replaceAll('.', '_')}`, e.action)}</div>
                   <div className="fx-attn-desc">
                     {[e.target_email, e.actor_email && t('admin.by_actor', { email: e.actor_email })]
                       .filter(Boolean)

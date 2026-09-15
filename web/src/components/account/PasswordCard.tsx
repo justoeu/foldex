@@ -268,7 +268,7 @@ function FormActions({
   return (
     <>
       <div className="fx-sec-actions">
-        <button className="fx-btn fx-btn-primary" disabled={blocked} onClick={() => void onSubmit()}>
+        <button className="fx-btn fx-btn-primary" disabled={blocked} onClick={() => { onSubmit() }}>
           {t('account.save_password')}
         </button>
         <button className="fx-btn" onClick={onCancel}>

@@ -338,8 +338,8 @@ const buildRoutes = (): Record<Method, Route[]> => ({
 // ────────────────────────────────────────────────────────────────────────────
 // Backup schedule mock handlers (ADR-44).
 
-const SCHEDULE_JOBS = ['dump', 'drill', 'mirror', 'user_zip']
-const WEEKDAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']
+const SCHEDULE_JOBS = new Set(['dump', 'drill', 'mirror', 'user_zip'])
+const WEEKDAYS = new Set(['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'])
 
 /**
  * The compiled floors, in the server's own numbers — the same ones GET
@@ -363,7 +363,7 @@ const SCHEDULE_BOUNDS = {
 const AGENT_SCHEMA_VERSION = 43
 
 /** Only user_zip may be switched off — the other three are the instance's floor. */
-const MAY_DISABLE = ['user_zip']
+const MAY_DISABLE = new Set(['user_zip'])
 
 // ────────────────────────────────────────────────────────────────────────────
 // Limits and abuse (SDD-ABUSE-DEFENSE).
@@ -510,7 +510,7 @@ function parseAnchor(raw: string): { key: string; weekly: boolean } {
   // same anchor and the repeat check catches them.
   const key = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
   if (fields.length === 1) return { key, weekly: false }
-  if (!WEEKDAYS.includes(fields[1].toLowerCase())) {
+  if (!WEEKDAYS.has(fields[1].toLowerCase())) {
     throw new Error(`${q(fields[1])} is not a weekday (sun..sat)`)
   }
   return { key, weekly: true }
@@ -551,7 +551,7 @@ function validateWeekdays(job: string, days: any, minDays: number) {
   const seen = new Set<string>()
   for (const raw of list) {
     const wd = String(raw).trim().toLowerCase()
-    if (!WEEKDAYS.includes(wd)) throw invalidSchedule(`${job} weekday ${q(raw)} is not one of sun..sat`)
+    if (!WEEKDAYS.has(wd)) throw invalidSchedule(`${job} weekday ${q(raw)} is not one of sun..sat`)
     if (seen.has(wd)) throw invalidSchedule(`${job} weekday ${q(raw)} repeats`)
     seen.add(wd)
   }
@@ -578,7 +578,7 @@ function validateScheduleConfig(job: string, cfg: any) {
   if (cfg?.mode !== 'times' && cfg?.mode !== 'interval') {
     throw invalidSchedule(`${job} needs "mode": "times" or "interval"`)
   }
-  if (cfg?.enabled !== undefined && !MAY_DISABLE.includes(job)) {
+  if (cfg?.enabled !== undefined && !MAY_DISABLE.has(job)) {
     throw invalidSchedule(`${job} cannot be switched off — only user_zip carries "enabled", because it is the one job that is a product convenience rather than the instance's protection`)
   }
   if (cfg?.enabled === false) {
@@ -613,7 +613,7 @@ function validateScheduleConfig(job: string, cfg: any) {
 
 function putBackupSchedule(m: RegExpMatchArray, data: any, _p: URLSearchParams, s: MockState) {
   const job = m[1]
-  if (!SCHEDULE_JOBS.includes(job)) throw invalidJob()
+  if (!SCHEDULE_JOBS.has(job)) throw invalidJob()
   validateScheduleConfig(job, data)
   ;(s.backupSchedulePuts ??= []).push({ job, config: data })
   ;(s.backupScheduleRows ??= {})[job] = {
@@ -627,7 +627,7 @@ function putBackupSchedule(m: RegExpMatchArray, data: any, _p: URLSearchParams, 
 
 function deleteBackupSchedule(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockState) {
   const job = m[1]
-  if (!SCHEDULE_JOBS.includes(job)) throw invalidJob()
+  if (!SCHEDULE_JOBS.has(job)) throw invalidJob()
   ;(s.backupScheduleDeletes ??= []).push(job)
   if (s.backupScheduleRows) delete s.backupScheduleRows[job]
   return null
@@ -708,13 +708,13 @@ export function installAxiosMock(state: MockState) {
       }
       const headers = config.headers ?? {}
       for (const route of routes[method]) {
-        const m = path.match(route.url)
+        const m = route.url.exec(path)
         if (m) {
           try {
             const out = route.handle(m, data, params, state, headers)
             return { data: out }
           } catch (e: any) {
-            return Promise.reject(e)
+            throw e
           }
         }
       }
@@ -1049,10 +1049,7 @@ function deleteTag(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockSta
 // Tests don't need accent-folding, just the basic shape. Empty result falls
 // back to "link-{id}" the way the real backfill does.
 function slugifyForMock(s: string): string {
-  return s
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '') || 'link-untitled'
+  return hyphenateAscii(s.toLowerCase()) || 'link-untitled'
 }
 
 function createLink(_m: RegExpMatchArray, data: any, _p: URLSearchParams, s: MockState): Link {
@@ -1214,22 +1211,38 @@ function deleteLink(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockSt
 // backend's htmlsanitize.PlainText behavior faithfully rather than take a
 // shortcut a scanner would flag.
 function stripTagsForMock(html: string): string {
-  let prev: string
-  let out = html
-  do {
-    prev = out
-    out = out.replace(/<[^>]*>/g, '')
-  } while (out !== prev)
+  let out = ''
+  let i = 0
+  while (i < html.length) {
+    if (html[i] === '<') {
+      const end = html.indexOf('>', i + 1)
+      if (end < 0) break
+      i = end + 1
+      continue
+    }
+    out += html[i]
+    i++
+  }
+  return out
+}
+
+function hyphenateAscii(value: string): string {
+  let out = ''
+  let pending = false
+  for (const ch of value) {
+    if ((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9')) {
+      if (pending && out.length > 0) out += '-'
+      out += ch
+      pending = false
+    } else {
+      pending = true
+    }
+  }
   return out
 }
 
 function slugifyForMockNote(s: string): string {
-  return (
-    s
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '') || 'note-untitled'
-  )
+  return hyphenateAscii(s.toLowerCase()) || 'note-untitled'
 }
 
 function listNotes(_m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockState): Note[] {

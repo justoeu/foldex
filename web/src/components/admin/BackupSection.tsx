@@ -22,8 +22,6 @@ import {
   type BackupJob,
   type BackupJobStatus,
   type BackupRun,
-  type BackupRunStatus,
-  type BackupScheduleResponse,
 } from '../../api/admin'
 import { ScheduleCard } from './BackupScheduleEditor'
 import { BackupDownloadDialog } from './BackupDownloadDialog'

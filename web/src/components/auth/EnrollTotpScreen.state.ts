@@ -15,10 +15,10 @@ export function initialEnrollMethod(emailAvailable: boolean): FactorMethod | nul
 
 export function enrollPhase(state: {
   method: FactorMethod | null
-  totp: unknown | null
-  mailed: unknown | null
+  totp: object | null
+  mailed: object | null
   codes: string[] | null
-  pendingSession: unknown | null
+  pendingSession: object | null
 }): EnrollPhase {
   if (state.codes && state.pendingSession) return 'codes'
   if (!state.method) return 'choose'

@@ -59,9 +59,9 @@ export function AvailabilityHint({
     shapeText && key === 'common.avail_shape' ? shapeText : t(key)
 
   return (
-    <span className={`fx-avail fx-avail-${tone}`} role="status">
+    <output className={`fx-avail fx-avail-${tone}`}>
       {icon && <Icon d={icon} size={13} />}
       {text}
-    </span>
+    </output>
   )
 }

@@ -18,7 +18,7 @@ import type { AuthUser } from '../../auth/types'
  * and the OLD address gets a linkless warning so someone being taken over hears
  * about it on the channel they still control.
  */
-export function EmailRow({ user }: { user: AuthUser }) {
+export function EmailRow({ user }: Readonly<{ user: AuthUser }>) {
   const { t } = useTranslation()
   const qc = useQueryClient()
 

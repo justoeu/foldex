@@ -178,10 +178,9 @@
 }
 .fx-side-row:hover { background: var(--fx-accent-soft); color: var(--fx-ink); }
 .fx-side-row-active { background: var(--fx-accent-soft-2); color: var(--fx-ink); box-shadow: inset 0 0 0 1px rgba(99,102,241,0.20); }
-.fx-side-dot { width: 10px; height: 10px; border-radius: 4px; box-shadow: 0 0 0 3px color-mix(in srgb, var(--fx-bg) 60%, transparent); }
+.fx-side-dot { width: 10px; height: 10px; border-radius: 4px; margin-left: 6px; box-shadow: 0 0 0 3px color-mix(in srgb, var(--fx-bg) 60%, transparent); }
 .fx-side-all { color: var(--fx-ink); }
 .fx-all-dot { width: 18px; height: 18px; display: grid; place-items: center; border-radius: 6px; background: linear-gradient(135deg, var(--fx-accent), var(--fx-accent-2)); color: #fff; margin-left: 6px; }
-.fx-side-dot { margin-left: 6px; }
 .fx-side-row.fx-side-all .fx-side-label { font-weight: 700; }
 .fx-side-label { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fx-side-count { font-family: var(--fx-mono); font-size: 11px; color: var(--fx-ink-4); margin-right: 6px; }

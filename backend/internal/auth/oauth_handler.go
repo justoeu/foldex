@@ -732,7 +732,7 @@ func (h *Handler) OAuthUnlink(w http.ResponseWriter, r *http.Request) {
 	}
 	switch err := h.repo.UnlinkIdentity(r.Context(), p.UserID, p.SessionID, user.TokenVersion,
 		ProviderGoogle, in.Password); {
-	case errors.Is(err, ErrPasswordMissing):
+	case errors.Is(err, ErrPasswordMissing), errors.Is(err, ErrLastCredential):
 		httperr.Write(w, httperr.New(http.StatusConflict, "password_required",
 			"set a password before unlinking your Google account"))
 	case errors.Is(err, ErrBadCredentials):
@@ -741,9 +741,6 @@ func (h *Handler) OAuthUnlink(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrIdentityMissing):
 		httperr.Write(w, httperr.New(http.StatusNotFound, "not_linked",
 			"no Google account is linked"))
-	case errors.Is(err, ErrLastCredential):
-		httperr.Write(w, httperr.New(http.StatusConflict, "password_required",
-			"set a password before unlinking your Google account"))
 	case errors.Is(err, ErrSessionInvalid):
 		h.writeSessionInvalid(w)
 	case err != nil:

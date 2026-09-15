@@ -89,7 +89,7 @@
   bottom: max(52px, calc(20px + env(safe-area-inset-bottom, 0px) + 28px));
 }
 .fx-sidebar {
-  min-height: 100%;
+  min-height: 0;
   min-width: 0;
   padding-inline: 0;
 }
@@ -139,6 +139,7 @@
    visual focus. */
 .fx-side-actions {
   margin-top: 12px;
+  margin-inline: 14px;
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 6px;
@@ -171,11 +172,9 @@
 /* Hover + active sidebar rows */
 .fx-side-head { padding-inline: 14px; }
 .fx-side-sep  { padding-inline: 14px; }
-.fx-side-actions { margin-inline: 14px; }
 
 /* Sidebar layout: the scrollable middle column flexes so the actions row +
    version footer stay anchored at the bottom regardless of tag count. */
-.fx-sidebar { min-height: 0; }
 .fx-sidebar-scroll {
   flex: 1 1 auto;
   min-height: 0;
@@ -750,12 +749,21 @@ html.fx-dark { background: #0E1014; }
   line-height: 1.55;
   color: var(--fx-ink-2);
   text-wrap: pretty;
+  font-family: var(--fx-ui);
+  font-style: normal;
+  letter-spacing: -0.005em;
 }
 .fx-confirm-body code {
   /* Long URLs shouldn't take their own line; let the mono break inline. */
   display: inline;
   word-break: break-all;
   white-space: normal;
+  background: var(--fx-accent-soft);
+  color: var(--fx-accent-3);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 0.88em;
+  font-weight: 600;
 }
 
 /* ─── folder unlock modal (PasswordPromptDialog) ──────────────────────── */
@@ -950,22 +958,6 @@ html.fx-dark { background: #0E1014; }
 .fx-modal .fx-mono-inline,
 .fx-modal .fx-kbd {
   font-family: var(--fx-mono);
-}
-
-/* Body text inside the confirm dialog — pretty wrapping, no italics. */
-.fx-confirm-body {
-  font-family: var(--fx-ui);
-  font-style: normal;
-  letter-spacing: -0.005em;
-}
-.fx-confirm-body code {
-  background: var(--fx-accent-soft);
-  color: var(--fx-accent-3);
-  padding: 1px 5px;
-  border-radius: 4px;
-  font-size: 0.88em;
-  font-weight: 600;
-  letter-spacing: 0;
 }
 
 /* ─── tag picker hint + pending tag color cue ───────────────────────────── */

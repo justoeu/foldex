@@ -8,5 +8,5 @@ import type { TFunction } from 'i18next'
  * owns it (ADR-46), so this is the one place the two representations meet.
  */
 export function actionLabel(t: TFunction, action: string): string {
-  return t(`admin.action_${action.replace(/\./g, '_')}`, action)
+  return t(`admin.action_${action.replaceAll('.', '_')}`, action)
 }

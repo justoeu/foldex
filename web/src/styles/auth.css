@@ -707,6 +707,7 @@ button.fx-auth-locale[aria-pressed='true'] {
 }
 
 :is(.fx-auth, .fx-authfield) .fx-auth-notice {
+  display: block;
   margin: 0 0 4px;
   padding: 10px 12px;
   border-radius: 11px;

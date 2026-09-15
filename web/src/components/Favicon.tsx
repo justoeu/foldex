@@ -91,6 +91,6 @@ const PALETTES = [
 
 function paletteFor(seed: string) {
   let h = 0
-  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + (seed.codePointAt(i) ?? 0)) >>> 0
   return PALETTES[h % PALETTES.length]
 }

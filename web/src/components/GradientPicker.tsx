@@ -18,7 +18,11 @@ const PAYLOAD = 'application/x-foldex-gradient-stop'
 // (iPhone-style — same gesture as merging two links into a folder).
 export function GradientPicker({ from, to, onChange }: Props) {
   const { t } = useTranslation()
-  const swap = () => onChange(to, from)
+  const swap = () => {
+    const nextFrom = to
+    const nextTo = from
+    onChange(nextFrom, nextTo)
+  }
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       <HueSpectrumBar from={from} to={to} onChange={onChange} />

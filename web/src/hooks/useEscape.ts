@@ -12,7 +12,7 @@ if (typeof window !== 'undefined') {
     if (e.key !== 'Escape') return
     if (escapeStack.length === 0) return
     e.preventDefault()
-    escapeStack[escapeStack.length - 1]()
+    escapeStack.at(-1)!()
   })
 }
 

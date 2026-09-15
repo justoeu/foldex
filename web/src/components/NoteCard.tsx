@@ -60,7 +60,7 @@ function NoteCardImpl({ note, onEdit, onMergeWith, onDelete, onPin, onOpen }: Pr
           : linkRaw
             ? { kind: 'link', id: Number(linkRaw) }
             : null
-        if (!source || !source.id) return
+        if (!source?.id) return
         if (source.kind === 'note' && source.id === note.id) return
         e.preventDefault()
         onMergeWith?.(source, note.id)

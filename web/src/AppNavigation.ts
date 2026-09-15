@@ -5,10 +5,10 @@ import type { Folder } from './api/types'
 import type { ViewMode } from './lib/viewPrefs'
 
 type UnlockMap = Record<number, FolderUnlock>
-const VIEW_MODES: readonly ViewMode[] = ['cards', 'compact', 'list']
+const VIEW_MODES = new Set<ViewMode>(['cards', 'compact', 'list'])
 
 function isViewMode(value: unknown): value is ViewMode {
-  return VIEW_MODES.includes(value as ViewMode)
+  return VIEW_MODES.has(value as ViewMode)
 }
 
 type FolderError = {
@@ -37,7 +37,7 @@ export function pruneFolderContextMap<T>(
   let changed = false
   const next: Record<string, T> = {}
   for (const [key, value] of Object.entries(map)) {
-    const match = key.match(/^folder\.(\d+)$/)
+    const match = /^folder\.(\d+)$/.exec(key)
     if (match && !validIds.has(Number(match[1]))) {
       changed = true
       continue

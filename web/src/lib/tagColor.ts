@@ -17,7 +17,7 @@ export function makeGradient(from: string, to: string): string {
 // Used to drive --chip-c so text/border still render correctly.
 export function primaryColor(color: string): string {
   if (!isGradient(color)) return color
-  const m = color.match(/#[0-9a-fA-F]{3,8}|rgba?\([^)]+\)|hsla?\([^)]+\)/)
+  const m = /#[0-9a-fA-F]{3,8}|rgba?\([^)]+\)|hsla?\([^)]+\)/.exec(color)
   return m?.[0] ?? '#6366F1'
 }
 
@@ -92,15 +92,15 @@ export function hslToHex(h: number, s: number, l: number): string {
   const c = (1 - Math.abs(2 * ln - 1)) * sn
   const x = c * (1 - Math.abs(((hn / 60) % 2) - 1))
   const m = ln - c / 2
-  let r1 = 0
-  let g1 = 0
-  let b1 = 0
-  if (hn < 60) { r1 = c; g1 = x; b1 = 0 }
-  else if (hn < 120) { r1 = x; g1 = c; b1 = 0 }
-  else if (hn < 180) { r1 = 0; g1 = c; b1 = x }
-  else if (hn < 240) { r1 = 0; g1 = x; b1 = c }
-  else if (hn < 300) { r1 = x; g1 = 0; b1 = c }
-  else { r1 = c; g1 = 0; b1 = x }
+  const sextant = Math.floor(hn / 60) % 6
+  const [r1, g1, b1] = [
+    [c, x, 0],
+    [x, c, 0],
+    [0, c, x],
+    [0, x, c],
+    [x, 0, c],
+    [c, 0, x],
+  ][sextant]!
   const toHex = (v: number) => {
     const n = Math.round((v + m) * 255)
     return n.toString(16).padStart(2, '0')

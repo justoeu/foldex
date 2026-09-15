@@ -87,9 +87,9 @@ export function VerifyEmailScreen({
   if (state === 'working') {
     return (
       <AuthShell kicker={t(`${COPY[kind]}.kicker`)} title={t(`${COPY[kind]}.working_title`)}>
-        <p className="fx-auth-notice" role="status">
+        <output className="fx-auth-notice">
           <span className="fx-auth-spinner" aria-hidden="true" /> {t('auth.loading')}
-        </p>
+        </output>
       </AuthShell>
     )
   }
@@ -106,9 +106,9 @@ export function VerifyEmailScreen({
     <AuthShell kicker={t(ns + '.kicker')} title={t(copy.title)}>
       <div className="fx-auth-form">
         {state === 'done' ? (
-          <p className="fx-auth-notice" role="status">
+          <output className="fx-auth-notice">
             {t(copy.body)}
-          </p>
+          </output>
         ) : (
           <AuthError message={t(copy.body)} />
         )}

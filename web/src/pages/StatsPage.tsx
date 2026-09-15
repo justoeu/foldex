@@ -152,7 +152,7 @@ function StatsKpiStrip({
       />
       <KpiCard
         label={t('stats.kpi_top_host')}
-        value={s && s.top_host ? s.top_host : '—'}
+        value={s?.top_host ? s.top_host : '—'}
         valueClass="fx-kpi-host"
         delta={s ? t('stats.kpi_top_host_delta', { count: s.top_host_clicks }) : ''}
         deltaKind="neutral"

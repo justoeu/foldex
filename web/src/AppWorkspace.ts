@@ -8,10 +8,10 @@ import type { RevealTarget } from './hooks/useRevealEntry'
 // 'admin' is gone as a view: the administration surface lives inside the
 // settings hub (RBAC-scoped segment) instead of a topbar destination.
 export type AppView = 'home' | 'import' | 'stats' | 'settings'
-const SORTS: readonly Sort[] = ['created', 'clicks', 'recent', 'alpha', 'alpha_desc']
+const SORTS = new Set<Sort>(['created', 'clicks', 'recent', 'alpha', 'alpha_desc'])
 
 function isSort(value: unknown): value is Sort {
-  return SORTS.includes(value as Sort)
+  return SORTS.has(value as Sort)
 }
 
 function isGridDensity(value: unknown): value is 3 | 5 | 8 {

@@ -12,7 +12,7 @@ type State = { error: Error | null }
 // imply stale client state (e.g. a query cache pointing at a removed entity).
 // A full reload is the cheapest correct recovery for a single-user app.
 export class ErrorBoundary extends Component<Props, State> {
-  state: State = { error: null }
+  readonly state: State = { error: null }
 
   static getDerivedStateFromError(error: Error): State {
     return { error }

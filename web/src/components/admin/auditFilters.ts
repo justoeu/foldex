@@ -82,7 +82,7 @@ export function toAuditQuery(state: AuditFilterState, debouncedSearch: string): 
     action: state.action || undefined,
     category: state.category || undefined,
     q: debouncedSearch || undefined,
-    before: state.pages.length > 0 ? state.pages[state.pages.length - 1] : undefined,
+    before: state.pages.length > 0 ? state.pages.at(-1) : undefined,
     order: state.oldestFirst ? 'asc' : undefined,
   }
 }

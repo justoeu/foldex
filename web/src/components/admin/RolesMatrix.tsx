@@ -104,7 +104,7 @@ export function RolesMatrix() {
                 <tr key={p}>
                   <th scope="row" className="fx-matrix-perm">
                     <code className="fx-permchip">{p}</code>
-                    <span className="fx-matrix-permdesc">{t(`admin.perm_${p.split('.').join('_')}`)}</span>
+                    <span className="fx-matrix-permdesc">{t(`admin.perm_${p.replaceAll('.', '_')}`)}</span>
                   </th>
                   {rows.map((r) => {
                     const on = effective[r.role].has(p)
