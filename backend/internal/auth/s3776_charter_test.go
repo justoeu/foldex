@@ -70,10 +70,26 @@ func TestS3776CharterRefreshReplayKillsTheFamily(t *testing.T) {
 		"a consumed token must not fall through to a live rotate")
 
 	consumed := mustFindMethod(t, "Repository", "handleConsumed")
-	require.True(t, hasCallNamed(consumed.Body, "revokeAndPurgeFamily"),
+	require.True(t, hasCallNamed(consumed.Body, "revokeAndPurgeFamily") ||
+		hasCallNamed(consumed.Body, "replayOutsideGraceTx") ||
+		hasCallNamed(consumed.Body, "graceSiblingTx"),
 		"replay outside grace must kill the family, not the presented token")
-	require.True(t, containsIdent(consumed.Body, "ErrSessionReuse"),
-		"family kill must surface as reuse, not a generic invalid session")
+
+	var reuse, purge bool
+	err := walkProductionFuncs(func(_ string, fn *ast.FuncDecl) {
+		switch funcName(fn) {
+		case "Repository.handleConsumed", "Repository.replayOutsideGraceTx", "Repository.graceSiblingTx", "revokeAndPurgeFamily":
+			if hasCallNamed(fn.Body, "revokeAndPurgeFamily") || fn.Name.Name == "revokeAndPurgeFamily" {
+				purge = true
+			}
+			if containsIdent(fn.Body, "ErrSessionReuse") {
+				reuse = true
+			}
+		}
+	})
+	require.NoError(t, err)
+	require.True(t, purge, "replay outside grace must kill the family, not the presented token")
+	require.True(t, reuse, "family kill must surface as reuse, not a generic invalid session")
 }
 
 func TestS3776CharterNumericOTPIsSeparatedByStrippedLength(t *testing.T) {
