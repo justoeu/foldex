@@ -114,23 +114,34 @@ func (f *Fetcher) Fetch(ctx context.Context, pageURL string) (Result, error) {
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
 		return Result{}, fmt.Errorf("invalid url")
 	}
-
-	// (1) Hardcoded-provider shortcut. If oEmbed errors or returns an empty
-	// title (TrimSpace — a single-space title from a misbehaving provider
-	// shouldn't satisfy us), fall through to HTML — degraded but better
-	// than nothing. Sub-deadline of 5s caps the shortcut even when the
-	// caller's ctx has a long budget left, so a slow oEmbed provider can't
-	// dominate the overall Fetch latency.
-	if oembedURL := hardcodedOEmbedURL(pageURL); oembedURL != "" {
-		oeCtx, oeCancel := context.WithTimeout(ctx, oembedSubDeadline)
-		r, err := f.fetchOEmbed(oeCtx, oembedURL)
-		oeCancel()
-		if err == nil && strings.TrimSpace(r.Title) != "" {
-			r.FaviconURL = u.Scheme + "://" + u.Host + "/favicon.ico"
-			return r, nil
-		}
+	if r, ok := f.tryHardcodedOEmbed(ctx, pageURL, u); ok {
+		return r, nil
 	}
+	resolved, err := f.fetchHTMLHead(ctx, pageURL)
+	if err != nil {
+		return Result{}, err
+	}
+	resolved = f.enrichFromDiscoveredOEmbed(ctx, resolved)
+	resolved.OEmbedURL = ""
+	return resolved, nil
+}
 
+func (f *Fetcher) tryHardcodedOEmbed(ctx context.Context, pageURL string, u *url.URL) (Result, bool) {
+	oembedURL := hardcodedOEmbedURL(pageURL)
+	if oembedURL == "" {
+		return Result{}, false
+	}
+	oeCtx, oeCancel := context.WithTimeout(ctx, oembedSubDeadline)
+	r, err := f.fetchOEmbed(oeCtx, oembedURL)
+	oeCancel()
+	if err != nil || strings.TrimSpace(r.Title) == "" {
+		return Result{}, false
+	}
+	r.FaviconURL = u.Scheme + "://" + u.Host + "/favicon.ico"
+	return r, true
+}
+
+func (f *Fetcher) fetchHTMLHead(ctx context.Context, pageURL string) (Result, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, nil)
 	if err != nil {
 		return Result{}, err
@@ -146,34 +157,29 @@ func (f *Fetcher) Fetch(ctx context.Context, pageURL string) (Result, error) {
 	if resp.StatusCode >= 400 {
 		return Result{}, fmt.Errorf("fetch: %w", &HTTPStatusError{Code: resp.StatusCode})
 	}
-	// Cap to 2 MB of HTML — the head is always at the top.
 	body := io.LimitReader(resp.Body, 2<<20)
 	r := parseHead(body)
-	finalURL := resp.Request.URL // resolved after redirects
+	finalURL := resp.Request.URL
 	resolved := resolveRelatives(r, finalURL)
 	if resolved.FaviconURL == "" {
 		resolved.FaviconURL = finalURL.Scheme + "://" + finalURL.Host + "/favicon.ico"
 	}
+	return resolved, nil
+}
 
-	// (2) Generic oEmbed discovery enrichment. Skip when every field we
-	// care about is already filled (TrimSpace — placeholder whitespace from
-	// SPAs doesn't count as "filled"). Errors are silent (HTML is the
-	// baseline). Sub-deadline so an enrichment call can't drag the total
-	// past the caller's expectation.
+func (f *Fetcher) enrichFromDiscoveredOEmbed(ctx context.Context, resolved Result) Result {
 	titleFilled := strings.TrimSpace(resolved.Title) != ""
 	descFilled := strings.TrimSpace(resolved.Description) != ""
 	imageFilled := strings.TrimSpace(resolved.OGImageURL) != ""
-	if resolved.OEmbedURL != "" && !(titleFilled && descFilled && imageFilled) {
-		oeCtx, oeCancel := context.WithTimeout(ctx, oembedSubDeadline)
-		if oe, err := f.fetchOEmbed(oeCtx, resolved.OEmbedURL); err == nil {
-			resolved = mergeOEmbed(resolved, oe)
-		}
-		oeCancel()
+	if resolved.OEmbedURL == "" || (titleFilled && descFilled && imageFilled) {
+		return resolved
 	}
-	// OEmbedURL is an internal signal — clear it before returning so adapters
-	// don't accidentally surface it to the API.
-	resolved.OEmbedURL = ""
-	return resolved, nil
+	oeCtx, oeCancel := context.WithTimeout(ctx, oembedSubDeadline)
+	if oe, err := f.fetchOEmbed(oeCtx, resolved.OEmbedURL); err == nil {
+		resolved = mergeOEmbed(resolved, oe)
+	}
+	oeCancel()
+	return resolved
 }
 
 func parseHead(r io.Reader) Result {
@@ -182,27 +188,26 @@ func parseHead(r io.Reader) Result {
 	depth := 0
 	inHead := false
 	inTitle := false
-loop:
 	for {
 		tt := z.Next()
-		switch tt {
-		case html.ErrorToken:
-			break loop
-		case html.StartTagToken, html.SelfClosingTagToken:
-			if handleStartTag(z, tt, &out, &depth, &inHead, &inTitle) {
-				break loop
-			}
-		case html.EndTagToken:
-			if handleEndTag(z, &depth, &inTitle) {
-				break loop
-			}
-		case html.TextToken:
-			if inTitle && out.Title == "" {
-				out.Title = strings.TrimSpace(string(z.Text()))
-			}
+		if tt == html.ErrorToken || consumeHeadToken(z, tt, &out, &depth, &inHead, &inTitle) {
+			return out
 		}
 	}
-	return out
+}
+
+func consumeHeadToken(z *html.Tokenizer, tt html.TokenType, out *Result, depth *int, inHead, inTitle *bool) bool {
+	switch tt {
+	case html.StartTagToken, html.SelfClosingTagToken:
+		return handleStartTag(z, tt, out, depth, inHead, inTitle)
+	case html.EndTagToken:
+		return handleEndTag(z, depth, inTitle)
+	case html.TextToken:
+		if *inTitle && out.Title == "" {
+			out.Title = strings.TrimSpace(string(z.Text()))
+		}
+	}
+	return false
 }
 
 func handleStartTag(z *html.Tokenizer, tt html.TokenType, out *Result, depth *int, inHead, inTitle *bool) bool {
