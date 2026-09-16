@@ -1267,3 +1267,17 @@ configuração; a regra tem que valer sozinha*.
 - **Sintoma em produção:** `foldex.justoeu.cloud` mostrou "Não foi possível conectar: armazenamento de arquivos" com RustFS já healthy. O backend tinha subido numa janela em que `rustfs-…:9002` recusou conexão; `storage.New` falhou, `h.storage` ficou `nil` e o probe virou `AlwaysUnreachable` — permanente até restart.
 - **Fix:** `storage.NewDeferred` devolve o client mesmo com o store caído; `Ping` (já no ticker de 30s do `/api/status`) re-tenta `ensureBucket`. `loadStorage` passou a usá-lo. `New` continua fail-closed (backup-agent).
 - **UI:** quando `object_store` volta de unreachable → ok, as cards resetam o fallback INV-082 e recarregam `/api/files/…` (`?fx=N`) — senão o `<img>` que 503ou ficava no glifo para sempre.
+
+### Log de conclusão — CI vermelho do #138: dois falsos positivos de teste
+
+- **Backend (`TestNewDeferred_PingSucceedsOnALiveStore`):** o loop de retry limpava a
+  variável de erro só na falha — quando o store ficava pronto DENTRO da janela, o `break`
+  preservava o erro da iteração anterior e o `require.NoError` reprovava um cliente são.
+  O store demora a sair de `waiting for storage_quorum` depois de abrir a porta; a janela
+  de 10s cobre, o bug era só o `last` stale.
+- **Frontend (charter S3358):** o limpador do scanner removia `//`-comentário ANTES de
+  tratar strings — `'https://'` virava "comentário", a aspa órfã re-pareava através de
+  linhas e engolia código. Latente desde o #135; a função nova em `url.ts` mudou o
+  pareamento e o fantasma apareceu. Agora strings/comentários são consumidos num único
+  passe (alternância), e o pré-filtro regex de false-arm ignora parênteses no vão entre
+  os `?` — irmãos entre parênteses (`LinkDialog.tsx:474`) não são aninhamento.

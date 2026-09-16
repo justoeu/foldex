@@ -84,13 +84,20 @@ func TestNewDeferred_PingSucceedsOnALiveStore(t *testing.T) {
 	var last error
 	for i := 0; i < 40; i++ {
 		got, err := NewDeferred(ctx, cfg, logger)
-		if err == nil && got.Ping(ctx) == nil {
-			cli = got
-			break
+		switch {
+		case err != nil:
+			last = err
+		default:
+			if pingErr := got.Ping(ctx); pingErr != nil {
+				last = pingErr
+			} else {
+				// The store came up somewhere inside the window: whatever
+				// the earlier attempts saw is history, not this attempt.
+				cli, last = got, nil
+			}
 		}
-		last = err
-		if err == nil {
-			last = got.Ping(ctx)
+		if cli != nil {
+			break
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
