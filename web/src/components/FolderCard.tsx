@@ -140,7 +140,7 @@ function FolderCardImpl({ folder, onOpen, onEdit, onDropLink, onDropNote, onDrop
         >
           <div className="fx-folder-tiles">
             {tiles.map((tile, i) => (
-              <FolderTile key={`tile-${i}`} tile={tile} overflow={i === 3 ? overflow : 0} />
+              <FolderTile key={`${folder.id}-tile-${i}`} tile={tile} overflow={i === 3 ? overflow : 0} />
             ))}
           </div>
           {total === 0 && (

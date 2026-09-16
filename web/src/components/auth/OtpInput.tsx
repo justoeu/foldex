@@ -3,6 +3,12 @@ import { useTranslation } from 'react-i18next'
 
 export const OTP_LENGTH = 6
 
+// The cells are FIXED slots, not a dynamic list: React's identity for each
+// input is its position, so a typed digit must never change the key —
+// otherwise editing remounts the input and steals focus. Iterating over the
+// constant slot keys keeps the key free of the current value.
+const SLOT_KEYS = Array.from({ length: OTP_LENGTH }, (_, i) => `slot-${i}`)
+
 type Props = Readonly<{
   value: string
   onChange: (next: string) => void
@@ -129,34 +135,37 @@ export function OtpInput({ value, onChange, onComplete, disabled, autoFocus, inv
       role="group"
       aria-label={t('auth_otp.field_label')}
     >
-      {digits.map((d, i) => (
-        <input
-          key={`digit-${i}`}
-          ref={(el) => {
-            refs.current[i] = el
-          }}
-          className="fx-auth-otp-cell"
-          // `text` with a numeric inputMode, not `number`: a number input shows
-          // spinners, silently accepts "e" and "-", and drops leading zeros —
-          // all fatal for a code where "012345" is a valid value.
-          type="text"
-          inputMode="numeric"
-          pattern="[0-9]*"
-          maxLength={1}
-          // ONLY the first cell advertises one-time-code. Safari fills every
-          // input carrying this attribute with the SAME digit when it
-          // autofills from Messages, so six annotated cells produce "111111".
-          autoComplete={i === 0 ? 'one-time-code' : 'off'}
-          aria-label={t('auth_otp.digit_label', { n: i + 1, total: OTP_LENGTH })}
-          aria-invalid={invalid || undefined}
-          disabled={disabled}
-          value={d.trim()}
-          onChange={(e) => handleInput(i, e.target.value)}
-          onKeyDown={(e) => handleKeyDown(i, e)}
-          onPaste={handlePaste}
-          onFocus={(e) => e.currentTarget.select()}
-        />
-      ))}
+      {SLOT_KEYS.map((slotKey, i) => {
+        const d = digits[i]
+        return (
+          <input
+            key={slotKey}
+            ref={(el) => {
+              refs.current[i] = el
+            }}
+            className="fx-auth-otp-cell"
+            // `text` with a numeric inputMode, not `number`: a number input shows
+            // spinners, silently accepts "e" and "-", and drops leading zeros —
+            // all fatal for a code where "012345" is a valid value.
+            type="text"
+            inputMode="numeric"
+            pattern="[0-9]*"
+            maxLength={1}
+            // ONLY the first cell advertises one-time-code. Safari fills every
+            // input carrying this attribute with the SAME digit when it
+            // autofills from Messages, so six annotated cells produce "111111".
+            autoComplete={i === 0 ? 'one-time-code' : 'off'}
+            aria-label={t('auth_otp.digit_label', { n: i + 1, total: OTP_LENGTH })}
+            aria-invalid={invalid || undefined}
+            disabled={disabled}
+            value={d.trim()}
+            onChange={(e) => handleInput(i, e.target.value)}
+            onKeyDown={(e) => handleKeyDown(i, e)}
+            onPaste={handlePaste}
+            onFocus={(e) => e.currentTarget.select()}
+          />
+        )
+      })}
     </div>
   )
 }

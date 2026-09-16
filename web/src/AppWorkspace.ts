@@ -19,7 +19,7 @@ function isGridDensity(value: unknown): value is 3 | 5 | 8 {
 }
 
 export function useAppWorkspaceController() {
-  const [view, setViewState] = useState<AppView>('home')
+  const [viewState, setViewState] = useState<AppView>('home')
   // Which hub section the settings page should land on, plus a counter so
   // clicking "Profile" twice remounts SettingsPage back on the section even
   // when the view is already 'settings' (the page owns its section state).
@@ -70,7 +70,7 @@ export function useAppWorkspaceController() {
   })
 
   return {
-    view,
+    view: viewState,
     setView,
     settingsJump,
     openSettingsAt,

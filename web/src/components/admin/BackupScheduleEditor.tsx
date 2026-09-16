@@ -698,7 +698,10 @@ function TimesPicker({
       <span className="fx-bkp-control-label">{t('admin.backup_schedule_times_label')}</span>
       <div className="fx-bkp-times">
         {times.map((v, i) => (
-          <span className="fx-bkp-time" key={`time-${i}`}>
+          // Keyed by position on purpose: the row edits its own value, so a
+          // content-derived key would remount the input mid-keystroke and
+          // drop focus. The row's identity IS its slot (aria-label "time N").
+          <span className="fx-bkp-time" key={i}>
             <input
               className="fx-bkp-input"
               type="time"
