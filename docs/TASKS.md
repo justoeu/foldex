@@ -1255,3 +1255,9 @@ configuração; a regra tem que valer sozinha*.
 - **Achado lateral (pré-existente, não mexido):** `openSettingsAt` seta o jump do hub e em
   seguida chama o wrapper `setView('settings')` que o anula — deep link do menu de usuário
   pode nunca ter funcionado. Sem teste cobrindo. Follow-up em separado.
+
+- **Nota do gate:** o wontfix da rodada 1 cobria a linha na posição antiga; o comentário
+  explicativo deslocou a linha e o Sonar abriu issue NOVO (`new_violations=1` derrubou o QG
+  do scan pós-merge). Remarcado `won't fix` (mesmo racional), gate voltou a OK e o job
+  re-rodado registrou sucesso. Lição: wontfix é por-issue, não por-padrão — mudar a linha
+  reabre a cobrança.
