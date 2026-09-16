@@ -37,6 +37,13 @@ func TestBootWiringCharter(t *testing.T) {
 	require.NotNil(t, productionFunc(t, "waitForShutdown"), "waitForShutdown stays the shutdown sequencer")
 }
 
+func TestLoadStorageUsesNewDeferred(t *testing.T) {
+	src, err := os.ReadFile("boot.go")
+	require.NoError(t, err)
+	assert.Contains(t, string(src), "storage.NewDeferred(",
+		"a refused store at boot must keep a client so Ping can recover it")
+}
+
 func productionFunc(t *testing.T, name string) *ast.FuncDecl {
 	t.Helper()
 	entries, err := os.ReadDir(".")

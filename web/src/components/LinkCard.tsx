@@ -1,6 +1,6 @@
 import { memo } from 'react'
 import { useTranslation } from 'react-i18next'
-import { safeImageUrl } from '../lib/url'
+import { fileUrlWithStoreGeneration, safeImageUrl } from '../lib/url'
 import { entryAnchor } from '../lib/entryAnchor'
 import type { Link, MergeSource } from '../api/types'
 import { hasUnseenChange, useLinkCardInteractions } from './LinkCardInteractions'
@@ -44,12 +44,12 @@ LinkCard.displayName = 'LinkCard'
 function LinkCardImpl(props: Props) {
   const { link, onEdit, onMergeWith, onDelete, onPin, onRefreshPreview, onAddImage, onMarkSeen } = props
   const { t } = useTranslation()
-  const previewSrc = safeImageUrl(link.og_image_url)
   const interaction = useLinkCardInteractions({
     linkId: link.id,
     previewUrl: link.og_image_url,
     onMergeWith,
   })
+  const previewSrc = fileUrlWithStoreGeneration(safeImageUrl(link.og_image_url), interaction.storeGeneration)
   const showPreview = !!previewSrc && !interaction.previewErrored
   const unseenChange = hasUnseenChange(link)
   const actions = { onEdit, onDelete, onPin, onRefreshPreview, onAddImage, onMarkSeen }

@@ -5,6 +5,7 @@ import { ThemeProvider } from '@mui/material'
 import { theme } from '../theme/theme'
 import { ConfirmProvider } from '../components/ConfirmDialog'
 import { PasswordPromptProvider } from '../components/PasswordPromptDialog'
+import { ObjectStoreGenerationProvider } from '../api/status'
 import { AuthProvider } from '../auth/AuthProvider'
 import type { SessionState } from '../auth/types'
 
@@ -74,9 +75,11 @@ export function renderWithProviders(
     <ThemeProvider theme={theme}>
       <QueryClientProvider client={client}>
         <AuthProvider initialState={initialState}>
-          <ConfirmProvider>
-            <PasswordPromptProvider>{children}</PasswordPromptProvider>
-          </ConfirmProvider>
+          <ObjectStoreGenerationProvider>
+            <ConfirmProvider>
+              <PasswordPromptProvider>{children}</PasswordPromptProvider>
+            </ConfirmProvider>
+          </ObjectStoreGenerationProvider>
         </AuthProvider>
       </QueryClientProvider>
     </ThemeProvider>

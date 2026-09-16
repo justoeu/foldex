@@ -105,6 +105,9 @@ describe('the note reader', () => {
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     ))
     // One read of the note, and nothing that would log a click.
-    expect(get.mock.calls.every(([url]) => String(url).startsWith('/api/notes/'))).toBe(true)
+    expect(get.mock.calls.every(([url]) => {
+      const path = String(url)
+      return path.startsWith('/api/notes/') || path === '/api/status'
+    })).toBe(true)
   })
 })

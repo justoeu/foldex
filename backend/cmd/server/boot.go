@@ -138,7 +138,7 @@ func loadPool(h *handles) (*pgxpool.Pool, error) {
 }
 
 func loadStorage(h *handles) *storage.Client {
-	sc, err := storage.New(h.ctx, storage.Config{
+	sc, err := storage.NewDeferred(h.ctx, storage.Config{
 		Endpoint:  h.cfg.ObjectStore.Endpoint,
 		AccessKey: h.cfg.ObjectStore.AccessKey,
 		SecretKey: h.cfg.ObjectStore.SecretKey,
@@ -146,7 +146,9 @@ func loadStorage(h *handles) *storage.Client {
 		UseSSL:    h.cfg.ObjectStore.UseSSL,
 	}, h.logger)
 	if err != nil {
-		h.logger.Warn("object store unavailable — screenshot endpoints disabled", "err", err)
+		// Only a malformed endpoint fails construction. A refused store still
+		// returns a client so Ping can recover it; do not switch this back to New.
+		h.logger.Warn("object store client not constructed", "err", err)
 		return nil
 	}
 	notemedia.NewSweeper(h.pool, sc, h.logger).Start(h.ctx)

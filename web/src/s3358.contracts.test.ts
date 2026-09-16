@@ -19,12 +19,21 @@ import sw from './sw.ts?raw'
 
 /** Nested `cond ? a : b` in either arm. Skips `?.`, `??`, and `?:`. */
 export function nestedTernaryHits(src: string): string[] {
-  const cleaned = src
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/\/\/.*$/gm, '')
-    .replace(/(['"`])(?:\\.|(?!\1)[\s\S])*\1/g, '""')
+  // One combined pass: a full string literal, a line comment, or a block
+  // comment — whichever starts first wins. Stripping in two phases corrupts
+  // the source: a `'https://'` string mined for comments leaves an orphan
+  // quote that then pairs across lines and swallows code, and an apostrophe
+  // in a comment does the mirror damage when strings go first.
+  const cleaned = src.replace(
+    /(['"`])(?:\\.|(?!\1)[\s\S])*\1|\/\/[^\n]*|\/\*[\s\S]*?\*\//g,
+    (m, q) => (q ? '""' : ''),
+  )
   const hits: string[] = []
-  const falseArm = /\?[^\n?:]{1,80}:[^\n?:]{1,80}\?[^\n?:]{0,80}:/g
+  // Pre-filter for un-parenthesized false-arm chaining (`a ? b : c ? d : e`),
+  // which the paren-aware pass below cannot see. Parens in the gap between
+  // the two `?`s mean SIBLING expressions — `(a ? x : y) + (b ? z : w)` —
+  // which are not nesting.
+  const falseArm = /\?[^\n?:]{1,80}:[^()\n?:]{1,80}\?[^()\n?:]{0,80}:/g
   let m: RegExpExecArray | null
   while ((m = falseArm.exec(cleaned))) {
     hits.push(m[0].replace(/\s+/g, ' ').trim().slice(0, 160))
@@ -104,6 +113,22 @@ describe('S3358 contracts', () => {
     expect(nestedTernaryHits('a ? b : c ? d : e').length).toBeGreaterThan(0)
     expect(nestedTernaryHits('a ? b : c')).toEqual([])
     expect(nestedTernaryHits('a ? (b ? c : d) : e').length).toBeGreaterThan(0)
+  })
+
+  it('string and comment contents do not masquerade as operators', () => {
+    // `'https://'` carries `//` inside the string; `'?'` and `'&'` carry the
+    // ternary glyphs. The cleaner must consume them as literals, not let an
+    // orphan quote re-pair across lines and invent phantom nesting.
+    expect(nestedTernaryHits(
+      'const u = new URL(\'https://\' + s)\n' +
+      "// don't treat scheme text as a comment\n" +
+      "return u + (u.includes('?') ? '&' : '?') + 'fx='\n",
+    )).toEqual([])
+  })
+
+  it('sibling ternaries in separate groups are not nesting', () => {
+    expect(nestedTernaryHits("const x = base + (a ? '1' : '0') + (b ? '2' : '0')")).toEqual([])
+    expect(nestedTernaryHits('a ? b : c ? d : e').length).toBeGreaterThan(0)
   })
 
   it('account files have no nested ternaries', () => {

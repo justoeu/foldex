@@ -5,7 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"strings"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -245,17 +245,31 @@ func TestNew_InvalidEndpoint(t *testing.T) {
 	assert.Error(t, sErr)
 }
 
-func TestNew_ConnectionRefused(t *testing.T) {
-	// Port 19999 is almost certainly not listening.
-	ctx := context.Background()
-	_, err := New(ctx, Config{
+func refusedStore() Config {
+	return Config{
 		Endpoint:  "127.0.0.1:19999",
 		AccessKey: "a",
 		SecretKey: "b",
 		Bucket:    "bucket",
 		UseSSL:    false,
-	}, nil)
-	// We expect an error because BucketExists will fail.
+	}
+}
+
+func TestNew_ConnectionRefused(t *testing.T) {
+	_, err := New(context.Background(), refusedStore(), nil)
 	assert.Error(t, err)
-	assert.True(t, strings.Contains(err.Error(), "storage:"), "should wrap with storage: prefix")
+	assert.Contains(t, err.Error(), "storage:")
+}
+
+func TestNewDeferred_UnreachableStoreStillReturnsAClient(t *testing.T) {
+	ctx := context.Background()
+	cli, err := NewDeferred(ctx, refusedStore(), slog.Default())
+	require.NoError(t, err)
+	require.NotNil(t, cli)
+	assert.Error(t, cli.Ping(ctx), "a refused store must stay unreachable until it answers")
+}
+
+func TestNewDeferred_InvalidEndpointStillFails(t *testing.T) {
+	_, err := NewDeferred(context.Background(), Config{Endpoint: ""}, nil)
+	assert.Error(t, err)
 }

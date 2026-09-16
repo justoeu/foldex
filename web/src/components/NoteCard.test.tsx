@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { screen, fireEvent } from '@testing-library/react'
+import { screen, fireEvent, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { NoteCard, type NoteEntry } from './NoteCard'
 import { renderWithProviders } from '../test/renderWithProviders'
@@ -144,5 +144,23 @@ describe('NoteCard', () => {
     expect(img).not.toBeNull()
     fireEvent.error(img as Element)
     expect(document.querySelector('img[src="/api/files/notes/gone.png"]')).toBeNull()
+  })
+
+  it('retries the cover when the object store comes back', async () => {
+    state.depStatus = { resources: [{ id: 'object_store', state: 'unreachable' }] }
+    const withCover = { ...baseNote, cover_url: '/api/files/notes/cover.png' }
+    const { client } = renderWithProviders(<NoteCard note={withCover} onEdit={vi.fn()} {...noopCardProps} />)
+    await waitFor(() => expect(client.getQueryData(['status', 'deps'])).toMatchObject({
+      resources: [{ id: 'object_store', state: 'unreachable' }],
+    }))
+    const img = document.querySelector('img[src="/api/files/notes/cover.png"]') as HTMLImageElement
+    expect(img).not.toBeNull()
+    fireEvent.error(img)
+    expect(document.querySelector('img[src="/api/files/notes/cover.png"]')).toBeNull()
+
+    client.setQueryData(['status', 'deps'], { resources: [{ id: 'object_store', state: 'ok' }] })
+    await waitFor(() => {
+      expect(document.querySelector('img[src="/api/files/notes/cover.png?fx=1"]')).not.toBeNull()
+    })
   })
 })

@@ -540,6 +540,29 @@ describe('LinkCard', () => {
     await waitFor(() => expect(container.querySelector('.fx-card-tall')).toBeNull())
   })
 
+  it('retries a local file preview when the object store comes back', async () => {
+    state.depStatus = { resources: [{ id: 'object_store', state: 'unreachable' }] }
+    const { container, client } = renderWithProviders(
+      <LinkCard
+        link={{ ...baseLink, og_image_url: '/api/files/screenshots/1.jpg' }}
+        {...noopCardProps}
+      />,
+    )
+    await waitFor(() => expect(client.getQueryData(['status', 'deps'])).toMatchObject({
+      resources: [{ id: 'object_store', state: 'unreachable' }],
+    }))
+    const img = container.querySelector('.fx-preview img') as HTMLImageElement
+    expect(img).toBeTruthy()
+    fireEvent.error(img)
+    await waitFor(() => expect(container.querySelector('.fx-preview img')).toBeNull())
+
+    client.setQueryData(['status', 'deps'], { resources: [{ id: 'object_store', state: 'ok' }] })
+    await waitFor(() => {
+      const recovered = container.querySelector('.fx-preview img') as HTMLImageElement | null
+      expect(recovered?.getAttribute('src')).toBe('/api/files/screenshots/1.jpg?fx=1')
+    })
+  })
+
   it('hard-truncates description with no whitespace near the cut', () => {
     const longDesc = 'a'.repeat(250)
     renderWithProviders(<LinkCard link={{ ...baseLink, description: longDesc }} {...noopCardProps} />)

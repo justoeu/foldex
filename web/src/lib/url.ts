@@ -66,6 +66,15 @@ export function looksLikeUrl(raw: string): boolean {
 // The SPA is served over HTTPS and nginx CSP `img-src` allows `https:` but
 // not `http:`; leaving the scheme as stored would log a mixed-content
 // warning even when Chrome auto-upgrades the request.
+export function fileUrlWithStoreGeneration(
+  src: string | undefined,
+  generation: number,
+): string | undefined {
+  if (!src || generation <= 0) return src
+  if (!src.startsWith('/api/files/')) return src
+  return src + (src.includes('?') ? '&' : '?') + 'fx=' + String(generation)
+}
+
 export function safeImageUrl(raw: string | null | undefined): string | undefined {
   if (!raw) return undefined
   const trimmed = raw.trim()

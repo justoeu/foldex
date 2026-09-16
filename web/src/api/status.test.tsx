@@ -1,8 +1,15 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { waitFor } from '@testing-library/react'
+import { act, waitFor } from '@testing-library/react'
 import { renderWithProviders } from '../test/renderWithProviders'
 import { freshState, installAxiosMock, type MockState } from '../test/server'
-import { fetchDepStatus, unreachableResources, useDepStatus } from './status'
+import {
+  fetchDepStatus,
+  objectStoreSighting,
+  shouldRetryObjectStoreImages,
+  unreachableResources,
+  useDepStatus,
+  useObjectStoreGeneration,
+} from './status'
 
 let state: MockState
 
@@ -41,6 +48,44 @@ function Probe() {
   if (!q.data) return <div>pending</div>
   return <div>{q.data.resources.map((r) => `${r.id}:${r.state}`).join('|') || 'none'}</div>
 }
+
+describe('objectStoreSighting', () => {
+  it('reads ok, unreachable, or absent', () => {
+    expect(objectStoreSighting({ resources: [{ id: 'object_store', state: 'ok' }] })).toBe('ok')
+    expect(objectStoreSighting({ resources: [{ id: 'object_store', state: 'unreachable' }] })).toBe('unreachable')
+    expect(objectStoreSighting({ resources: [{ id: 'mail_broker', state: 'ok' }] })).toBe('absent')
+    expect(objectStoreSighting(undefined)).toBe('absent')
+  })
+})
+
+describe('shouldRetryObjectStoreImages', () => {
+  it('retries only on the unreachable → ok edge', () => {
+    expect(shouldRetryObjectStoreImages('unreachable', 'ok')).toBe(true)
+    expect(shouldRetryObjectStoreImages('ok', 'ok')).toBe(false)
+    expect(shouldRetryObjectStoreImages('absent', 'ok')).toBe(false)
+    expect(shouldRetryObjectStoreImages('ok', 'unreachable')).toBe(false)
+  })
+})
+
+function GenerationProbe() {
+  const gen = useObjectStoreGeneration()
+  return <div>gen-{gen}</div>
+}
+
+describe('useObjectStoreGeneration', () => {
+  it('bumps when the object store returns', async () => {
+    state.depStatus = { resources: [{ id: 'object_store', state: 'unreachable' }] }
+    const { getByText, client } = renderWithProviders(<GenerationProbe />)
+    await waitFor(() => expect(client.getQueryData(['status', 'deps'])).toMatchObject({
+      resources: [{ id: 'object_store', state: 'unreachable' }],
+    }))
+    expect(getByText('gen-0')).toBeInTheDocument()
+    await act(async () => {
+      client.setQueryData(['status', 'deps'], { resources: [{ id: 'object_store', state: 'ok' }] })
+    })
+    await waitFor(() => expect(getByText('gen-1')).toBeInTheDocument())
+  })
+})
 
 describe('useDepStatus', () => {
   it('returns the mocked snapshot', async () => {

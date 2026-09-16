@@ -2,7 +2,8 @@ import { memo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
 import { primaryColor } from '../lib/tagColor'
-import { safeImageUrl } from '../lib/url'
+import { useObjectStoreGeneration } from '../api/status'
+import { fileUrlWithStoreGeneration, safeImageUrl } from '../lib/url'
 import { FolderRapidView } from './FolderRapidView'
 import type { Folder, PreviewTile, PreviewFolderTile } from '../api/types'
 
@@ -257,8 +258,9 @@ function FolderTile({ tile, overflow }: Readonly<{ tile: Tile; overflow: number 
     )
   }
   const link = tile.data
-  const ogSrc = safeImageUrl(link.og_image_url)
-  const faviconSrc = safeImageUrl(link.favicon_url)
+  const storeGeneration = useObjectStoreGeneration()
+  const ogSrc = fileUrlWithStoreGeneration(safeImageUrl(link.og_image_url), storeGeneration)
+  const faviconSrc = fileUrlWithStoreGeneration(safeImageUrl(link.favicon_url), storeGeneration)
   return (
     <div className="fx-folder-tile">
       {folderTilePreview(ogSrc, faviconSrc, link.title)}

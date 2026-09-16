@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type DragEvent } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { mapCachedLinks } from '../api/links'
 import { mapCachedLinkEntries } from '../api/entries'
+import { useObjectStoreGeneration } from '../api/status'
 import type { Link, MergeSource } from '../api/types'
 
 const LINK_MIME = 'application/x-foldex-link'
@@ -40,13 +41,14 @@ export function useLinkCardInteractions({
   onMergeWith?: (source: MergeSource, targetId: number) => void
 }) {
   const queryClient = useQueryClient()
+  const storeGeneration = useObjectStoreGeneration()
   const [previewErrored, setPreviewErrored] = useState(false)
   const [dragOver, setDragOver] = useState(false)
   const [dragging, setDragging] = useState(false)
 
   useEffect(() => {
     setPreviewErrored(false)
-  }, [previewUrl])
+  }, [previewUrl, storeGeneration])
 
   const onGo = useCallback(() => {
     const last_clicked_at = new Date().toISOString()
@@ -85,6 +87,7 @@ export function useLinkCardInteractions({
 
   return {
     previewErrored,
+    storeGeneration,
     dragging,
     dragOver,
     onPreviewError: () => setPreviewErrored(true),

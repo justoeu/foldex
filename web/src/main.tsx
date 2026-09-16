@@ -5,6 +5,7 @@ import App from './App'
 import { ConfirmProvider } from './components/ConfirmDialog'
 import { PasswordPromptProvider } from './components/PasswordPromptDialog'
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { ObjectStoreGenerationProvider } from './api/status'
 import { AuthProvider } from './auth/AuthProvider'
 import { AuthGate } from './auth/AuthGate'
 import { useDarkMode } from './hooks/useDarkMode'
@@ -39,13 +40,15 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
             queryClient.clear() on an identity change, and outside the dialog
             providers because the auth screens use none of them. */}
         <AuthProvider>
-          <ConfirmProvider>
-            <PasswordPromptProvider>
-              <ThemedGate>
-                <App />
-              </ThemedGate>
-            </PasswordPromptProvider>
-          </ConfirmProvider>
+          <ObjectStoreGenerationProvider>
+            <ConfirmProvider>
+              <PasswordPromptProvider>
+                <ThemedGate>
+                  <App />
+                </ThemedGate>
+              </PasswordPromptProvider>
+            </ConfirmProvider>
+          </ObjectStoreGenerationProvider>
         </AuthProvider>
       </QueryClientProvider>
     </ErrorBoundary>
