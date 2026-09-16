@@ -156,30 +156,27 @@ func (c *Client) ensureBucket(ctx context.Context) error {
 // forever copying nothing — the exact silent non-backup ADR-43 exists to
 // kill. A missing bucket here is a configuration error and fails the boot.
 func NewReadOnly(ctx context.Context, cfg Config, logger *slog.Logger) (*Client, error) {
-	mc, err := minio.New(cfg.Endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
-		Secure: cfg.UseSSL,
-		Region: cfg.Region,
-	})
+	c, err := newClient(cfg, logger)
 	if err != nil {
-		return nil, fmt.Errorf("storage: create s3 client: %w", err)
+		return nil, err
 	}
-	exists, err := mc.BucketExists(ctx, cfg.Bucket)
+	exists, err := c.mc.BucketExists(ctx, c.bucket)
 	if err != nil {
-		return nil, fmt.Errorf("storage: check bucket %q at %s: %w", cfg.Bucket, cfg.Endpoint, err)
+		return nil, fmt.Errorf("storage: check bucket %q at %s: %w", c.bucket, cfg.Endpoint, err)
 	}
 	if !exists {
-		return nil, fmt.Errorf("storage: bucket %q does not exist at %s — refusing to read from a bucket that would have to be created (check the name)", cfg.Bucket, cfg.Endpoint)
+		return nil, fmt.Errorf("storage: bucket %q does not exist at %s — refusing to read from a bucket that would have to be created (check the name)", c.bucket, cfg.Endpoint)
 	}
-	return &Client{mc: mc, bucket: cfg.Bucket, logger: logger}, nil
+	return c, nil
 }
 
-// Ping reports whether the bucket endpoint answers. The error may name the
-// host — callers that surface status to a client must not forward it.
-// A store that was down at NewDeferred is recovered here: the next
-// successful ensureBucket is what clears the footer, not a process restart.
+// Ping reports whether the bucket endpoint answers. Read-only: BucketExists
+// only — never MakeBucket (ADR-43: NewReadOnly must not provision a typo'd
+// name). A store that was down at NewDeferred is recovered here; callers
+// that surface status to a client must not forward the error.
 func (c *Client) Ping(ctx context.Context) error {
-	if err := c.ensureBucket(ctx); err != nil {
+	_, err := c.mc.BucketExists(ctx, c.bucket)
+	if err != nil {
 		return fmt.Errorf("storage: ping: %w", err)
 	}
 	return nil

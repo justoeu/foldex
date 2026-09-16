@@ -73,6 +73,32 @@ func newInternalClient(t *testing.T) *Client {
 	return nil
 }
 
+func TestNewDeferred_PingSucceedsOnALiveStore(t *testing.T) {
+	ep, user, pass := startRustFSInternal(t)
+	ctx := context.Background()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cfg := Config{
+		Endpoint: ep, AccessKey: user, SecretKey: pass, Bucket: "deferred-ping", UseSSL: false,
+	}
+	var cli *Client
+	var last error
+	for i := 0; i < 40; i++ {
+		got, err := NewDeferred(ctx, cfg, logger)
+		if err == nil && got.Ping(ctx) == nil {
+			cli = got
+			break
+		}
+		last = err
+		if err == nil {
+			last = got.Ping(ctx)
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	require.NoError(t, last)
+	require.NotNil(t, cli)
+	require.NoError(t, cli.Upload(ctx, "ok.bin", []byte("x"), "application/octet-stream"))
+}
+
 func TestClient_ErrorPaths_WrongBucket(t *testing.T) {
 	cli := newInternalClient(t)
 	ctx := context.Background()
