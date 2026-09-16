@@ -1261,3 +1261,8 @@ configuração; a regra tem que valer sozinha*.
   do scan pós-merge). Remarcado `won't fix` (mesmo racional), gate voltou a OK e o job
   re-rodado registrou sucesso. Lição: wontfix é por-issue, não por-padrão — mudar a linha
   reabre a cobrança.
+
+### Log — object store reconecta sem restart do backend (2026-09-16)
+
+- **Sintoma em produção:** `foldex.justoeu.cloud` mostrou "Não foi possível conectar: armazenamento de arquivos" com RustFS já healthy. O backend tinha subido numa janela em que `rustfs-…:9002` recusou conexão; `storage.New` falhou, `h.storage` ficou `nil` e o probe virou `AlwaysUnreachable` — permanente até restart.
+- **Fix:** `storage.NewDeferred` devolve o client mesmo com o store caído; `Ping` (já no ticker de 30s do `/api/status`) re-tenta `ensureBucket`. `loadStorage` passou a usá-lo. `New` continua fail-closed (backup-agent).

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -258,4 +259,27 @@ func TestNew_ConnectionRefused(t *testing.T) {
 	// We expect an error because BucketExists will fail.
 	assert.Error(t, err)
 	assert.True(t, strings.Contains(err.Error(), "storage:"), "should wrap with storage: prefix")
+}
+
+func refusedStore() Config {
+	return Config{
+		Endpoint:  "127.0.0.1:19999",
+		AccessKey: "a",
+		SecretKey: "b",
+		Bucket:    "bucket",
+		UseSSL:    false,
+	}
+}
+
+func TestNewDeferred_UnreachableStoreStillReturnsAClient(t *testing.T) {
+	ctx := context.Background()
+	cli, err := NewDeferred(ctx, refusedStore(), slog.Default())
+	require.NoError(t, err)
+	require.NotNil(t, cli)
+	assert.Error(t, cli.Ping(ctx), "a refused store must stay unreachable until it answers")
+}
+
+func TestNewDeferred_InvalidEndpointStillFails(t *testing.T) {
+	_, err := NewDeferred(context.Background(), Config{Endpoint: ""}, nil)
+	assert.Error(t, err)
 }

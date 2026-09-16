@@ -138,7 +138,7 @@ func loadPool(h *handles) (*pgxpool.Pool, error) {
 }
 
 func loadStorage(h *handles) *storage.Client {
-	sc, err := storage.New(h.ctx, storage.Config{
+	sc, err := storage.NewDeferred(h.ctx, storage.Config{
 		Endpoint:  h.cfg.ObjectStore.Endpoint,
 		AccessKey: h.cfg.ObjectStore.AccessKey,
 		SecretKey: h.cfg.ObjectStore.SecretKey,

@@ -29,6 +29,7 @@ type listedObject struct {
 type Client struct {
 	mc     *minio.Client
 	bucket string
+	region string
 	logger *slog.Logger
 
 	listFn func(ctx context.Context) <-chan listedObject
@@ -65,8 +66,7 @@ type Config struct {
 	Region string
 }
 
-// New creates a Client, ensures the bucket exists, and returns it.
-func New(ctx context.Context, cfg Config, logger *slog.Logger) (*Client, error) {
+func dial(cfg Config) (*minio.Client, error) {
 	mc, err := minio.New(cfg.Endpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
 		Secure: cfg.UseSSL,
@@ -75,33 +75,79 @@ func New(ctx context.Context, cfg Config, logger *slog.Logger) (*Client, error) 
 	if err != nil {
 		return nil, fmt.Errorf("storage: create s3 client: %w", err)
 	}
+	return mc, nil
+}
 
-	exists, err := mc.BucketExists(ctx, cfg.Bucket)
+func newClient(cfg Config, logger *slog.Logger) (*Client, error) {
+	mc, err := dial(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("storage: check bucket %q at %s: %w", cfg.Bucket, cfg.Endpoint, err)
+		return nil, err
 	}
-	if !exists {
-		mkErr := mc.MakeBucket(ctx, cfg.Bucket, minio.MakeBucketOptions{Region: cfg.Region})
-		if mkErr != nil {
-			errCode := minio.ToErrorResponse(mkErr).Code
-			// Tolerate "already exists" and permission-denied codes — the bucket
-			// may exist but the credentials may lack s3:ListAllMyBuckets.
-			toleratedCodes := map[string]bool{
-				"BucketAlreadyOwnedByYou": true,
-				"BucketAlreadyExists":     true,
-				"AccessDenied":            true,
-				"NoSuchBucket":            true, // some S3 servers on create
-			}
-			if !toleratedCodes[errCode] {
-				return nil, fmt.Errorf("storage: make bucket %q at %s (code=%s): %w", cfg.Bucket, cfg.Endpoint, errCode, mkErr)
-			}
-			logger.Warn("storage: bucket create returned tolerated error, assuming bucket exists", "bucket", cfg.Bucket, "s3_error_code", errCode)
-		} else {
-			logger.Info("storage: created bucket", "bucket", cfg.Bucket)
-		}
-	}
+	return &Client{mc: mc, bucket: cfg.Bucket, region: cfg.Region, logger: logger}, nil
+}
 
-	return &Client{mc: mc, bucket: cfg.Bucket, logger: logger}, nil
+// New creates a Client, ensures the bucket exists, and returns it.
+func New(ctx context.Context, cfg Config, logger *slog.Logger) (*Client, error) {
+	c, err := newClient(cfg, logger)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.ensureBucket(ctx); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+// NewDeferred builds a Client even when the store is down. minio.New only
+// fails on a malformed endpoint; a connection refused at boot used to
+// return nil and pin depstatus to AlwaysUnreachable until process restart.
+// Ping retries ensureBucket, so the footer clears when RustFS comes back.
+func NewDeferred(ctx context.Context, cfg Config, logger *slog.Logger) (*Client, error) {
+	c, err := newClient(cfg, logger)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.ensureBucket(ctx); err != nil {
+		c.logWarn("object store unreachable; will retry on ping", "err", err)
+	}
+	return c, nil
+}
+
+func (c *Client) logWarn(msg string, args ...any) {
+	if c != nil && c.logger != nil {
+		c.logger.Warn(msg, args...)
+	}
+}
+
+func (c *Client) logInfo(msg string, args ...any) {
+	if c != nil && c.logger != nil {
+		c.logger.Info(msg, args...)
+	}
+}
+
+func (c *Client) ensureBucket(ctx context.Context) error {
+	exists, err := c.mc.BucketExists(ctx, c.bucket)
+	if err != nil {
+		return fmt.Errorf("storage: check bucket %q: %w", c.bucket, err)
+	}
+	if exists {
+		return nil
+	}
+	mkErr := c.mc.MakeBucket(ctx, c.bucket, minio.MakeBucketOptions{Region: c.region})
+	if mkErr == nil {
+		c.logInfo("storage: created bucket", "bucket", c.bucket)
+		return nil
+	}
+	errCode := minio.ToErrorResponse(mkErr).Code
+	// Tolerate "already exists" and permission-denied codes — the bucket
+	// may exist but the credentials may lack s3:ListAllMyBuckets.
+	switch errCode {
+	case "BucketAlreadyOwnedByYou", "BucketAlreadyExists", "AccessDenied", "NoSuchBucket":
+		c.logWarn("storage: bucket create returned tolerated error, assuming bucket exists", "bucket", c.bucket, "s3_error_code", errCode)
+		return nil
+	default:
+		return fmt.Errorf("storage: make bucket %q (code=%s): %w", c.bucket, errCode, mkErr)
+	}
 }
 
 // NewReadOnly builds a client for a bucket this process only READS — the
@@ -130,9 +176,10 @@ func NewReadOnly(ctx context.Context, cfg Config, logger *slog.Logger) (*Client,
 
 // Ping reports whether the bucket endpoint answers. The error may name the
 // host — callers that surface status to a client must not forward it.
+// A store that was down at NewDeferred is recovered here: the next
+// successful ensureBucket is what clears the footer, not a process restart.
 func (c *Client) Ping(ctx context.Context) error {
-	_, err := c.mc.BucketExists(ctx, c.bucket)
-	if err != nil {
+	if err := c.ensureBucket(ctx); err != nil {
 		return fmt.Errorf("storage: ping: %w", err)
 	}
 	return nil
