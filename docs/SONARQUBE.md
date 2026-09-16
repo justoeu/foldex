@@ -30,6 +30,19 @@ A chave `foldex` fica em `sonar-project.properties`. O token instalado vence em 
 
 O escopo inicial cobre `backend` e `web/src`. A extensão continua com seus testes existentes, mas não integra este primeiro escopo de análise. As exclusões de cobertura acompanham os helpers/boot excluídos do Makefile e do Vitest; os números podem diferir porque Go, Vitest e SonarQube medem cobertura de formas diferentes.
 
+## Escopo de maintainability
+
+**Código de teste não é analisado.** `sonar.exclusions` cobre `*_test.go`, `*.test.*`, `*.spec.*`, `web/src/test/**` e os helpers de teste do backend (`testdb`, `testsupport`, `authctxtest`, `spantest`). A edição Community conta code smells de teste no rating de maintainability sem separá-los dos de produto; a qualidade dos testes fica com os gates locais (cobertura ≥85/80, charter tests de complexidade, sweep de revisão). Os relatórios de cobertura continuam sendo lidos normalmente — eles referenciam arquivos de produção.
+
+**Duas regras estão desativadas nos Quality Profiles, com motivo documentado:**
+
+| Regra | Perfil | Motivo |
+| --- | --- | --- |
+| `typescript:S6819` (elemento nativo no lugar de `role`) | `justoeu (sem S1135)` | Pede `<dialog>`/`<select>`/`<option>` nativos; INV-121/137/156 decidiram overlays portaled, OTP posicional e listbox própria. |
+| `css:S7924` (contraste mínimo) | `justoeu (sem S7924)` (cópia do `Sonar way` vinculada ao projeto) | Dispara sobre tokens deliberados do tema (INV-142); reajustar cor por finding quebraria o design system. |
+
+Reativar qualquer uma das duas exige revisar a invariante correspondente primeiro — o finding não é um bug, é um desacordo documentado com a regra.
+
 ## Diagnóstico
 
 Abra **Actions → ci → SonarQube Quality Gate** e o painel do projeto. Um erro de autenticação pede conferir o secret e sua validade; um relatório ausente pede conferir os jobs de testes da mesma execução. Falha do Quality Gate pede examinar as condições no SonarQube, sem reduzir os gates para deixar o workflow verde.

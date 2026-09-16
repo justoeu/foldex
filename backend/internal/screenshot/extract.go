@@ -107,6 +107,33 @@ func (p *Pool) extractWithBrowser(ctx context.Context, browser *rod.Browser, pro
 	return md, extractErr
 }
 
+// requestBudget caps how many network requests a metadata extraction may
+// issue, failing any beyond the cap. The blocked-asset list is part of the
+// same guard: metadata has no use for images, media, fonts, stylesheets,
+// pings, manifests or text tracks.
+type requestBudget struct {
+	limit    int64
+	requests atomic.Int64
+	exceeded atomic.Bool
+}
+
+func (b *requestBudget) hijack(hijack *rod.Hijack) {
+	switch hijack.Request.Type() {
+	case proto.NetworkResourceTypeImage, proto.NetworkResourceTypeMedia,
+		proto.NetworkResourceTypeFont, proto.NetworkResourceTypeStylesheet,
+		proto.NetworkResourceTypePing, proto.NetworkResourceTypeManifest,
+		proto.NetworkResourceTypeTextTrack:
+		hijack.Response.Fail(proto.NetworkErrorReasonBlockedByClient)
+		return
+	}
+	if b.requests.Add(1) > b.limit {
+		b.exceeded.Store(true)
+		hijack.Response.Fail(proto.NetworkErrorReasonAborted)
+		return
+	}
+	hijack.ContinueRequest(&proto.FetchContinueRequest{})
+}
+
 func extractPage(ctx context.Context, browser *rod.Browser, contextID proto.BrowserBrowserContextID, pageURL string, requestLimit int64) (PageMetadata, error) {
 	contextBrowser := browser.Context(ctx)
 	contextBrowser.BrowserContextID = contextID
@@ -115,31 +142,15 @@ func extractPage(ctx context.Context, browser *rod.Browser, contextID proto.Brow
 		return PageMetadata{}, fmt.Errorf("%w: %w", errPageOpen, err)
 	}
 	defer uncacheRodPage(page)
-	var requests atomic.Int64
-	var budgetExceeded atomic.Bool
+	budget := requestBudget{limit: requestLimit}
 	router := page.HijackRequests()
-	if err := router.Add("*", "", func(hijack *rod.Hijack) {
-		switch hijack.Request.Type() {
-		case proto.NetworkResourceTypeImage, proto.NetworkResourceTypeMedia,
-			proto.NetworkResourceTypeFont, proto.NetworkResourceTypeStylesheet,
-			proto.NetworkResourceTypePing, proto.NetworkResourceTypeManifest,
-			proto.NetworkResourceTypeTextTrack:
-			hijack.Response.Fail(proto.NetworkErrorReasonBlockedByClient)
-			return
-		}
-		if requests.Add(1) > requestLimit {
-			budgetExceeded.Store(true)
-			hijack.Response.Fail(proto.NetworkErrorReasonAborted)
-			return
-		}
-		hijack.ContinueRequest(&proto.FetchContinueRequest{})
-	}); err != nil {
+	if err := router.Add("*", "", budget.hijack); err != nil {
 		return PageMetadata{}, fmt.Errorf("screenshot: enable request budget: %w", err)
 	}
 	go router.Run()
 	defer func() { _ = router.Stop() }()
 	if err := page.Navigate(pageURL); err != nil {
-		if budgetExceeded.Load() {
+		if budget.exceeded.Load() {
 			return PageMetadata{}, errors.Join(ErrEgressBlocked, errProxyBudgetExceeded)
 		}
 		return PageMetadata{}, fmt.Errorf("%w: %w", errPageOpen, err)
@@ -147,7 +158,7 @@ func extractPage(ctx context.Context, browser *rod.Browser, contextID proto.Brow
 	if err := page.WaitLoad(); err != nil {
 		slog.Debug("screenshot: WaitLoad interrupted, proceeding when possible", "reason", captureErrorReason(err))
 	}
-	if budgetExceeded.Load() {
+	if budget.exceeded.Load() {
 		return PageMetadata{}, errors.Join(ErrEgressBlocked, errProxyBudgetExceeded)
 	}
 

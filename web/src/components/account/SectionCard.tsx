@@ -139,7 +139,7 @@ export function SectionRow({
       is not. It is also what lets a test scope to one row instead of the card.
     */
     <div
-      className={`fx-sec-row${tone ? ` fx-sec-row-${tone}` : ''}`}
+      className={tone ? `fx-sec-row fx-sec-row-${tone}` : 'fx-sec-row'}
       role="group"
       aria-label={name}
     >

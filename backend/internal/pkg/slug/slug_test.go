@@ -173,7 +173,7 @@ func TestResolveUpdateMissingRowUsesDomainNotFound(t *testing.T) {
 		return scanErrorRow{err: pgx.ErrNoRows}
 	})
 
-	_, err := ResolveUpdate(t.Context(), scanner, authctx.UserID(7), "link", 42, nil, nil, "link")
+	_, err := ResolveUpdate(t.Context(), scanner, authctx.UserID(7), "link", 42, UpdateSources{Prefix: "link"})
 	if !errors.Is(err, domainerr.ErrNotFound) {
 		t.Fatalf("ResolveUpdate error = %v; want domainerr.ErrNotFound", err)
 	}

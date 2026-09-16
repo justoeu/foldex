@@ -47,7 +47,10 @@ func (s *Service) Restore(ctx context.Context, uid authctx.UserID, zr *zip.Reade
 	if result.ledger != nil {
 		return s.resumeSkipRestore(ctx, uid, zr, preflight.archive.digest, *result.ledger, start, prepared)
 	}
-	return s.finishRestoreFiles(ctx, uid, zr, mode, preflight.archive.digest, result, prepared, start)
+	return s.finishRestoreFiles(ctx, uid, zr, mode, restoreFinish{
+		digest: preflight.archive.digest,
+		start:  start,
+	}, result, prepared)
 }
 
 func preflightRestore(ctx context.Context, zr *zip.Reader) (backupArchiveInspection, error) {
@@ -207,18 +210,26 @@ func finalizeRestoreTransaction(ctx context.Context, tx pgx.Tx, uid authctx.User
 	return nil
 }
 
-func (s *Service) finishRestoreFiles(ctx context.Context, uid authctx.UserID, zr *zip.Reader, mode ConflictMode, digest [sha256.Size]byte, result restoreTransactionResult, prepared *preparedNoteMediaRestore, start time.Time) (RestoreReport, error) {
+// restoreFinish carries what completing a restore needs besides its inputs:
+// the archive digest that keys the ledger, and the start instant the reported
+// duration is measured from.
+type restoreFinish struct {
+	digest [sha256.Size]byte
+	start  time.Time
+}
+
+func (s *Service) finishRestoreFiles(ctx context.Context, uid authctx.UserID, zr *zip.Reader, mode ConflictMode, fin restoreFinish, result restoreTransactionResult, prepared *preparedNoteMediaRestore) (RestoreReport, error) {
 	files, err := s.applyFiles(ctx, uid, zr, result.mapping, mode, result.ownedKeys, prepared)
 	if err != nil {
 		return result.report, fmt.Errorf("backup: files: %w", err)
 	}
 	result.report.Files = files
 	if mode == ModeSkip {
-		if err := completeRestoreLedger(ctx, s.pool, uid, digest, mode, files); err != nil {
+		if err := completeRestoreLedger(ctx, s.pool, uid, fin.digest, mode, files); err != nil {
 			return result.report, fmt.Errorf("backup: %w", err)
 		}
 	}
-	result.report.DurationMs = time.Since(start).Milliseconds()
+	result.report.DurationMs = time.Since(fin.start).Milliseconds()
 	return result.report, nil
 }
 

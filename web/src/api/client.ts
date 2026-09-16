@@ -33,7 +33,7 @@ export const CSRF_HEADER = 'X-Foldex-CSRF'
  */
 export function readCsrfToken(): string {
   if (typeof document === 'undefined') return ''
-  const match = new RegExp(`(?:^|;\\s*)${CSRF_COOKIE}=([^;]*)`).exec(document.cookie)
+  const match = new RegExp(String.raw`(?:^|;\s*)${CSRF_COOKIE}=([^;]*)`).exec(document.cookie)
   return match ? decodeURIComponent(match[1]) : ''
 }
 

@@ -260,20 +260,12 @@ func (r *Repository) Update(ctx context.Context, uid authctx.UserID, id int64, i
 	}
 	if !b.Empty() {
 		if err := crudupdate.Exec(ctx, tx, crudupdate.Request{
-			Entity:   "link",
-			UID:      uid,
-			ID:       id,
-			IfMatch:  in.IfMatchUpdatedAt,
-			StaleErr: ErrStaleWrite,
-			Translate: func(err error) error {
-				if isURLUniqueViolation(err) {
-					return ErrURLTaken
-				}
-				if isSlugUniqueViolation(err) {
-					return ErrSlugTaken
-				}
-				return nil
-			},
+			Entity:    "link",
+			UID:       uid,
+			ID:        id,
+			IfMatch:   in.IfMatchUpdatedAt,
+			StaleErr:  ErrStaleWrite,
+			Translate: translateLinkWriteError,
 		}, b); err != nil {
 			return Link{}, err
 		}
@@ -295,6 +287,18 @@ func appendCheckResetCases(b *crudupdate.SetBuilder, resetCondition string) {
 	for _, col := range []string{"last_checked_at", "last_fingerprint", "last_change_detected_at", "change_seen_at", "last_check_error"} {
 		b.Raw(fmt.Sprintf("%s = CASE WHEN %s THEN NULL ELSE %s END", col, resetCondition, col))
 	}
+}
+
+// translateLinkWriteError maps the two unique violations a link write can hit
+// onto the semantic errors the handler layer answers with.
+func translateLinkWriteError(err error) error {
+	if isURLUniqueViolation(err) {
+		return ErrURLTaken
+	}
+	if isSlugUniqueViolation(err) {
+		return ErrSlugTaken
+	}
+	return nil
 }
 
 // applyLinkColumns writes the caller-supplied column assignments of a PATCH
@@ -330,7 +334,7 @@ func applyLinkColumns(ctx context.Context, tx pgx.Tx, uid authctx.UserID, id int
 	// the live title for that, so resolve it inside the same tx so we read
 	// the about-to-be-updated value if `in.Title` was also set.
 	if in.SlugSet {
-		newSlug, err := sharedslug.ResolveUpdate(ctx, tx, uid, "link", id, in.Slug, in.Title, "link")
+		newSlug, err := sharedslug.ResolveUpdate(ctx, tx, uid, "link", id, sharedslug.UpdateSources{Explicit: in.Slug, Title: in.Title, Prefix: "link"})
 		if err != nil {
 			return nil, err
 		}

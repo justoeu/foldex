@@ -1360,23 +1360,36 @@ func newSessionIssue(ttl SessionTTL) (sessionIssue, error) {
 func issueSessionTx(ctx context.Context, tx pgx.Tx, uid authctx.UserID, issue sessionIssue,
 	ip, ua string) (int64, error) {
 	ua = truncate(ua, 512)
-	sid, err := insertSessionTx(ctx, tx, uid, issue, uuid.NewString(), nil, nullIP(ip), &ua)
+	sid, err := insertSessionTx(ctx, tx, uid, issue, sessionOrigin{
+		familyID: uuid.NewString(),
+		ip:       nullIP(ip),
+		ua:       &ua,
+	})
 	if err != nil {
 		return 0, fmt.Errorf("issue session: %w", err)
 	}
 	return sid, nil
 }
 
+// sessionOrigin carries how and when a session row is born: which family it
+// belongs to, an inherited birth time (grace siblings), and the provenance
+// pair. issueSessionTx fills it fresh; rotation inherits the family's.
+type sessionOrigin struct {
+	familyID  string
+	createdAt *time.Time
+	ip, ua    *string
+}
+
 func insertSessionTx(ctx context.Context, tx pgx.Tx, uid authctx.UserID, issue sessionIssue,
-	familyID string, createdAt *time.Time, ip, ua *string) (int64, error) {
+	origin sessionOrigin) (int64, error) {
 	var sid int64
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO session (user_id, family_id, access_token_hash, access_expires_at,
 		                     refresh_token_hash, refresh_expires_at, csrf_token_hash,
 		                     created_at, ip, user_agent)
 		VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, COALESCE($8::timestamptz, now()), $9, $10)
-		RETURNING id`, int64(uid), familyID, issue.hashes.access, issue.tokens.AccessExpiry,
-		issue.hashes.refresh, issue.tokens.RefreshExpiry, issue.hashes.csrf, createdAt, ip, ua).Scan(&sid); err != nil {
+		RETURNING id`, int64(uid), origin.familyID, issue.hashes.access, issue.tokens.AccessExpiry,
+		issue.hashes.refresh, issue.tokens.RefreshExpiry, issue.hashes.csrf, origin.createdAt, origin.ip, origin.ua).Scan(&sid); err != nil {
 		return 0, err
 	}
 	return sid, nil

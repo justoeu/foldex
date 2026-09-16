@@ -349,12 +349,21 @@ func insertRestoreTagRows(ctx context.Context, tx pgx.Tx, rows [][]any) (int64, 
 	return ct.RowsAffected(), nil
 }
 
+// restoreClickAccounting is where restored click rows are tallied. countSkips
+// decides whether unmapped entities count as skips: the staged path counts
+// them, the ledger-resume path already reported them once.
+type restoreClickAccounting struct {
+	inserted   *Counts
+	skipped    *Counts
+	countSkips bool
+}
+
 // copyPolymorphicClicks bulk-inserts click_log for mapped links and notes.
-func copyPolymorphicClicks(ctx context.Context, tx pgx.Tx, uid authctx.UserID, m idMapping, snap *Snapshot, inserted, skipped *Counts, countSkips bool) error {
+func copyPolymorphicClicks(ctx context.Context, tx pgx.Tx, uid authctx.UserID, m idMapping, snap *Snapshot, acct restoreClickAccounting) error {
 	if len(snap.ClickLogs)+len(snap.NoteClicks) == 0 {
 		return nil
 	}
-	rows := mappedRestoreClickRows(uid, m, snap, skipped, countSkips)
+	rows := mappedRestoreClickRows(uid, m, snap, acct.skipped, acct.countSkips)
 	if len(rows) == 0 {
 		return nil
 	}
@@ -365,8 +374,8 @@ func copyPolymorphicClicks(ctx context.Context, tx pgx.Tx, uid authctx.UserID, m
 	); err != nil {
 		return fmt.Errorf("copy click_log: %w", err)
 	}
-	if inserted != nil {
-		inserted.ClickLogs += int64(len(rows))
+	if acct.inserted != nil {
+		acct.inserted.ClickLogs += int64(len(rows))
 	}
 	if err := clicklog.RefreshOwner(ctx, tx, int64(uid)); err != nil {
 		return err
