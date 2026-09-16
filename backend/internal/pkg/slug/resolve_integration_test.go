@@ -27,7 +27,7 @@ func TestResolveUpdate_FallbackTitleIsOwnerScoped(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = slug.ResolveUpdate(ctx, pool, owner, "link", foreign.ID, nil, nil, "link")
+	_, err = slug.ResolveUpdate(ctx, pool, owner, "link", foreign.ID, slug.UpdateSources{Prefix: "link"})
 	require.ErrorIs(t, err, domainerr.ErrNotFound)
 
 	_, err = repo.Update(ctx, owner, foreign.ID, links.UpdateInput{SlugSet: true})

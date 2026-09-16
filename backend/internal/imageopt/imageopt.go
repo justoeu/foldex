@@ -19,7 +19,6 @@ import (
 	// Register decoders so image.Decode dispatches by sniffed format.
 	_ "golang.org/x/image/webp"
 	_ "image/gif"
-	_ "image/jpeg"
 	_ "image/png"
 )
 

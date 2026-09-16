@@ -278,7 +278,7 @@ function AreaChart({ data, width, height, t }: Readonly<{ data: DailyPoint[]; wi
         {yTicks.map((tick, i) => {
           const y = py(tick)
           return (
-            <g key={i}>
+            <g key={`ytick-${i}`}>
               <line x1={pad.l} y1={y} x2={pad.l + w} y2={y} stroke="var(--fx-border-2)" strokeDasharray="2 3" />
               <text x={pad.l - 6} y={y + 3} textAnchor="end" className="fx-chart-tick">
                 {tick}
@@ -301,7 +301,7 @@ function AreaChart({ data, width, height, t }: Readonly<{ data: DailyPoint[]; wi
             t('stats.chart_today'),
           ]
           return (
-            <text key={idx} x={x} y={height - 6} textAnchor="middle" className="fx-chart-tick">
+            <text key={`xlabel-${idx}`} x={x} y={height - 6} textAnchor="middle" className="fx-chart-tick">
               {labels[idx]}
             </text>
           )
@@ -342,7 +342,7 @@ function AreaChart({ data, width, height, t }: Readonly<{ data: DailyPoint[]; wi
             so the cursor doesn't fall between buckets. */}
         {data.map((_, i) => (
           <rect
-            key={i}
+            key={`zone-${i}`}
             x={px(i) - step / 2}
             y={pad.t}
             width={step}

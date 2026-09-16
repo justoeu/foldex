@@ -11,8 +11,6 @@
 //   2. The runtime surface here is small: precache build assets, runtime
 //      NetworkFirst on /api/files/*, and the Web Push event listeners.
 
-export {} // keep this file a module for the lib reference above
-
 declare const self: ServiceWorkerGlobalScope & {
   __WB_MANIFEST: Array<{ url: string; revision: string | null }>
 }
@@ -23,7 +21,9 @@ const PRECACHE_STATE_CACHE = 'foldex-precache-state-v1'
 const PRECACHE_STATE_KEY = new URL('/__foldex_precache_state__', self.location.origin).href
 const FILES_CACHE = 'foldex-files-v1'
 // LRU-ish bound for /api/files/* entries. Cache.keys() returns insertion
-// order in Chromium; drop the oldest until under the cap.
+// order in Chromium; drop the oldest until under the cap. This export also
+// keeps sw.ts a module — without any export the `declare const self` below
+// would collide with lib.dom's global.
 export const FILES_CACHE_MAX_ENTRIES = 200
 
 // Compute the precache key once per build — revisions in `__WB_MANIFEST`

@@ -140,7 +140,7 @@ export function BackupRestoreDialog({ file, onClose, onRestored }: Props) {
 
                 {validation.errors.length > 0 && (
                   <div style={{ background: 'rgba(244,63,94,0.08)', borderRadius: 8, padding: 10, fontSize: 12, color: 'var(--fx-danger)' }}>
-                    {validation.errors.map((e, i) => <div key={i}>✗ {e}</div>)}
+                    {validation.errors.map((e, i) => <div key={`${e}-${i}`}>✗ {e}</div>)}
                   </div>
                 )}
 
@@ -211,7 +211,7 @@ function ValidationSummary({ v, t }: Readonly<{ v: BackupValidation; t: TFunctio
       <Row label={t('backup.summary_conflicts')} value={t('backup.summary_conflicts_value', { links: v.conflicts.links, tags: v.conflicts.tags })} />
       {v.warnings.length > 0 && (
         <div style={{ background: 'rgba(245,158,11,0.08)', borderRadius: 8, padding: 10, fontSize: 12, color: 'var(--fx-ink-3)' }}>
-          {v.warnings.map((w, i) => <div key={i}>⚠ {w}</div>)}
+          {v.warnings.map((w, i) => <div key={`${w}-${i}`}>⚠ {w}</div>)}
         </div>
       )}
     </div>
@@ -237,7 +237,7 @@ function RestoreReportBlock({ r, t }: Readonly<{ r: RestoreReport; t: TFunction 
       <Row label={t('backup.result_duration')} value={t('backup.report_duration_value', { value: (r.duration_ms / 1000).toFixed(2) })} />
       {r.warnings.length > 0 && (
         <div style={{ background: 'rgba(245,158,11,0.08)', borderRadius: 8, padding: 10, fontSize: 12, color: 'var(--fx-ink-3)' }}>
-          {r.warnings.map((w, i) => <div key={i}>⚠ {w}</div>)}
+          {r.warnings.map((w, i) => <div key={`${w}-${i}`}>⚠ {w}</div>)}
         </div>
       )}
     </div>

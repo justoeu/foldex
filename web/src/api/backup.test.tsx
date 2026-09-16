@@ -455,6 +455,13 @@ describe('countsFromHeaders', () => {
       click_logs: 8, files: 0, file_bytes: 0,
     })
   })
+
+  it('ignores non-string header values instead of coercing them', () => {
+    // Header values are strings by definition; a non-string in the plain
+    // record arm means the caller passed something malformed, and coercing
+    // it would turn an object into "[object Object]".
+    expect(countsFromHeaders({ 'X-Foldex-Backup-Counts-Links': 5 })).toBeNull()
+  })
 })
 
 describe('validateBackup', () => {

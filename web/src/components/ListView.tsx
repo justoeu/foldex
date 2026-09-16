@@ -8,7 +8,7 @@ import { goHref, useDeleteLink } from '../api/links'
 import { goNoteHref, useDeleteNote } from '../api/notes'
 import { primaryColor } from '../lib/tagColor'
 import { entryAnchor } from '../lib/entryAnchor'
-import { mergeAlphaCells } from '../lib/mergeAlphaCells'
+import { mergeAlphaCells, type AlphaCell } from '../lib/mergeAlphaCells'
 import type { Entry, Folder, Link } from '../api/types'
 import type { Sort } from '../lib/viewPrefs'
 type NoteEntry = Extract<Entry, { kind: 'note' }>
@@ -22,6 +22,17 @@ type Props = Readonly<{
   onOpenFolder: (id: number) => void
   onEditFolder: (f: Folder) => void
 }>
+
+type Row =
+  | { kind: 'folder'; folder: Folder }
+  | { kind: 'link'; link: Link }
+  | { kind: 'note'; note: NoteEntry }
+
+function alphaCellRow(c: AlphaCell): Row {
+  if (c.kind === 'folder') return { kind: 'folder', folder: c.folder }
+  if (c.kind === 'link') return { kind: 'link', link: c.entry }
+  return { kind: 'note', note: c.entry }
+}
 
 // Table-style list view. Folders rendered as rows alongside links and notes.
 // Density picker doesn't apply here — the list is one column by design.
@@ -68,19 +79,9 @@ export function ListView({ folders, entries, sort, onEdit, onEditNote, onOpenFol
 
   const isAlpha = sort === 'alpha' || sort === 'alpha_desc'
 
-  type Row =
-    | { kind: 'folder'; folder: Folder }
-    | { kind: 'link'; link: Link }
-    | { kind: 'note'; note: NoteEntry }
   const rows: Row[] = useMemo(() => {
     if (isAlpha) {
-      return mergeAlphaCells(folders, entries, sort === 'alpha' ? 1 : -1).map((c) =>
-        c.kind === 'folder'
-          ? { kind: 'folder' as const, folder: c.folder }
-          : c.kind === 'link'
-            ? { kind: 'link' as const, link: c.entry }
-            : { kind: 'note' as const, note: c.entry },
-      )
+      return mergeAlphaCells(folders, entries, sort === 'alpha' ? 1 : -1).map(alphaCellRow)
     }
     return [
       ...folders.map<Row>((f) => ({ kind: 'folder', folder: f })),

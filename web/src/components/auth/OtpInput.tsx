@@ -131,7 +131,7 @@ export function OtpInput({ value, onChange, onComplete, disabled, autoFocus, inv
     >
       {digits.map((d, i) => (
         <input
-          key={i}
+          key={`digit-${i}`}
           ref={(el) => {
             refs.current[i] = el
           }}

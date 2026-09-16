@@ -280,7 +280,7 @@ func applyNoteColumns(ctx context.Context, tx pgx.Tx, uid authctx.UserID, id int
 		b.Set("folder_id", in.FolderID)
 	}
 	if in.SlugSet {
-		newSlug, err := slug.ResolveUpdate(ctx, tx, uid, "note", id, in.Slug, in.Title, "note")
+		newSlug, err := slug.ResolveUpdate(ctx, tx, uid, "note", id, slug.UpdateSources{Explicit: in.Slug, Title: in.Title, Prefix: "note"})
 		if err != nil {
 			return nil, err
 		}

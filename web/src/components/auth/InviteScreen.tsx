@@ -32,9 +32,9 @@ export function InviteScreen({ token, onGiveUp }: Readonly<{ token: string; onGi
   const [confirm, setConfirm] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
-  const [oauthBusy, setOAuthBusy] = useState(false)
+  const [googleBusy, setGoogleBusy] = useState(false)
   const submitting = useRef(false)
-  const oauthBusyRef = useRef(false)
+  const googleBusyRef = useRef(false)
   const tokenRef = useRef(token)
   const acceptAbortRef = useRef<AbortController | null>(null)
   tokenRef.current = token
@@ -44,9 +44,9 @@ export function InviteScreen({ token, onGiveUp }: Readonly<{ token: string; onGi
     acceptAbortRef.current?.abort()
     acceptAbortRef.current = null
     submitting.current = false
-    oauthBusyRef.current = false
+    googleBusyRef.current = false
     setBusy(false)
-    setOAuthBusy(false)
+    setGoogleBusy(false)
     setName('')
     setPassword('')
     setConfirm('')
@@ -122,7 +122,7 @@ export function InviteScreen({ token, onGiveUp }: Readonly<{ token: string; onGi
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault()
-    if (submitting.current || oauthBusyRef.current) return
+    if (submitting.current || googleBusyRef.current) return
     if (password !== confirm) {
       setError(t('auth_errors.password_mismatch'))
       return
@@ -165,14 +165,14 @@ export function InviteScreen({ token, onGiveUp }: Readonly<{ token: string; onGi
               invite={token}
               disabled={busy}
               onBeforeStart={() => {
-                if (submitting.current || oauthBusyRef.current) return false
-                oauthBusyRef.current = true
-                setOAuthBusy(true)
+                if (submitting.current || googleBusyRef.current) return false
+                googleBusyRef.current = true
+                setGoogleBusy(true)
                 return true
               }}
               onBusyChange={(pending) => {
-                oauthBusyRef.current = pending
-                setOAuthBusy(pending)
+                googleBusyRef.current = pending
+                setGoogleBusy(pending)
               }}
             />
             <AuthDivider />
@@ -230,7 +230,7 @@ export function InviteScreen({ token, onGiveUp }: Readonly<{ token: string; onGi
           />
         </AuthField>
 
-        <AuthSubmit busy={busy} disabled={oauthBusy || (password.length > 0 && password.length < passwordGateLen(minLen))}>
+        <AuthSubmit busy={busy} disabled={googleBusy || (password.length > 0 && password.length < passwordGateLen(minLen))}>
           {t('auth_invite.submit')}
         </AuthSubmit>
       </form>

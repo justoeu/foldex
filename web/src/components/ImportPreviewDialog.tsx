@@ -185,7 +185,7 @@ function WarningList({ warnings, t }: Readonly<{ warnings: string[]; t: TFunctio
       style={{ listStyle: 'none', margin: 0, background: 'rgba(245,158,11,0.08)', borderRadius: 8, padding: 10, fontSize: 12, color: 'var(--fx-ink-3)', maxHeight: 200, overflowY: 'auto' }}
     >
       {warnings.slice(0, MAX_RENDERED_WARNINGS).map((w, i) => (
-        <li key={i}>⚠ {w}</li>
+        <li key={`${w}-${i}`}>⚠ {w}</li>
       ))}
       {hidden > 0 && <li>{t('import.warnings_more', { count: hidden })}</li>}
     </ul>

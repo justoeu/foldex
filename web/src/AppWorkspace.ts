@@ -19,7 +19,7 @@ function isGridDensity(value: unknown): value is 3 | 5 | 8 {
 }
 
 export function useAppWorkspaceController() {
-  const [view, _setView] = useState<AppView>('home')
+  const [view, setViewState] = useState<AppView>('home')
   // Which hub section the settings page should land on, plus a counter so
   // clicking "Profile" twice remounts SettingsPage back on the section even
   // when the view is already 'settings' (the page owns its section state).
@@ -51,7 +51,7 @@ export function useAppWorkspaceController() {
   // hub's remount key falls back to 'overview'.
   const setView = useCallback((v: AppView) => {
     if (v === 'settings') setSettingsJump(null)
-    _setView(v)
+    setViewState(v)
   }, [])
   const toggleTag = useCallback((id: number) => {
     setSelectedTags((selected) => (

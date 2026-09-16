@@ -300,7 +300,12 @@ func (r *Repository) graceSiblingTx(ctx context.Context, tx pgx.Tx, familyID str
 	if err != nil {
 		return RotateResult{}, err
 	}
-	siblingID, err := insertSessionTx(ctx, tx, authctx.UserID(uid), issue, familyID, &bornAt, ip, ua)
+	siblingID, err := insertSessionTx(ctx, tx, authctx.UserID(uid), issue, sessionOrigin{
+		familyID:  familyID,
+		createdAt: &bornAt,
+		ip:        ip,
+		ua:        ua,
+	})
 	if err != nil {
 		return RotateResult{}, fmt.Errorf("rotate grace sibling: %w", err)
 	}

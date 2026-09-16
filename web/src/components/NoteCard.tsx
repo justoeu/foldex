@@ -24,6 +24,13 @@ function densityFor(note: NoteEntry): 'tall' | 'medium' | 'short' {
   return 'short'
 }
 
+// A note drag wins over a link drag when both raw values somehow arrive.
+function dropMergeSource(noteRaw: string, linkRaw: string): MergeSource | null {
+  if (noteRaw) return { kind: 'note', id: Number(noteRaw) }
+  if (linkRaw) return { kind: 'link', id: Number(linkRaw) }
+  return null
+}
+
 export const NoteCard = memo(NoteCardImpl)
 NoteCard.displayName = 'NoteCard'
 
@@ -53,13 +60,10 @@ function NoteCardImpl({ note, onEdit, onMergeWith, onDelete, onPin, onOpen }: Pr
         e.dataTransfer.dropEffect = 'move'
       }}
       onDrop={(e) => {
-        const noteRaw = e.dataTransfer.getData('application/x-foldex-note')
-        const linkRaw = e.dataTransfer.getData('application/x-foldex-link')
-        const source: MergeSource | null = noteRaw
-          ? { kind: 'note', id: Number(noteRaw) }
-          : linkRaw
-            ? { kind: 'link', id: Number(linkRaw) }
-            : null
+        const source = dropMergeSource(
+          e.dataTransfer.getData('application/x-foldex-note'),
+          e.dataTransfer.getData('application/x-foldex-link'),
+        )
         if (!source?.id) return
         if (source.kind === 'note' && source.id === note.id) return
         e.preventDefault()

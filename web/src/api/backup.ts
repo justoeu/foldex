@@ -336,7 +336,7 @@ function headerGet(headers: HeaderSource | undefined, name: string): string | un
   }
   const lower = name.toLowerCase()
   for (const [k, v] of Object.entries(headers)) {
-    if (k.toLowerCase() === lower && v != null && v !== '') return String(v)
+    if (k.toLowerCase() === lower && typeof v === 'string' && v !== '') return v
   }
   return undefined
 }

@@ -162,7 +162,7 @@ func TestExtractedHelpers_WalkEachTxStep(t *testing.T) {
 	walk(func(tx pgx.Tx) { _ = guardLastAdminTx(ctx, tx, 1) })
 	issue := sessionIssue{hashes: issuedSessionHashes{access: hash, refresh: hash, csrf: hash}}
 	walk(func(tx pgx.Tx) { _, _ = issueSessionTx(ctx, tx, 1, issue, "127.0.0.1", "ua") })
-	walk(func(tx pgx.Tx) { _, _ = insertSessionTx(ctx, tx, 1, issue, "fam", nil, nil, nil) })
+	walk(func(tx pgx.Tx) { _, _ = insertSessionTx(ctx, tx, 1, issue, sessionOrigin{familyID: "fam"}) })
 	walk(func(tx pgx.Tx) { _ = requireLiveSessionTx(ctx, tx, 1, 1) })
 }
 
