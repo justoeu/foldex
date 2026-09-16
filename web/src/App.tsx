@@ -24,7 +24,7 @@ function entryParams(
 }
 
 function folderParams(folderId: number | null, unlockToken: string | undefined): FolderListParams {
-  return { scope: folderId === null ? 'root' : folderId, unlockToken }
+  return { scope: folderId ?? 'root', unlockToken }
 }
 
 function foldersOrEmpty(folders: Folder[] | undefined): Folder[] {

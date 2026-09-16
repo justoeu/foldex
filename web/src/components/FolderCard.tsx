@@ -40,7 +40,7 @@ const MIME_FOLDER = 'application/x-foldex-folder'
 
 export function parseDropId(raw: string): number | null {
   const id = Number(raw)
-  return id ? id : null
+  return id || null
 }
 
 function dropKind(types: ReadonlyArray<string>): 'link' | 'note' | 'folder' | null {
@@ -140,7 +140,7 @@ function FolderCardImpl({ folder, onOpen, onEdit, onDropLink, onDropNote, onDrop
         >
           <div className="fx-folder-tiles">
             {tiles.map((tile, i) => (
-              <FolderTile key={i} tile={tile} overflow={i === 3 ? overflow : 0} />
+              <FolderTile key={`tile-${i}`} tile={tile} overflow={i === 3 ? overflow : 0} />
             ))}
           </div>
           {total === 0 && (

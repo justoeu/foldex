@@ -368,7 +368,7 @@ function DensityIcon({ cols }: Readonly<{ cols: 3 | 5 | 8 }>) {
       <rect x="1" y="2.5" width="18" height="15" rx="3" fill="none" stroke="currentColor" strokeWidth="1.4" />
       {Array.from({ length: cols }, (_, i) => (
         <rect
-          key={i}
+          key={`bar-${i}`}
           x={pad + i * (barW + gap)}
           y={5}
           width={barW}

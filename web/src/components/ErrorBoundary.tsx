@@ -23,7 +23,7 @@ export class ErrorBoundary extends Component<Props, State> {
     console.error('foldex: uncaught render error', error, info.componentStack)
   }
 
-  private handleReload = () => {
+  private readonly handleReload = () => {
     window.location.reload()
   }
 

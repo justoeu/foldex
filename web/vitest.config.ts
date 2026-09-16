@@ -3,6 +3,11 @@ import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 
 export default defineConfig({
+  define: {
+    // Mirror vite.config.ts's injection so src/version.ts can consume the
+    // build date as a plain identifier — the test fallback is 'dev'.
+    __FOLDEX_BUILD_DATE__: JSON.stringify('dev'),
+  },
   plugins: [react()],
   test: {
     environment: 'jsdom',

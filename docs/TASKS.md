@@ -1206,3 +1206,34 @@ configuração; a regra tem que valer sozinha*.
 - **`apple-mobile-web-app-capable` está deprecado no Chrome.** O manifesto continua
   `display: standalone`; o HTML agora declara também `mobile-web-app-capable`. O prefixo
   `apple-` fica porque o Safari ainda não honra todos os campos do manifest.
+
+### Log de conclusão — Zerar Maintainability do SonarQube (134 → 0)
+
+- **Metade dos 134 itens era classificação, não produto.** 58 viviam em arquivos de
+  teste (`*_test.go`, `web/src/test/server.ts`, `*.test.tsx`) — analisados porque
+  `sonar.tests`/`sonar.test.inclusions` os mantinham no escopo — e `web/src/test/**`
+  nem isso: o harness de mock era contado como código de produção. O Sonar Community
+  não separa smells de teste do rating de maintainability, então o número nunca
+  desceria sem decisão de escopo. Testes saíram da análise (`sonar.exclusions`);
+  a qualidade deles continua nos gates locais (cobertura ≥85/80, charter tests,
+  sweep MMH), que medem mais do que o Sonar mediria.
+- **`typescript:S6819` (30) e `css:S7924` (13) foram desativados nos Quality Profiles,
+  não suprimidos por arquivo.** O S6819 pede `<dialog>`/`<select>` nativos no lugar de
+  `role="dialog"`/`"listbox"` — exatamente o que INV-121/137/156 decidiram NÃO usar
+  (Esc em overlay portaled para `<body>`, OTP de seis inputs posicionais, listbox com
+  navegação própria). O S7924 de contraste avalia tokens deliberados (INV-142).
+  Desativar no perfil é a decisão honesta: `NOSONAR` linha a linha mentiria sobre o
+  escopo. Perfis: `justoeu (sem S1135)` ganhou a remoção do S6819; `css` ganhou a
+  cópia `justoeu (sem S7924)` vinculada ao projeto.
+- **33 correções reais em produção.** go:S107 (6 funções de 8 parâmetros → structs
+  de contexto: `sessionOrigin`, `EmailOTPMint`, `restoreFinish`,
+  `restoreClickAccounting`, `slug.UpdateSources`), go:S3776 restantes (2:
+  `links.Update` extraindo `translateLinkWriteError`, `screenshot.extractPage`
+  extraindo `requestBudget`), ternários aninhados (ListView/NoteCard → helpers
+  com early-return), array-index keys (11 listas → chaves compostas; OtpInput
+  ganhou `digit-${i}` porque lá a posição É a identidade), e 10 singles
+  (`String.raw`, `??`, readonly, `export {}` redundante no sw, bloco CSS vazio,
+  `typeof` no build date que migrou para `define` do vitest, `Number(raw)||null`).
+- **Gates:** backend fmt/vet/coverage 88.6% ✓; frontend typecheck/coverage
+  93.25%/88.87% ✓; guards CSS ✓; `gocognit -over 15` limpo em `internal` (só
+  `cmd/rustfs-bootstrap` a 17, fora da análise Sonar e do charter S3776).

@@ -698,7 +698,7 @@ function TimesPicker({
       <span className="fx-bkp-control-label">{t('admin.backup_schedule_times_label')}</span>
       <div className="fx-bkp-times">
         {times.map((v, i) => (
-          <span className="fx-bkp-time" key={i}>
+          <span className="fx-bkp-time" key={`time-${i}`}>
             <input
               className="fx-bkp-input"
               type="time"

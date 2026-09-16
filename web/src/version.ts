@@ -4,9 +4,9 @@ declare const __FOLDEX_BUILD_DATE__: string
 
 export const VERSION: string = pkg.version
 
-// Vite injects the production date; tests and development use a stable fallback.
-export const BUILD_DATE: string =
-  typeof __FOLDEX_BUILD_DATE__ !== 'undefined' ? __FOLDEX_BUILD_DATE__ : 'dev'
+// Vite injects the production date (and vitest injects the 'dev' fallback
+// declared alongside its config), so the constant needs no runtime guard.
+export const BUILD_DATE: string = __FOLDEX_BUILD_DATE__
 
 /**
  * ISO `YYYY-MM-DD` → `DD/MM/YYYY`. Parsed with explicit Y/M/D rather than

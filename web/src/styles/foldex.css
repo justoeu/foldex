@@ -1280,8 +1280,6 @@ button.fx-localemenu-item { border-radius: 6px; font-size: 13px; color: var(--fx
   pointer-events: none;
 }
 
-.fx-openbtn-legacy-removed {}
-
 /* ─── cmdk overlay ──────────────────────────────────────────────────── */
 
 .fx-overlay {

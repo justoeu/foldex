@@ -853,7 +853,7 @@ func TestTwoFactorRepository_SurfacesDatabaseErrors(t *testing.T) {
 	// provokes is a branch that first runs in production.
 	t.Run("email factor", func(t *testing.T) {
 		assert.Error(t, h.repo.StartEmailFactorEnrollment(ctx, uid, 0, 0,
-			[]byte("hash"), time.Minute, time.Minute, auth.MailDraft{}))
+			auth.EmailOTPMint{Digest: []byte("hash"), TTL: time.Minute, Cooldown: time.Minute}))
 		_, _, err := h.repo.CompleteEmailFactorEnrollment(ctx, auth.EnrollmentComplete{
 			UID: uid, TokenVersion: 0, RecoveryHashes: [][]byte{[]byte("h")},
 			Session: auth.LiveSession{ID: 0},
@@ -861,7 +861,7 @@ func TestTwoFactorRepository_SurfacesDatabaseErrors(t *testing.T) {
 		assert.Error(t, err)
 		assert.Error(t, h.repo.DisableEmailFactor(ctx, uid, 1, 0, auth.SecondFactorProof{}))
 		assert.Error(t, h.repo.CreateStepUpEmailOTP(ctx, uid, 1, 0,
-			[]byte("hash"), time.Minute, time.Minute, auth.MailDraft{}))
+			auth.EmailOTPMint{Digest: []byte("hash"), TTL: time.Minute, Cooldown: time.Minute}))
 		_, err = h.repo.StepUpEmailOTPIsLive(ctx, uid, []byte("hash"))
 		assert.Error(t, err)
 		_, err = h.repo.RecoveryCodeIsLive(ctx, uid, []byte("hash"))

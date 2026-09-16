@@ -65,9 +65,12 @@ func (h *Handler) StartEmailFactor(w http.ResponseWriter, r *http.Request) {
 	// The digest is bound to (user, purpose) with no challenge id: enrollment
 	// from Settings has no challenge, and binding to one would make the
 	// pre-auth and session paths need different digests for the same code.
-	err = h.repo.StartEmailFactorEnrollment(r.Context(), uid, tokenVersion, sessionID,
-		h.codeMAC.EmailOTPDigest(uid, OTPPurposeEnrollEmail2FA, nil, code),
-		ttl, h.otpCooldown(r.Context()), draft)
+	err = h.repo.StartEmailFactorEnrollment(r.Context(), uid, tokenVersion, sessionID, EmailOTPMint{
+		Digest:   h.codeMAC.EmailOTPDigest(uid, OTPPurposeEnrollEmail2FA, nil, code),
+		TTL:      ttl,
+		Cooldown: h.otpCooldown(r.Context()),
+		Draft:    draft,
+	})
 	switch {
 	case errors.Is(err, ErrFactorAlreadyConfirmed):
 		httperr.Write(w, httperr.New(http.StatusConflict, "email_factor_already_enabled",
@@ -267,9 +270,12 @@ func (h *Handler) SendStepUpEmailOTP(w http.ResponseWriter, r *http.Request) {
 	draft := MailDraft{Locale: localeFor(user.Locale, r), Build: func(string) mailer.Envelope {
 		return mailer.StepUpCodeMessage(email, code, int(ttl.Minutes()))
 	}}
-	err = h.repo.CreateStepUpEmailOTP(r.Context(), p.UserID, p.SessionID, user.TokenVersion,
-		h.codeMAC.EmailOTPDigest(p.UserID, OTPPurposeStepUp2FA, nil, code),
-		ttl, h.otpCooldown(r.Context()), draft)
+	err = h.repo.CreateStepUpEmailOTP(r.Context(), p.UserID, p.SessionID, user.TokenVersion, EmailOTPMint{
+		Digest:   h.codeMAC.EmailOTPDigest(p.UserID, OTPPurposeStepUp2FA, nil, code),
+		TTL:      ttl,
+		Cooldown: h.otpCooldown(r.Context()),
+		Draft:    draft,
+	})
 	switch {
 	case err == nil, errors.Is(err, ErrTooSoon):
 		// The cooldown answers 202 like a success: a code is already in flight,

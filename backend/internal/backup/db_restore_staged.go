@@ -79,7 +79,7 @@ func restoreSkipStaged(ctx context.Context, tx pgx.Tx, uid authctx.UserID, snap 
 	if err := attachPolymorphicTags(ctx, tx, mapping, snap, &inserted, &skipped, true); err != nil {
 		return inserted, skipped, mapping, err
 	}
-	if err := copyPolymorphicClicks(ctx, tx, uid, mapping, snap, &inserted, &skipped, true); err != nil {
+	if err := copyPolymorphicClicks(ctx, tx, uid, mapping, snap, restoreClickAccounting{inserted: &inserted, skipped: &skipped, countSkips: true}); err != nil {
 		return inserted, skipped, mapping, err
 	}
 	return inserted, skipped, mapping, nil
@@ -170,7 +170,7 @@ func insertDuplicateRestore(ctx context.Context, tx pgx.Tx, uid authctx.UserID, 
 	if err := attachPolymorphicTags(ctx, tx, mapping, snap, &inserted, nil, false); err != nil {
 		return inserted, warnings, mapping, err
 	}
-	if err := copyPolymorphicClicks(ctx, tx, uid, mapping, snap, &inserted, nil, false); err != nil {
+	if err := copyPolymorphicClicks(ctx, tx, uid, mapping, snap, restoreClickAccounting{inserted: &inserted}); err != nil {
 		return inserted, warnings, mapping, err
 	}
 	return inserted, warnings, mapping, nil

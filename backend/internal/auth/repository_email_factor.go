@@ -29,6 +29,16 @@ var ErrFactorAlreadyConfirmed = errors.New("auth: factor already confirmed")
 // look like a credential-set mutation on one twin and a 409 on the other.
 var ErrNoPendingFactor = errors.New("auth: no pending factor enrollment")
 
+// EmailOTPMint is one code to persist and mail: its digest, both lifetime
+// knobs, and the already-built draft. Enrollment and step-up mint the same
+// shape; only the purpose and the guards around the write differ.
+type EmailOTPMint struct {
+	Digest   []byte
+	TTL      time.Duration
+	Cooldown time.Duration
+	Draft    MailDraft
+}
+
 // StartEmailFactorEnrollment opens a pending e-mail factor and mails its code.
 //
 // Row, code and message all commit together. Splitting them would produce the
@@ -36,8 +46,7 @@ var ErrNoPendingFactor = errors.New("auth: no pending factor enrollment")
 // user can ever supply, or a code charged against the cooldown for a message
 // that was never queued.
 func (r *Repository) StartEmailFactorEnrollment(ctx context.Context, uid authctx.UserID,
-	tokenVersion int, sessionID int64, codeHash []byte, ttl, cooldown time.Duration,
-	draft MailDraft) error {
+	tokenVersion int, sessionID int64, mint EmailOTPMint) error {
 
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -69,7 +78,7 @@ func (r *Repository) StartEmailFactorEnrollment(ctx context.Context, uid authctx
 		SELECT EXISTS (
 			SELECT 1 FROM email_otp
 			WHERE user_id = $1 AND purpose = $2 AND created_at >= now() - $3::interval
-		)`, int64(uid), OTPPurposeEnrollEmail2FA, intervalArg(cooldown)).Scan(&recent); err != nil {
+		)`, int64(uid), OTPPurposeEnrollEmail2FA, intervalArg(mint.Cooldown)).Scan(&recent); err != nil {
 		return fmt.Errorf("email factor cooldown: %w", err)
 	}
 	if recent {
@@ -108,10 +117,10 @@ func (r *Repository) StartEmailFactorEnrollment(ctx context.Context, uid authctx
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO email_otp (user_id, purpose, code_hash, expires_at)
 		VALUES ($1, $2, $3, now() + $4::interval)`,
-		int64(uid), OTPPurposeEnrollEmail2FA, codeHash, intervalArg(ttl)); err != nil {
+		int64(uid), OTPPurposeEnrollEmail2FA, mint.Digest, intervalArg(mint.TTL)); err != nil {
 		return fmt.Errorf("insert email factor code: %w", err)
 	}
-	if err := r.enqueueDraft(ctx, tx, draft, ""); err != nil {
+	if err := r.enqueueDraft(ctx, tx, mint.Draft, ""); err != nil {
 		return fmt.Errorf("queue email factor mail: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -320,8 +329,7 @@ const OTPPurposeStepUp2FA = "step_up_2fa"
 // mailbox standing in for a factor that was never enrolled — precisely the
 // substitution the enrollment requirement exists to prevent.
 func (r *Repository) CreateStepUpEmailOTP(ctx context.Context, uid authctx.UserID,
-	sessionID int64, tokenVersion int, codeHash []byte, ttl, cooldown time.Duration,
-	draft MailDraft) error {
+	sessionID int64, tokenVersion int, mint EmailOTPMint) error {
 
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -361,7 +369,7 @@ func (r *Repository) CreateStepUpEmailOTP(ctx context.Context, uid authctx.UserI
 		SELECT EXISTS (
 			SELECT 1 FROM email_otp
 			WHERE user_id = $1 AND purpose = $2 AND created_at >= now() - $3::interval
-		)`, int64(uid), OTPPurposeStepUp2FA, intervalArg(cooldown)).Scan(&recent); err != nil {
+		)`, int64(uid), OTPPurposeStepUp2FA, intervalArg(mint.Cooldown)).Scan(&recent); err != nil {
 		return fmt.Errorf("step-up otp cooldown: %w", err)
 	}
 	if recent {
@@ -380,10 +388,10 @@ func (r *Repository) CreateStepUpEmailOTP(ctx context.Context, uid authctx.UserI
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO email_otp (user_id, purpose, code_hash, expires_at)
 		VALUES ($1, $2, $3, now() + $4::interval)`,
-		int64(uid), OTPPurposeStepUp2FA, codeHash, intervalArg(ttl)); err != nil {
+		int64(uid), OTPPurposeStepUp2FA, mint.Digest, intervalArg(mint.TTL)); err != nil {
 		return fmt.Errorf("insert step-up code: %w", err)
 	}
-	if err := r.enqueueDraft(ctx, tx, draft, ""); err != nil {
+	if err := r.enqueueDraft(ctx, tx, mint.Draft, ""); err != nil {
 		return fmt.Errorf("queue step-up mail: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
