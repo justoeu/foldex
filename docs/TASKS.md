@@ -1237,3 +1237,21 @@ configuração; a regra tem que valer sozinha*.
 - **Gates:** backend fmt/vet/coverage 88.6% ✓; frontend typecheck/coverage
   93.25%/88.87% ✓; guards CSS ✓; `gocognit -over 15` limpo em `internal` (só
   `cmd/rustfs-bootstrap` a 17, fora da análise Sonar e do charter S3776).
+
+### Log de conclusão — Rodada 2: os 8 que sobreviveram ao primeiro scan
+
+- **Chaves com prefixo constante + índice (`guide-${i}`) continuam flagrando S6479** — a regra
+  só aceita o índice acompanhado de um valor real em runtime. Onda 2 ancorou cada chave num
+  valor em escopo (`${f.id}-guide-${i}`, `${v}-${i}` em leituras, `ytick-${pct}`).
+- **OtpInput reestruturado para slots constantes.** `digits.map` com key de valor QUEBROU 3
+  testes: digitar "42" mudava a key da célula, remontava o input e roubava o foco — o
+  contrato INV-137 é posicional. Agora `SLOT_KEYS.map((slotKey, i) => … value={digits[i]})`:
+  identidade fixa por posição, valor lido por índice, regra satisfeita sem mentir.
+- **BackupScheduleEditor voltou a `key={i}` e o item é `won't fix` documentado.** Linha
+  editável cujo conteúdo na própria key remontaria o input a cada tecla. Única saída honesta
+  para lista posicional editável; racional em `docs/SONARQUBE.md`.
+- **yticks colidiam com conta nova:** max 1.1 → ticks `[0, 1, 1]` duplicariam a key. Ancoradas
+  na fração (`ytick-${pct}`). xlabels saíram do mapa por índice para pares `{pos, label}`.
+- **Achado lateral (pré-existente, não mexido):** `openSettingsAt` seta o jump do hub e em
+  seguida chama o wrapper `setView('settings')` que o anula — deep link do menu de usuário
+  pode nunca ter funcionado. Sem teste cobrindo. Follow-up em separado.

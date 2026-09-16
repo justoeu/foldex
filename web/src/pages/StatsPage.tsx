@@ -231,6 +231,19 @@ function Sparkline({ data, width, height }: Readonly<{ data: number[]; width: nu
   )
 }
 
+// The five x-axis label points: series position + what it says. Built as
+// pairs so the rendered key anchors on values, and `pos` keeps it unique
+// even when two labels would read the same on a very short series.
+function xLabelPoints(days: number, t: TFunction): Array<{ pos: number; label: string }> {
+  return [
+    { pos: 0, label: t('stats.chart_days_ago', { count: days - 1 }) },
+    { pos: Math.floor(days * 0.25), label: t('stats.chart_days_ago', { count: Math.floor((days - 1) * 0.75) }) },
+    { pos: Math.floor(days * 0.5), label: t('stats.chart_days_ago', { count: Math.floor((days - 1) * 0.5) }) },
+    { pos: Math.floor(days * 0.75), label: t('stats.chart_days_ago', { count: Math.floor((days - 1) * 0.25) }) },
+    { pos: days - 1, label: t('stats.chart_today') },
+  ]
+}
+
 function AreaChart({ data, width, height, t }: Readonly<{ data: DailyPoint[]; width: number; height: number; t: TFunction }>) {
   const pad = { l: 36, r: 12, t: 14, b: 22 }
   const w = width - pad.l - pad.r
@@ -252,7 +265,10 @@ function AreaChart({ data, width, height, t }: Readonly<{ data: DailyPoint[]; wi
     return slice.reduce((a, b) => a + b, 0) / slice.length
   })
   const avgPath = toPath(avg.map((v, i) => [px(i), py(v)] as [number, number]))
-  const yTicks = [0, 0.5, 1].map((pct) => Math.round(max * pct))
+  // Anchor ticks on their fraction of the max, not the rounded value: with a
+  // tiny max the rounded ticks collide (max 1.1 → [0, 1, 1]) and equal keys
+  // would mis-reconcile the grid rows.
+  const yTicks = [0, 0.5, 1].map((pct) => ({ pct, tick: Math.round(max * pct) }))
   const [hover, setHover] = useState<number | null>(null)
 
   // Flip the tooltip away from the chart edges so it never clips off the
@@ -275,10 +291,10 @@ function AreaChart({ data, width, height, t }: Readonly<{ data: DailyPoint[]; wi
             <stop offset="100%" stopColor="var(--fx-accent)" stopOpacity="0" />
           </linearGradient>
         </defs>
-        {yTicks.map((tick, i) => {
+        {yTicks.map(({ pct, tick }) => {
           const y = py(tick)
           return (
-            <g key={`ytick-${i}`}>
+            <g key={`ytick-${pct}`}>
               <line x1={pad.l} y1={y} x2={pad.l + w} y2={y} stroke="var(--fx-border-2)" strokeDasharray="2 3" />
               <text x={pad.l - 6} y={y + 3} textAnchor="end" className="fx-chart-tick">
                 {tick}
@@ -290,22 +306,11 @@ function AreaChart({ data, width, height, t }: Readonly<{ data: DailyPoint[]; wi
         <path d={path} fill="none" stroke="var(--fx-accent)" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
         <path d={avgPath} fill="none" stroke="var(--fx-ink-3)" strokeWidth="1.4" strokeDasharray="3 3" opacity="0.7" />
 
-        {[0, Math.floor(series.length * 0.25), Math.floor(series.length * 0.5), Math.floor(series.length * 0.75), series.length - 1].map((i, idx) => {
-          const x = px(i)
-          const days = series.length
-          const labels = [
-            t('stats.chart_days_ago', { count: days - 1 }),
-            t('stats.chart_days_ago', { count: Math.floor((days - 1) * 0.75) }),
-            t('stats.chart_days_ago', { count: Math.floor((days - 1) * 0.5) }),
-            t('stats.chart_days_ago', { count: Math.floor((days - 1) * 0.25) }),
-            t('stats.chart_today'),
-          ]
-          return (
-            <text key={`xlabel-${idx}`} x={x} y={height - 6} textAnchor="middle" className="fx-chart-tick">
-              {labels[idx]}
-            </text>
-          )
-        })}
+        {xLabelPoints(series.length, t).map(({ pos, label }) => (
+          <text key={`xlabel-${label}-${pos}`} x={px(pos)} y={height - 6} textAnchor="middle" className="fx-chart-tick">
+            {label}
+          </text>
+        ))}
 
         {/* Hover indicator: vertical guide + concentric circle on the point */}
         {hover !== null && (
@@ -342,7 +347,7 @@ function AreaChart({ data, width, height, t }: Readonly<{ data: DailyPoint[]; wi
             so the cursor doesn't fall between buckets. */}
         {data.map((_, i) => (
           <rect
-            key={`zone-${i}`}
+            key={`zone-${px(i)}`}
             x={px(i) - step / 2}
             y={pad.t}
             width={step}

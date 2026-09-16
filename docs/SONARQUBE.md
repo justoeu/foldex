@@ -43,6 +43,8 @@ O escopo inicial cobre `backend` e `web/src`. A extensão continua com seus test
 
 Reativar qualquer uma das duas exige revisar a invariante correspondente primeiro — o finding não é um bug, é um desacordo documentado com a regra.
 
+**Um item é `won't fix` por decisão:** `typescript:S6479` sobre as linhas de horário do `BackupScheduleEditor`. As linhas editam o próprio valor; uma key derivada do conteúdo remonta o input no meio da digitação e derruba o foco — a identidade da linha É o slot posicional (o próprio `aria-label` a chama de "horário N"). Novas ocorrências da mesma forma (lista posicional editável) merecem a mesma avaliação, não um fix automático.
+
 ## Diagnóstico
 
 Abra **Actions → ci → SonarQube Quality Gate** e o painel do projeto. Um erro de autenticação pede conferir o secret e sua validade; um relatório ausente pede conferir os jobs de testes da mesma execução. Falha do Quality Gate pede examinar as condições no SonarQube, sem reduzir os gates para deixar o workflow verde.

@@ -448,7 +448,7 @@ function PaletteFolderRow({
         <span className="fx-cmdk-folder-indent" aria-hidden="true">
           {Array.from({ length: f.depth }).map((_, i) => (
             <span
-              key={`guide-${i}`}
+              key={`${f.id}-guide-${i}`}
               className={
                 'fx-cmdk-folder-guide' +
                 (i === f.depth - 1 ? ' fx-cmdk-folder-guide-last' : '')
