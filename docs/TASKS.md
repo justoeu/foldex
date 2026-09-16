@@ -1266,3 +1266,4 @@ configuração; a regra tem que valer sozinha*.
 
 - **Sintoma em produção:** `foldex.justoeu.cloud` mostrou "Não foi possível conectar: armazenamento de arquivos" com RustFS já healthy. O backend tinha subido numa janela em que `rustfs-…:9002` recusou conexão; `storage.New` falhou, `h.storage` ficou `nil` e o probe virou `AlwaysUnreachable` — permanente até restart.
 - **Fix:** `storage.NewDeferred` devolve o client mesmo com o store caído; `Ping` (já no ticker de 30s do `/api/status`) re-tenta `ensureBucket`. `loadStorage` passou a usá-lo. `New` continua fail-closed (backup-agent).
+- **UI:** quando `object_store` volta de unreachable → ok, as cards resetam o fallback INV-082 e recarregam `/api/files/…` (`?fx=N`) — senão o `<img>` que 503ou ficava no glifo para sempre.

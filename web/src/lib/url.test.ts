@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { hostOf, looksLikeUrl, safeImageUrl, safeLinkHref } from './url'
+import { fileUrlWithStoreGeneration, hostOf, looksLikeUrl, safeImageUrl, safeLinkHref } from './url'
 
 describe('hostOf', () => {
   it.each([
@@ -110,5 +110,18 @@ describe('safeLinkHref', () => {
     ['example.com'],
   ])('rejects %j', (input) => {
     expect(safeLinkHref(input as never)).toBeUndefined()
+  })
+})
+
+describe('fileUrlWithStoreGeneration', () => {
+  it('leaves the url alone until the store has recovered once', () => {
+    expect(fileUrlWithStoreGeneration('/api/files/screenshots/1.jpg', 0)).toBe('/api/files/screenshots/1.jpg')
+    expect(fileUrlWithStoreGeneration(undefined, 1)).toBeUndefined()
+  })
+
+  it('cache-busts only local file proxy urls after a recovery', () => {
+    expect(fileUrlWithStoreGeneration('/api/files/screenshots/1.jpg', 2)).toBe('/api/files/screenshots/1.jpg?fx=2')
+    expect(fileUrlWithStoreGeneration('/api/files/notes/a.png?w=1', 1)).toBe('/api/files/notes/a.png?w=1&fx=1')
+    expect(fileUrlWithStoreGeneration('https://cdn.example/og.png', 3)).toBe('https://cdn.example/og.png')
   })
 })

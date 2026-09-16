@@ -1,5 +1,6 @@
 import { memo, useEffect, useState } from 'react'
-import { safeImageUrl } from '../lib/url'
+import { useObjectStoreGeneration } from '../api/status'
+import { fileUrlWithStoreGeneration, safeImageUrl } from '../lib/url'
 import type { Link } from '../api/types'
 
 type Props = Readonly<{
@@ -28,14 +29,15 @@ function FaviconImpl({ link, size = 32 }: Props) {
   const letter = (host[0] ?? link.title[0] ?? '?').toUpperCase()
   const { bg, fg } = paletteFor(host)
   const [errored, setErrored] = useState(false)
+  const storeGeneration = useObjectStoreGeneration()
 
   // Reset the error flag when the URL changes (e.g. preview worker re-runs
-  // and stamps a new favicon_url on the link).
+  // and stamps a new favicon_url on the link) or the object store returns.
   useEffect(() => {
     setErrored(false)
-  }, [link.favicon_url])
+  }, [link.favicon_url, storeGeneration])
 
-  const safeSrc = safeImageUrl(link.favicon_url)
+  const safeSrc = fileUrlWithStoreGeneration(safeImageUrl(link.favicon_url), storeGeneration)
   const showImg = !!safeSrc && !errored
 
   return (

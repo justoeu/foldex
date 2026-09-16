@@ -2,7 +2,8 @@ import { memo, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { TagChip } from './TagChip'
 import { Icon, I } from './icons'
-import { safeImageUrl } from '../lib/url'
+import { useObjectStoreGeneration } from '../api/status'
+import { fileUrlWithStoreGeneration, safeImageUrl } from '../lib/url'
 import type { Entry, MergeSource } from '../api/types'
 
 export type NoteEntry = Extract<Entry, { kind: 'note' }>
@@ -36,12 +37,14 @@ NoteCard.displayName = 'NoteCard'
 
 function NoteCardImpl({ note, onEdit, onMergeWith, onDelete, onPin, onOpen }: Props) {
   const { t } = useTranslation()
-  const previewSrc = safeImageUrl(note.cover_url)
+  const storeGeneration = useObjectStoreGeneration()
+  const previewSrc = fileUrlWithStoreGeneration(safeImageUrl(note.cover_url), storeGeneration)
   // A cover whose object is gone must fall back to the note glyph, not leave a
-  // hole. The reset on `cover_url` is what lets a replaced image try again —
-  // without it, one broken cover would suppress every later one on this card.
+  // hole. The reset on `cover_url` / store generation is what lets a replaced
+  // image or a recovered object store try again — without it, one 503 would
+  // suppress the cover for the rest of the session.
   const [coverErrored, setCoverErrored] = useState(false)
-  useEffect(() => setCoverErrored(false), [note.cover_url])
+  useEffect(() => setCoverErrored(false), [note.cover_url, storeGeneration])
   const showCover = !!previewSrc && !coverErrored
   const density = densityFor(note)
 

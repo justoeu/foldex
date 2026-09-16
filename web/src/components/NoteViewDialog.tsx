@@ -1,9 +1,11 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import { Icon, I } from './icons'
 import { useEscape } from '../hooks/useEscape'
 import { useFocusTrap } from '../hooks/useFocusTrap'
+import { useObjectStoreGeneration } from '../api/status'
+import { fileUrlWithStoreGeneration, safeImageUrl } from '../lib/url'
 import { useNote, useUpdateNote, goNoteHref } from '../api/notes'
 import { TagChip } from './TagChip'
 import { relativeTime } from '../lib/time'
@@ -48,6 +50,8 @@ export function NoteViewDialog({
   // Same rule as the card: a cover whose object is gone is hidden, not left as
   // a broken-image icon on top of the text.
   const [coverErrored, setCoverErrored] = useState(false)
+  const storeGeneration = useObjectStoreGeneration()
+  useEffect(() => setCoverErrored(false), [note?.cover_url, storeGeneration])
 
   return (
     <div
@@ -76,6 +80,7 @@ export function NoteViewDialog({
             isFetching={noteQuery.isFetching}
             note={note}
             coverErrored={coverErrored}
+            coverSrc={fileUrlWithStoreGeneration(safeImageUrl(note?.cover_url), storeGeneration)}
             onRetry={() => { void noteQuery.refetch() }}
             onCoverError={() => setCoverErrored(true)}
             t={t}
@@ -147,6 +152,7 @@ function NoteViewBody({
   isFetching,
   note,
   coverErrored,
+  coverSrc,
   onRetry,
   onCoverError,
   t,
@@ -155,6 +161,7 @@ function NoteViewBody({
   isFetching: boolean
   note: Note | undefined
   coverErrored: boolean
+  coverSrc: string | undefined
   onRetry: () => void
   onCoverError: () => void
   t: TFunction
@@ -180,10 +187,10 @@ function NoteViewBody({
   }
   return (
     <>
-      {note.cover_url && !coverErrored && (
+      {coverSrc && !coverErrored && (
         <img
           className="fx-noteview-cover"
-          src={note.cover_url}
+          src={coverSrc}
           alt=""
           onError={onCoverError}
         />
