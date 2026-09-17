@@ -163,6 +163,37 @@ func TestCloseTimeoutKillsAndCleansLauncherExactlyOnce(t *testing.T) {
 	assert.Equal(t, int64(1), fake.cleanups.Load())
 }
 
+func TestCloseGracefulCloseInheritsTheShutdownBudgetNotTheFullCloseTimeout(t *testing.T) {
+	pool := NewPool()
+	pool.shutdownTimeout = 20 * time.Millisecond
+	pool.closeTimeout = 5 * time.Second
+	fake := &fakeBrowserLauncher{pid: 4255}
+	seen := make(chan time.Time, 1)
+	pool.closeBrowser = func(ctx context.Context, _ *rod.Browser) error {
+		d, _ := ctx.Deadline()
+		seen <- d
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	pb := testGeneration(fake, 0)
+	pool.current = pb
+	pool.generations[pb] = struct{}{}
+
+	before := time.Now()
+	pool.Close()
+
+	select {
+	case d := <-seen:
+		// WithTimeout takes the earlier deadline: the graceful close must be
+		// capped by the shutdown budget (20ms), not the 5s closeTimeout it
+		// would get from a Background base.
+		assert.Less(t, d.Sub(before), time.Second)
+	default:
+		t.Fatal("graceful close never ran")
+	}
+	assert.Equal(t, int64(1), fake.kills.Load())
+}
+
 func TestConnectFailureKillsLaunchedProcess(t *testing.T) {
 	pool := NewPool()
 	fake := &fakeBrowserLauncher{url: "ws://127.0.0.1:9222/devtools/browser/test", pid: 4243}
