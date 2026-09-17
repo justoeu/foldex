@@ -532,7 +532,7 @@ func TestCleanupFailureKillsThenRetries(t *testing.T) {
 	pool.closeBrowser = func(context.Context, *rod.Browser) error { return nil }
 	pb := testGeneration(fake, 0)
 	pool.generations[pb] = struct{}{}
-	pool.stopBrowser(pb)
+	pool.stopBrowser(pb, context.Background())
 	assert.Equal(t, int64(1), fake.kills.Load())
 	assert.Equal(t, int64(2), fake.cleanups.Load())
 }
@@ -917,7 +917,7 @@ func TestCapture_LiveChromeRoutesLoopbackThroughProxy(t *testing.T) {
 	require.NoError(t, err)
 	browser, generation, err := pool.launchBrowser(context.Background(), wrapBrowserLauncher(configuredLauncherWithProxy(processProxy.Address())), nil)
 	require.NoError(t, err)
-	t.Cleanup(func() { pool.stopBrowser(generation) })
+	t.Cleanup(func() { pool.stopBrowser(generation, context.Background()) })
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
