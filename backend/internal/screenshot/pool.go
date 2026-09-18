@@ -282,7 +282,7 @@ func (p *Pool) launchOwnedBrowser(claim browserClaim) (*rod.Browser, *pooledBrow
 	claim.cancel()
 	stale := p.adoptStartedBrowser(claim.owned, claim.epoch, pooled, err)
 	if stale && pooled != nil {
-		p.stopBrowser(pooled)
+		p.stopBrowser(pooled, context.Background())
 	}
 	close(claim.owned.done)
 	if claim.owned.err != nil {
@@ -354,7 +354,7 @@ func (p *Pool) releaseBrowser(pb *pooledBrowser) {
 	stop := p.markBrowserStoppingLocked(pb)
 	p.mu.Unlock()
 	if stop {
-		go p.stopBrowser(pb)
+		go p.stopBrowser(pb, context.Background())
 	}
 }
 
@@ -371,7 +371,7 @@ func (p *Pool) retireBrowserGeneration(pb *pooledBrowser, force bool) {
 	stop := p.markBrowserStoppingLocked(pb)
 	p.mu.Unlock()
 	if stop {
-		go p.stopBrowser(pb)
+		go p.stopBrowser(pb, context.Background())
 	}
 }
 
@@ -383,14 +383,18 @@ func (p *Pool) markBrowserStoppingLocked(pb *pooledBrowser) bool {
 	return true
 }
 
-func (p *Pool) stopBrowser(pb *pooledBrowser) {
+// stopBrowser tears one generation down. base bounds the graceful close only:
+// pool-owned teardown paths pass Background because no request is in scope,
+// while Close passes its shutdown budget so the last graceful attempt is
+// capped by whatever of it remains — the force path is the backstop either way.
+func (p *Pool) stopBrowser(pb *pooledBrowser, base context.Context) {
 	if pb.cancel != nil {
 		pb.cancel()
 	}
 	if pb.forceStop {
 		p.cleanupGenerationLauncher(pb, true)
 	} else {
-		ctx, cancel := context.WithTimeout(context.Background(), p.closeTimeout)
+		ctx, cancel := context.WithTimeout(base, p.closeTimeout)
 		err := p.closeBrowser(ctx, pb.browser)
 		cancel()
 		if err != nil {
@@ -532,7 +536,7 @@ func (p *Pool) finishClose(ctx context.Context, startup *browserStartup, generat
 		}
 	}
 	for _, generation := range toStop {
-		go p.stopBrowser(generation)
+		go p.stopBrowser(generation, ctx)
 	}
 	if startup != nil && !waitForTeardown(ctx, startup.done) {
 		slog.Warn("screenshot: browser startup teardown exceeded shutdown timeout", "err", ctx.Err())
