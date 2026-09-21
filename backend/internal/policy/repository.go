@@ -7,9 +7,9 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"foldex/internal/pkg/appsetting"
 	"foldex/internal/pkg/authctx"
 )
 
@@ -35,18 +35,9 @@ func NewRepository(pool *pgxpool.Pool) *Repository { return &Repository{pool: po
 // rules — failing the login instead would turn a bad settings row into a total
 // outage with no way in to fix it.
 func (r *Repository) Get(ctx context.Context) (Policy, error) {
-	var raw string
-	err := r.pool.QueryRow(ctx,
-		`SELECT value FROM app_setting WHERE key = $1`, settingKey).Scan(&raw)
-	if err == pgx.ErrNoRows {
-		return Default(), nil
-	}
+	p, err := appsetting.GetJSON(ctx, r.pool, settingKey, Default())
 	if err != nil {
 		return Default(), fmt.Errorf("policy get: %w", err)
-	}
-	p := Default()
-	if err := json.Unmarshal([]byte(raw), &p); err != nil {
-		return Default(), nil
 	}
 	if err := p.Validate(); err != nil {
 		return Default(), nil
@@ -71,11 +62,7 @@ func (r *Repository) Set(ctx context.Context, p Policy) error {
 	// export never emits it, and restore has read-but-ignored it since snapshot
 	// v6. That is what keeps a hand-crafted backup zip from rewriting the
 	// instance's password floor or its Google allowlist.
-	_, err = r.pool.Exec(ctx, `
-		INSERT INTO app_setting (key, value) VALUES ($1, $2)
-		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
-		settingKey, string(encoded))
-	if err != nil {
+	if err := appsetting.Upsert(ctx, r.pool, settingKey, string(encoded)); err != nil {
 		return fmt.Errorf("policy set: %w", err)
 	}
 	return nil

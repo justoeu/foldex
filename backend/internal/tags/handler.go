@@ -1,7 +1,6 @@
 package tags
 
 import (
-	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -35,19 +34,8 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
-	in, err := httperr.DecodeJSON[CreateInput](w, r)
-	if err != nil {
-		httperr.Write(w, err)
-		return
-	}
-	in.Normalize()
-	if err := in.Validate(); err != nil {
-		var v validationErr
-		if errors.As(err, &v) {
-			httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_input", string(v)))
-			return
-		}
-		httperr.Write(w, err)
+	in, ok := httperr.DecodeBody[CreateInput](w, r)
+	if !ok {
 		return
 	}
 	t, err := h.repo.Create(r.Context(), authctx.MustUser(r.Context()), in)
@@ -82,19 +70,8 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	in, err := httperr.DecodeJSON[UpdateInput](w, r)
-	if err != nil {
-		httperr.Write(w, err)
-		return
-	}
-	in.Normalize()
-	if err := in.Validate(); err != nil {
-		var v validationErr
-		if errors.As(err, &v) {
-			httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_input", string(v)))
-			return
-		}
-		httperr.Write(w, err)
+	in, ok := httperr.DecodeBody[UpdateInput](w, r)
+	if !ok {
 		return
 	}
 	t, err := h.repo.Update(r.Context(), authctx.MustUser(r.Context()), id, in)

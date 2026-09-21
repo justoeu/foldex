@@ -1281,3 +1281,11 @@ configuração; a regra tem que valer sozinha*.
   pareamento e o fantasma apareceu. Agora strings/comentários são consumidos num único
   passe (alternância), e o pré-filtro regex de false-arm ignora parênteses no vão entre
   os `?` — irmãos entre parênteses (`LinkDialog.tsx:474`) não são aninhamento.
+
+### Log — duplicação Sonar 0.6% (2026-09-21)
+
+- Overall 541 linhas / 26 blocos. QG (new code) já estava OK (0.51% ≤ 3%).
+- Extraídos os clones baratos: `httperr.DecodeBody` (create/update Chi),
+  `contenthttp.Map` (tag_taken + folder_locked + FromDomain), `appsetting.GetJSON/Upsert`
+  (policy + abusepolicy). DTOs passam a `domainerr.InvalidInput`.
+- Deixado de propósito: 2FA vs e-mail (INV-005), Setup/Reset screens, métricas backup-agent.

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"foldex/internal/pkg/domainerr"
 	"foldex/internal/pkg/jsonopt"
 	"foldex/internal/pkg/listquery"
 	"foldex/internal/pkg/slug"
@@ -197,7 +198,4 @@ func (u *UpdateInput) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-type validationErr string
-
-func (e validationErr) Error() string { return string(e) }
-func errMsg(s string) error           { return validationErr(s) }
+func errMsg(s string) error { return domainerr.InvalidInput(s) }

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"foldex/internal/pkg/cssvalid"
+	"foldex/internal/pkg/domainerr"
 	"foldex/internal/pkg/jsonopt"
 	"foldex/internal/pkg/pwhash"
 	"foldex/internal/pkg/secrethint"
@@ -213,8 +214,4 @@ func validateHint(hint, password *string) error {
 	return nil
 }
 
-type validationErr string
-
-func (e validationErr) Error() string { return string(e) }
-
-func errMsg(s string) error { return validationErr(s) }
+func errMsg(s string) error { return domainerr.InvalidInput(s) }
