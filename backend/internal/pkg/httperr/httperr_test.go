@@ -185,6 +185,17 @@ func TestDecodeBody_InvalidInputWrites400(t *testing.T) {
 	assert.Equal(t, "name is required", body.Error.Message)
 }
 
+func TestDecodeBody_MissingBodyContractWrites500(t *testing.T) {
+	type raw struct {
+		Name string `json:"name"`
+	}
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"name":"x"}`))
+	w := httptest.NewRecorder()
+	_, ok := DecodeBody[raw](w, req)
+	require.False(t, ok)
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
 func TestDecodeBody_InvalidJSONWrites400(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{`))
 	w := httptest.NewRecorder()

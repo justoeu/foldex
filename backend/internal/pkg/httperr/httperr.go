@@ -55,7 +55,8 @@ func DecodeBodyWithCap[T any](w http.ResponseWriter, r *http.Request, capBytes i
 	}
 	body, ok := any(&in).(Body)
 	if !ok {
-		return in, true
+		Write(w, ErrInternal)
+		return zero, false
 	}
 	body.Normalize()
 	if err := body.Validate(); err != nil {

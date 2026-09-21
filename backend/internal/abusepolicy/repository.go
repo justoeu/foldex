@@ -55,7 +55,7 @@ func NewRepository(pool *pgxpool.Pool) *Repository { return &Repository{pool: po
 func (r *Repository) Get(ctx context.Context) (Policy, error) {
 	p, err := appsetting.GetJSON(ctx, r.pool, settingKey, Default())
 	if err != nil {
-		return Default(), fmt.Errorf("abuse policy get: %w", err)
+		return Default(), err
 	}
 	return p.Sanitize(), nil
 }
@@ -76,7 +76,7 @@ func (r *Repository) Set(ctx context.Context, p Policy) error {
 		return fmt.Errorf("abuse policy encode: %w", err)
 	}
 	if err := appsetting.Upsert(ctx, r.pool, settingKey, string(encoded)); err != nil {
-		return fmt.Errorf("abuse policy set: %w", err)
+		return err
 	}
 	return nil
 }

@@ -37,7 +37,7 @@ func NewRepository(pool *pgxpool.Pool) *Repository { return &Repository{pool: po
 func (r *Repository) Get(ctx context.Context) (Policy, error) {
 	p, err := appsetting.GetJSON(ctx, r.pool, settingKey, Default())
 	if err != nil {
-		return Default(), fmt.Errorf("policy get: %w", err)
+		return Default(), err
 	}
 	if err := p.Validate(); err != nil {
 		return Default(), nil
@@ -63,7 +63,7 @@ func (r *Repository) Set(ctx context.Context, p Policy) error {
 	// v6. That is what keeps a hand-crafted backup zip from rewriting the
 	// instance's password floor or its Google allowlist.
 	if err := appsetting.Upsert(ctx, r.pool, settingKey, string(encoded)); err != nil {
-		return fmt.Errorf("policy set: %w", err)
+		return err
 	}
 	return nil
 }

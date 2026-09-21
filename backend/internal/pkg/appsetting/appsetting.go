@@ -6,6 +6,7 @@ package appsetting
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
@@ -13,12 +14,13 @@ import (
 )
 
 // GetJSON returns the document for key, or fallback when the row is missing
-// or the payload does not parse. A database error still returns fallback so
-// a corrupted settings row cannot take down login; the error is for logs.
+// or the payload does not parse (nil error). A database error still returns
+// fallback so a corrupted settings row cannot take down login; the error is
+// for logs.
 func GetJSON[T any](ctx context.Context, pool *pgxpool.Pool, key string, fallback T) (T, error) {
 	var raw string
 	err := pool.QueryRow(ctx, `SELECT value FROM app_setting WHERE key = $1`, key).Scan(&raw)
-	if err == pgx.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return fallback, nil
 	}
 	if err != nil {
