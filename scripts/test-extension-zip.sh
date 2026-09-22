@@ -17,6 +17,11 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST="$ROOT/backend/internal/addon/dist"
+FOLDEX_ADDON_DIR="${FOLDEX_ADDON_DIR:-$ROOT/../foldex-addon}"
+if [ ! -f "$FOLDEX_ADDON_DIR/manifest.json" ]; then
+  echo "✗ addon project not found at $FOLDEX_ADDON_DIR — clone foldex-addon next to this repo" >&2
+  exit 1
+fi
 fail=0
 note() { echo "FAIL $*" >&2; fail=1; }
 
@@ -34,8 +39,8 @@ if [[ "$first" != "$second" ]]; then
   note "make extension is not deterministic: $first != $second"
 fi
 
-manifest_version=$(python3 -c 'import json;print(json.load(open("extension/manifest.json"))["version"])' 2>/dev/null) \
-  || note "extension/manifest.json does not parse"
+manifest_version=$(python3 -c "import json;print(json.load(open('$FOLDEX_ADDON_DIR/manifest.json'))['version'])" 2>/dev/null) \
+  || note "addon manifest.json does not parse"
 version_txt=$(tr -d '[:space:]' < "$DIST/version.txt" 2>/dev/null) || true
 if [[ -z "$manifest_version" || "$manifest_version" != "$version_txt" ]]; then
   note "version.txt ($version_txt) does not mirror manifest.json ($manifest_version)"

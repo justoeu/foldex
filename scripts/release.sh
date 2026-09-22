@@ -3,8 +3,8 @@
 #
 # Bumps the version across:
 #   - web/package.json       (SPA — read by src/version.ts → sidebar footer)
-#   - extension/manifest.json (browser extension MV3 manifest)
 #   - docker-compose.yml     (backend/web default image tags)
+#   - backend/internal/addon/dist (re-imported from the sibling foldex-addon/)
 # then commits the bump. After pushing main, dispatch release.yml with the
 # strict `vX.Y.Z` target; the validated workflow creates the tag itself.
 #
@@ -54,8 +54,8 @@ if [ "$LOCAL" != "$REMOTE" ]; then
 fi
 
 PKG=web/package.json
-EXT=extension/manifest.json
 COMPOSE=docker-compose.yml
+FOLDEX_ADDON_DIR="${FOLDEX_ADDON_DIR:-../foldex-addon}" 
 PIN_AWK="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/compose-image-pin.awk"
 if [ ! -f "$PIN_AWK" ]; then
   echo "✗ missing $PIN_AWK" >&2
@@ -75,7 +75,7 @@ if [ "${#COMPOSE_FILES[@]}" -eq 0 ]; then
   echo "✗ no tracked docker-compose*.yml to version" >&2
   exit 1
 fi
-VERSION_FILES=("$PKG" "$EXT" "${COMPOSE_FILES[@]}")
+VERSION_FILES=("$PKG" "${COMPOSE_FILES[@]}")
 
 # Once rewriting starts, any failure must put every version file back at HEAD.
 # The release begins from a clean tree, so this cannot discard unrelated work.
@@ -84,7 +84,7 @@ rollback_bump() {
   local status=$?
   local leftover
   trap - EXIT
-  rm -f "$PKG.tmp" "$EXT.tmp"
+  rm -f "$PKG.tmp"
   for leftover in "${COMPOSE_FILES[@]}"; do
     rm -f "$leftover.tmp"
   done
@@ -123,19 +123,13 @@ compose_version_is() {
   awk -f "$PIN_AWK" -v expected="$2" -v require_services="${3:-1}" "$1"
 }
 
-EXT_CUR=$(grep -oE '"version"[[:space:]]*:[[:space:]]*"[^"]+"' "$EXT" \
-            | head -1 | sed -E 's/.*"([^"]+)"$/\1/')
-# Validated on its own rather than left safe by the equality check below. It is
-# safe today only BECAUSE it must equal CUR to get past that check — a property
-# of the comparison, not of the value — and the next edit that reads the
-# manifest earlier, or uses this in arithmetic, silently reopens the hole the
-# guard above closes.
-if ! [[ "$EXT_CUR" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-  echo "✗ current version in $EXT is not strict semver: $EXT_CUR" >&2
-  exit 1
-fi
-if [ "$EXT_CUR" != "$CUR" ]; then
-  echo "✗ release versions are out of sync; expected $CUR in $EXT" >&2
+# The Chrome addon is developed in the sibling foldex-addon/ project. Its
+# manifest version must already sit at NEW — the bump order is: foldex-addon
+# first, then this script. `make extension` re-imports the zip so the embed
+# rides the bump commit; its own lockstep gate refuses on drift.
+ADDON_MANIFEST="$FOLDEX_ADDON_DIR/manifest.json"
+if [ ! -f "$ADDON_MANIFEST" ]; then
+  echo "✗ addon project not found at $FOLDEX_ADDON_DIR (clone foldex-addon next to this repo)" >&2
   exit 1
 fi
 for compose_file in "${COMPOSE_FILES[@]}"; do
@@ -200,14 +194,13 @@ update_compose_version() {
 
 BUMP_STARTED=1
 update_version "$PKG"
-update_version "$EXT"
 for compose_file in "${COMPOSE_FILES[@]}"; do
   if [ "$compose_file" = "$COMPOSE" ]; then require=1; else require=0; fi
   update_compose_version "$compose_file" "$require"
 done
 
 # Sanity check — all release-owned versions should now report NEW.
-for f in "$PKG" "$EXT"; do
+for f in "$PKG"; do
   got=$(grep -oE '"version"[[:space:]]*:[[:space:]]*"[^"]+"' "$f" | head -1 | sed -E 's/.*"([^"]+)"$/\1/')
   if [ "$got" != "$NEW" ]; then
     echo "✗ bump failed for $f (still $got)" >&2
@@ -222,7 +215,17 @@ for compose_file in "${COMPOSE_FILES[@]}"; do
   fi
 done
 
-git add "${VERSION_FILES[@]}"
+# Re-import the addon AFTER the version rewrite: the import gate requires
+# addon version == app version, which only holds once $PKG reports NEW.
+# The refreshed dist rides the same bump commit.
+make extension
+ADDON_DIST_V=$(cat backend/internal/addon/dist/version.txt)
+if [ "$ADDON_DIST_V" != "$NEW" ]; then
+  echo "✗ addon embed still at $ADDON_DIST_V — bump foldex-addon to $NEW first, then re-run" >&2
+  exit 1
+fi
+
+git add "${VERSION_FILES[@]}" backend/internal/addon/dist
 git commit -m "chore(release): v$NEW"
 BUMP_STARTED=0
 

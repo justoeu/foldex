@@ -64,9 +64,9 @@ More flows (notes, folder unlock, backup): [`docs/ARCHITECTURE.md`](docs/ARCHITE
 The MV3 extension saves the page you are on straight into your library (title, folder, tags, screenshot). It authenticates with an API token from **Settings → API tokens** — each account holds exactly one live token; use **Rotate** to replace it.
 
 - **Download:** administrators get the zip from the admin area (`GET /api/admin/addon/download`, version in the `X-Addon-Version` header). A binary built without the bundle answers `503 addon_not_built` there instead.
-- **Build from source:** `make extension` zips `extension/` deterministically into the backend's embed dir, then rebuild the backend (`make -C backend build` depends on it).
+- **Source:** the addon is developed in a separate project, `foldex-addon/`, cloned next to this repo (`FOLDEX_ADDON_DIR` overrides). `make extension` imports it deterministically into the backend's embed dir and refuses when the addon and app versions drift apart; `make -C backend build` depends on it.
 - **Install:** extract the zip, open `chrome://extensions`, enable **Developer mode**, **Load unpacked**, point at the extracted folder.
-- **Tests:** `make test-extension` (the same command CI runs).
+- **Tests:** run inside the addon project (`npm test`); CI enforces the committed embed matches the app version (freshness gate).
 
 ## Shortcuts
 

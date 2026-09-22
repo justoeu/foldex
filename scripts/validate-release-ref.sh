@@ -51,7 +51,7 @@ fi
 
 if [[ "$is_semver" == true ]]; then
   version=${release_tag#v}
-  for file in web/package.json extension/manifest.json; do
+  for file in web/package.json; do
     file_version=$(git show "$target_sha:$file" | jq -er '.version') || {
       printf 'cannot read version from %s at release target\n' "$file" >&2
       exit 1

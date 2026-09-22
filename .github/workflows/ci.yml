@@ -122,12 +122,15 @@ jobs:
       - name: type-check
         working-directory: web
         run: bun run typecheck
-      - name: extension tests
-        # Single entry point: the same `make test-extension` an operator runs
-        # locally, so CI can never drift from the documented command.
-        run: make test-extension
-      - name: extension i18n parity
-        run: node scripts/test-extension-i18n.mjs
+      - name: addon embed freshness
+        # The addon source lives in a sibling project CI cannot see; what CI
+        # CAN enforce is that the committed embed matches the app version —
+        # a stale dist would otherwise ship a stale addon silently.
+        run: |
+          DIST_V=$(cat backend/internal/addon/dist/version.txt)
+          APP_V=$(python3 -c "import json;print(json.load(open('web/package.json'))['version'])")
+          [ "$DIST_V" = "$APP_V" ] || { echo "addon embed $DIST_V != app $APP_V — run 'make extension' after bumping foldex-addon"; exit 1; }
+          test -s backend/internal/addon/dist/extension.zip
       - name: tests + coverage gate
         working-directory: web
         # Vitest runs the suite once under v8 and enforces the statement,

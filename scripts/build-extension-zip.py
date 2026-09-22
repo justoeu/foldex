@@ -19,7 +19,10 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SRC = ROOT / "extension"
+# The addon lives in its own project next to this repo (foldex-addon/). The
+# sibling default keeps `make extension` zero-config for the usual checkout;
+# FOLDEX_ADDON_DIR overrides for CI-style layouts.
+SRC = Path(os.environ.get("FOLDEX_ADDON_DIR", ROOT.parent / "foldex-addon"))
 DIST = ROOT / "backend/internal/addon/dist"
 
 # Test sources never ship inside the extension an admin downloads: they are
@@ -33,6 +36,17 @@ FIXED_DATE_TIME = (1980, 1, 1, 0, 0, 0)  # the ZIP epoch
 def fail(msg: str) -> None:
     sys.stderr.write(f"build-extension-zip: {msg}\n")
     sys.exit(1)
+
+
+def app_version_of() -> str | None:
+    """web/package.json version, or None when unreadable (the Makefile gate
+    still catches that path — this check only enforces lockstep when both
+    sides are present)."""
+    try:
+        pkg = json.loads((ROOT / "web/package.json").read_text(encoding="utf-8"))
+        return str(pkg.get("version", "")) or None
+    except (OSError, json.JSONDecodeError):
+        return None
 
 
 def collect() -> list[Path]:
@@ -52,6 +66,10 @@ def collect() -> list[Path]:
 
 
 def main() -> None:
+    if not SRC.is_dir():
+        fail(f"addon project not found at {SRC} — clone foldex-addon next to "
+             f"this repo or point FOLDEX_ADDON_DIR at it")
+
     manifest_path = SRC / "manifest.json"
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -61,6 +79,14 @@ def main() -> None:
     version = str(manifest.get("version", ""))
     if not re.fullmatch(r"\d+\.\d+\.\d+", version):
         fail(f"manifest version {version!r} is not a dotted triple (Chrome requirement)")
+
+    # Lockstep gate: the foldex release and the addon ship together, and the
+    # admin download advertises the addon's version. A silent mismatch would
+    # let a stale embed ride a fresh app release, so the import refuses.
+    app_version = app_version_of()
+    if app_version and app_version != version:
+        fail(f"addon version {version} != app version {app_version} — bump "
+             f"foldex-addon/manifest.json to match before importing")
 
     files = collect()
     if not any(f.relative_to(SRC) == Path("manifest.json") for f in files):
