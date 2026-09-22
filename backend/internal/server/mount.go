@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/cors"
 
 	"foldex/internal/abusepolicy"
+	"foldex/internal/addon"
 	"foldex/internal/auth"
 	"foldex/internal/backup"
 	"foldex/internal/backupstatus"
@@ -203,6 +204,12 @@ func adminSurface(pr chi.Router, d Deps, grants authgate.Grants) {
 		}
 		ar.Use(authgate.RejectAPIToken)
 		d.AdminHandler.Mount(ar)
+		addonHandler := d.AddonHandler
+		if addonHandler == nil {
+			addonHandler = addon.NewHandler(addon.Embedded())
+		}
+		ar.Get("/addon/download", addonHandler.Download)
+		ar.Head("/addon/download", addonHandler.Download)
 		auth.NewAbuseHandler(auth.NewRepository(d.Pool),
 			abusepolicy.NewRepository(d.Pool), d.AbusePolicy,
 			d.Logger, d.AdminHandler.AuditPolicyChange, grants).Mount(ar)

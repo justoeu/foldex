@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"foldex/internal/abusepolicy"
+	"foldex/internal/addon"
 	"foldex/internal/auth"
 	"foldex/internal/backup"
 	"foldex/internal/backupstatus"
@@ -73,6 +74,12 @@ type Deps struct {
 	// (inside /api, behind the auth stack). Leaving it nil keeps the routes
 	// off entirely.
 	PushHandler *push.Handler
+
+	// AddonHandler serves the embedded Chrome extension zip from the admin
+	// surface. Nil falls back to the bundle embedded at build time — which
+	// answers 503 addon_not_built when `make extension` never ran, so an
+	// unwired dependency degrades the feature without unmounting its route.
+	AddonHandler *addon.Handler
 
 	// Auth stack (ADR-30). The handlers are optional and control whether their
 	// route groups mount. AuthMiddleware is required whenever AuthEnabled is true.

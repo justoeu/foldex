@@ -59,6 +59,16 @@ open https://localhost:9444
 
 Mais fluxos (notas, unlock de pasta, backup): [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
+## Extensão Chrome
+
+A extensão MV3 salva a página atual direto na sua biblioteca (título, pasta, tags, screenshot). Ela autentica com um token de API de **Settings → API tokens** — cada conta mantém exatamente um token ativo; use **Rotacionar** para trocá-lo.
+
+- **Download:** administradores baixam o zip na área de administração (`GET /api/admin/addon/download`, versão no header `X-Addon-Version`). Um binário construído sem o bundle responde `503 addon_not_built` nessa rota.
+- **Fonte:** o addon é desenvolvido em um projeto separado, `foldex-addon/`, clonado ao lado deste repo (`FOLDEX_ADDON_DIR` sobrescreve). `make extension` importa o zip deterministicamente para o embed do backend e recusa se as versões do addon e do app divergirem.
+- **Build via fonte:** `make extension` empacota `extension/` de forma determinística no diretório de embed do backend; o rebuild do backend (`make -C backend build`) já depende disso.
+- **Instalação:** extraia o zip, abra `chrome://extensions`, ative o **modo do desenvolvedor**, **Carregar sem compactação** e aponte para a pasta extraída.
+- **Testes:** `make test-extension` (o mesmo comando do CI).
+
 ## Atalhos
 
 | Atalho | Ação |
@@ -82,7 +92,7 @@ Mais fluxos (notas, unlock de pasta, backup): [`docs/ARCHITECTURE.md`](docs/ARCH
 - [Visão](docs/VISION.md) · [Arquitetura](docs/ARCHITECTURE.md) · [Auth / RBAC](docs/SDD-AUTH-RBAC.md)
 - [Backup ZIP](docs/SDD-BACKUP-RESTORE.md) · [Backups operacionais](docs/SDD-OPS-BACKUP.md)
 - [Senha de pasta](docs/SDD-FOLDER-MASTER-PASSWORD.md) · [E-mail](docs/SDD-EMAIL-ASYNC.md)
-- [Extensão](extension/README.md)
+- Extensão: projeto separado `foldex-addon/` (irmão deste repo)
 
 ## Licença
 
