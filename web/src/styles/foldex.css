@@ -1820,6 +1820,33 @@ button.fx-btn-danger:hover:not(:disabled) {
   background: color-mix(in srgb, var(--fx-danger) 16%, transparent);
   color: var(--fx-danger);
 }
+/*
+ * The addon download is the one fx-btn that is a link: a download needs a
+ * real href so the session cookie rides along and Content-Disposition can
+ * name the file — a button faking it with window.open loses both. Qualified
+ * by element like its button twin (§5 / INV-154): an unqualified `.fx-btn`
+ * would restyle any anchor that ever wears the class by accident.
+ */
+a.fx-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  height: 38px; padding: 0 15px;
+  border: 1px solid var(--fx-border);
+  border-radius: 10px;
+  background: var(--fx-surface-3);
+  color: var(--fx-ink-2);
+  font-size: 13px; font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  transition: border-color .15s, color .15s, background .15s;
+}
+a.fx-btn:hover { border-color: var(--fx-accent); color: var(--fx-accent); }
+a.fx-btn:focus-visible { outline: 2px solid var(--fx-accent); outline-offset: 2px; }
+a.fx-btn-primary {
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--fx-accent), var(--fx-accent-2));
+  color: #fff;
+}
+a.fx-btn-primary:hover { filter: brightness(1.05); color: #fff; border-color: transparent; }
 
 .fx-btn-ghost { height: 38px; padding: 0 14px; border-radius: 10px; font-size: 13px; color: var(--fx-ink-2); }
 .fx-btn-ghost:hover { background: var(--fx-bg-tint); color: var(--fx-ink); }
