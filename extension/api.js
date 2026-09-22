@@ -1,0 +1,105 @@
+import {
+  apiUrl,
+  authHeaders,
+  credentialProblem,
+  requestOriginAccess,
+  requireOriginAccess,
+} from "./config.js";
+
+// The backend answers {error:{code,message}} — surface the human message it
+// already wrote; the raw slice is only for non-JSON bodies.
+async function unwrapError(resp) {
+  const problem = credentialProblem(resp.status);
+  if (problem) return apiError(problem, resp.status);
+  const body = await resp.text();
+  try {
+    const parsed = JSON.parse(body);
+    if (parsed?.error?.message) return apiError(parsed.error.message, resp.status);
+  } catch (err) {
+    if (!(err instanceof SyntaxError)) throw err;
+  }
+  return apiError("HTTP " + resp.status + " " + body.slice(0, 120), resp.status);
+}
+
+function apiError(message, status) {
+  const error = new Error(message);
+  error.status = status;
+  return error;
+}
+
+async function request(settings, path, { method, body, headers }, chromeApi, fetchImpl, access) {
+  const baseUrl = await access(settings.server, chromeApi);
+  const resp = await fetchImpl(apiUrl(baseUrl, path), {
+    method,
+    headers,
+    body,
+    redirect: "error",
+  });
+  if (!resp.ok) throw await unwrapError(resp);
+  return resp.json();
+}
+
+function read(settings, path, deps) {
+  const { chromeApi, fetchImpl } = deps;
+  return request(
+    settings,
+    path,
+    { headers: authHeaders({ apiToken: settings.token }) },
+    chromeApi,
+    fetchImpl,
+    requireOriginAccess,
+  );
+}
+
+function write(settings, path, payload, deps) {
+  const { chromeApi, fetchImpl } = deps;
+  const isJson = typeof payload === "string";
+  return request(
+    settings,
+    path,
+    {
+      method: "POST",
+      headers: authHeaders({ apiToken: settings.token }, isJson),
+      body: payload,
+    },
+    chromeApi,
+    fetchImpl,
+    requestOriginAccess,
+  );
+}
+
+export function listFolders(settings, { chromeApi = chrome, fetchImpl = fetch } = {}) {
+  return read(settings, "/api/folders", { chromeApi, fetchImpl });
+}
+
+export function listTags(settings, { chromeApi = chrome, fetchImpl = fetch } = {}) {
+  return read(settings, "/api/tags", { chromeApi, fetchImpl });
+}
+
+export function statsSummary(settings, { chromeApi = chrome, fetchImpl = fetch } = {}) {
+  return read(settings, "/api/stats/summary", { chromeApi, fetchImpl });
+}
+
+export function listIdentities(settings, { chromeApi = chrome, fetchImpl = fetch } = {}) {
+  return read(settings, "/api/auth/identities", { chromeApi, fetchImpl });
+}
+
+export function createFolder(settings, folder, { chromeApi = chrome, fetchImpl = fetch } = {}) {
+  return write(settings, "/api/folders", JSON.stringify(folder), { chromeApi, fetchImpl });
+}
+
+export function createLink(settings, link, { chromeApi = chrome, fetchImpl = fetch } = {}) {
+  return write(settings, "/api/links", JSON.stringify(link), { chromeApi, fetchImpl });
+}
+
+export function uploadLinkImage(
+  settings,
+  linkId,
+  pngBlob,
+  { chromeApi = chrome, fetchImpl = fetch } = {},
+) {
+  const form = new FormData();
+  form.append("file", pngBlob, "image.png");
+  // No Content-Type: the multipart boundary is the browser's job.
+  return write(settings, `/api/links/${linkId}/image`, form, { chromeApi, fetchImpl });
+}
