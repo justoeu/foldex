@@ -8,8 +8,8 @@
   "worktree_n": 3,
   "spec": "docs/SDD-CHROME-ADDON-AND-API-TOKEN",
   "coverage_floor": 90,
-  "status": "in_progress",
-  "next_step": "planner",
+  "status": "closed",
+  "next_step": "closed",
   "prefix": "mmh",
   "test_cmd": "( cd backend && go vet ./... && go test ./internal/... ) && ( cd web && bun run typecheck && bun run test )"
 }

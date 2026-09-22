@@ -1,0 +1,41 @@
+{
+  "score": 10,
+  "max": 10,
+  "coverage": {
+    "pct": 90.76,
+    "floor": 90,
+    "floor_min": 90,
+    "requested": 90,
+    "tool": "node --test + c8-style line count (extension, touched files); backend go coverage gate 88.7% ≥ 85%; web vitest v8 gate ≥ 85/80",
+    "ok": true,
+    "detail": "90.76% >= 90%"
+  },
+  "closable": true,
+  "gates": [
+    {
+      "id": "tasks",
+      "ok": true,
+      "detail": "14 DONE"
+    },
+    {
+      "id": "red-green",
+      "ok": true,
+      "detail": "each DONE has tests_added>=1 and red_green"
+    },
+    {
+      "id": "immutability",
+      "ok": true,
+      "detail": "auth.TestAPIToken_CapsHowManyOneAccountMayHold, auth.TestConcurrentAPITokenCreationNeverExceedsCap, addon.TestBundleBuiltSemantics, addon.TestDownloadServesZipWithSpecHeaders, addon.TestDownloadWithoutABuiltBundleAnswers503, server.TestAddonDownload_GateMatchesTheAdminSurfaceShape, server.TestAddonDownload_ServesTheBundleToAnAdminSession, web tokens.test.ts > rotateToken, web ApiTokensSection.test.tsx > rotate (mid-pair failure, 409 cap copy, disabled state), web AdminUsersPage.test.tsx > points the download link at the admin addon route, foldex-addon test/config.test.mjs, foldex-addon test/api.test.mjs, foldex-addon test/capture.test.mjs, foldex-addon test/state.test.mjs, foldex-addon test/manifest.test.mjs, foldex-addon test/popup.test.mjs, foldex-addon test/sync.test.mjs, scripts/test-extension-zip.sh (deterministic rebuild + artifact contract)"
+    },
+    {
+      "id": "review",
+      "ok": true,
+      "detail": "standards=APPROVE spec=APPROVE correctness=APPROVE"
+    },
+    {
+      "id": "worktrees",
+      "ok": true,
+      "detail": "3/3 merged+removed"
+    }
+  ]
+}

@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>foldex · make-me-happy</title>
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  mermaid.initialize({ startOnLoad: true, theme: "dark" });
+</script>
+<style>
+  :root { --bg:#0b1220; --panel:#111827; --text:#e5e7eb; --muted:#9ca3af; --border:#374151; --ok:#22c55e; --bad:#ef4444; --accent:#38bdf8; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: ui-sans-serif, system-ui, sans-serif; background: var(--bg); color: var(--text); }
+  header { padding:1.25rem 2rem; border-bottom:1px solid var(--border); display:flex; gap:1rem; align-items:center; flex-wrap:wrap; }
+  h1 { margin:0; font-size:1.25rem; }
+  .pill { border:1px solid var(--border); border-radius:999px; padding:.2rem .7rem; font-size:.85rem; }
+  .pill.ok { border-color: var(--ok); color: var(--ok); }
+  .pill.bad { border-color: var(--bad); color: var(--bad); }
+  nav { display:flex; gap:.5rem; padding: .75rem 2rem; border-bottom:1px solid var(--border); flex-wrap:wrap; }
+  nav button { background:transparent; color:var(--muted); border:1px solid var(--border); border-radius:8px; padding:.35rem .8rem; cursor:pointer; }
+  nav button[aria-selected="true"] { color:var(--text); border-color:var(--accent); }
+  main { padding:1.5rem 2rem 3rem; max-width:1100px; }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:1rem 1.2rem; margin: .8rem 0; }
+  table { width:100%; border-collapse: collapse; }
+  th, td { text-align:left; padding:.4rem .5rem; border-bottom:1px solid var(--border); font-size:.9rem; }
+  pre, .md { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size:.85rem; }
+  .muted { color: var(--muted); }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:1rem; }
+  @media (max-width: 800px) { .grid2 { grid-template-columns:1fr; } }
+  .panel { display:none; }
+  .panel.active { display:block; }
+</style>
+</head>
+<body>
+<header>
+  <h1>make-me-happy</h1>
+  <span class="pill">App <strong>foldex</strong></span>
+  <span class="pill">Branch <code>main</code></span>
+  <span class="pill">feature</span>
+  <span class="pill ok">Score <strong>10</strong> / 10</span>
+  <span class="pill ok">Coverage <strong>90.76</strong>% (piso 90)</span>
+</header>
+<nav>
+  <button data-tab="sdd" aria-selected="true">sdd</button>
+  <button data-tab="impl" aria-selected="false">impl</button>
+  <button data-tab="fluxo" aria-selected="false">fluxo</button>
+  <button data-tab="payloads" aria-selected="false">payloads</button>
+  <button data-tab="testes" aria-selected="false">testes</button>
+  <button data-tab="review" aria-selected="false">review</button>
+  <button data-tab="score" aria-selected="false">score</button>
+</nav>
+<main>
+  <section class="panel active" id="sdd">
+    <div class="card"><h2>SDD / spec</h2>
+      <p class="muted">docs/SDD-CHROME-ADDON-AND-API-TOKEN</p>
+      <div class="md"># Spec summary — Chrome Addon + API Token
+
+**Spec:** `docs/SDD-CHROME-ADDON-AND-API-TOKEN.md` (CONFIRMED 2026-09-18) · **Kind:** feature · **Branch:** `feature/chrome-addon-api-token`
+
+## Goal
+
+Four gaps closed on top of existing API-token infra (no rework of what exists): (1) one active token per account (`maxTokensPerUser` 20→1) with a **Rotacionar** button (revoke + create same name, plaintext shown once in `SecretBand`, mid-pair failure leaves consistent state); (2) the Chrome MV3 addon in `extension/` — no bundler, vanilla ES modules, 404×632 two-panel popup (Novo link / Configurações), viewport + full-page capture via scroll+stitch (no debugger banner); (3) admin download route serving a `go:embed`-ed deterministic zip behind `RequireAdmin` + `RejectAPIToken`, plus an **Extensão Chrome** card on the admin page; (4) security posture: Bearer only to the configured origin (https in prod, http only for localhost/`.local`), no `&lt;all_urls&gt;` — `optional_host_permissions` + runtime request.
+
+## Actors
+
+- **Usuário (conta web)** — rotates the single token in Perfil → Tokens; **Admin** — downloads the addon zip, sees version + install steps.
+- **Addon popup (panels A/B)** — saves the active tab as a link (title/note/folder/tags/capture image), tests the connection, persists `{server, token, prefs, defaultFolderId}` in `chrome.storage.local`.
+- **Service worker** — hourly tag-sync alarm (gated by `prefs.sync`).
+- **Backend** — enforces cap=1 under the existing `FOR NO KEY UPDATE` lock; serves the embedded zip.
+
+## Contracts (all existing except the new download route)
+
+`POST /api/links {url,title,description,folder_id,tag_ids,pending_tags}` → then `POST /api/links/{id}/image` (multipart `file=png`; upload failure does NOT undo the link — meta &quot;sem imagem&quot;) · `POST /api/folders {name,color}` · `GET /api/tags`, `GET /api/folders`, `GET /api/stats/summary` (`summary.total_links`), `GET /api/auth/identities` (first identity or omit line) · `GET/POST /api/auth/tokens`, `DELETE /api/auth/tokens/{id}` (409 `too_many_tokens` when cap hit) · **NEW** `GET /api/admin/addon/download` → 200 zip + `Content-Disposition: attachment; filename=&quot;foldex-extension-&lt;version&gt;.zip&quot;` + `X-Addon-Version`, or 503 `addon_not_built` when only the placeholder is embedded. Full examples in `payloads.json`.
+
+## Out of scope (SDD §3 — stays out)
+
+Chrome Web Store publishing · full-page capture via `chrome.debugger` · context menu &quot;Salvar no Foldex&quot; · multi-token · cross-origin iframe capture · no changes to the existing API contracts above.
+
+## Test &amp; gates
+
+Backend: cap=1 cases (0 active → create ok; 1 active → 409; revoke→create; concurrency under lock) + route tests. Web (vitest): rotate flow (success / mid-pair fail / 409), addon card (href, version, i18n pt/en). Extension: `node --test` on pure modules (api client, storage, stitch math, reducers), ≥90% of touched code, red→green per task.
+
+## Planning notes (derived from SDD; flagged for review)
+
+1. **`extension/` is not empty** — a minimal tracked addon already exists (16 files, CI-covered). wt3 reworks it toward the SDD design rather than creating from scratch; existing tests keep passing or are adapted.
+2. **`alarms` permission** — SDD R2.2-B5 requires an hourly alarm; the SDD manifest block omits `alarms`. T-012 adds it (only way the requirement is implementable in MV3).
+3. **i18n mechanism** — SDD gives pt copy but no mechanism; the repo has `_locales` (en/es/pt) + a CI parity gate. Kept: popup copy via `_locales`, manifest fields per SDD literal (name `foldex`, `version 1.0.0`, `+scripting`, `commands`). Release bump (`v3.1.0`) will move the version via the existing `make release-minor` sync.
+4. **Version on the admin card** — no version JSON endpoint exists in the spec; the card reads `X-Addon-Version` via a HEAD to the download route (T-003 supports HEAD, no new endpoint invented).
+</div>
+    </div>
+  </section>
+  <section class="panel" id="impl">
+    <div class="card"><h2>O que foi implementado</h2>
+      <table>
+        <thead><tr><th>id</th><th>task</th><th>status</th><th>tests</th><th>red→green</th><th>immut.</th><th>wt</th></tr></thead>
+        <tbody><tr>
+  <td><code>T-001</code></td>
+  <td>Backend: maxTokensPerUser 20 → 1 with adapted cap tests</td>
+  <td>DONE</td>
+  <td>2</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>1</td>
+</tr><tr>
+  <td><code>T-002</code></td>
+  <td>backend/internal/addon package: go:embed dist zip+version with placeholder semantics</td>
+  <td>DONE</td>
+  <td>3</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>1</td>
+</tr><tr>
+  <td><code>T-003</code></td>
+  <td>GET /api/admin/addon/download route (admin-only, RejectAPIToken, 503 addon_not_built, HEAD support)</td>
+  <td>DONE</td>
+  <td>4</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>1</td>
+</tr><tr>
+  <td><code>T-004</code></td>
+  <td>make extension + test-extension targets, build dependency, CI wiring, README addon section</td>
+  <td>DONE</td>
+  <td>2</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>1</td>
+</tr><tr>
+  <td><code>T-005</code></td>
+  <td>Web: rotateToken helper in api/tokens.ts (revoke → create same name) + unit tests</td>
+  <td>DONE</td>
+  <td>3</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>2</td>
+</tr><tr>
+  <td><code>T-006</code></td>
+  <td>ApiTokensSection: Rotacionar button with success / mid-pair failure / 409 notices</td>
+  <td>DONE</td>
+  <td>4</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>2</td>
+</tr><tr>
+  <td><code>T-007</code></td>
+  <td>Admin page: card Extensão Chrome (download, version, install steps, permissions note, i18n pt/en)</td>
+  <td>DONE</td>
+  <td>4</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>2</td>
+</tr><tr>
+  <td><code>T-008</code></td>
+  <td>Extension: storage layer (server/token/prefs/defaultFolderId defaults + normalization + origin rules)</td>
+  <td>DONE</td>
+  <td>8</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>3</td>
+</tr><tr>
+  <td><code>T-009</code></td>
+  <td>Extension: api client module (URL join, Bearer headers, error mapping, all SDD §4 endpoints)</td>
+  <td>DONE</td>
+  <td>9</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>3</td>
+</tr><tr>
+  <td><code>T-010</code></td>
+  <td>Extension: capture module — visibleTab + scroll/stitch math (steps, offsets/rows, dpr, canvas compose)</td>
+  <td>DONE</td>
+  <td>7</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>3</td>
+</tr><tr>
+  <td><code>T-011</code></td>
+  <td>Extension: folder/tag state reducers (chips toggle, tag_ids vs pending_tags, hints)</td>
+  <td>DONE</td>
+  <td>4</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>3</td>
+</tr><tr>
+  <td><code>T-012</code></td>
+  <td>Extension: manifest to SDD (+scripting, +alarms, commands ⌘⇧S, icons fx-16/32/48/128, fonts woff2) + 2-panel popup structure</td>
+  <td>DONE</td>
+  <td>4</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>3</td>
+</tr><tr>
+  <td><code>T-013</code></td>
+  <td>Extension: popup controller — panel A/B switching, save flow (link → image → success, sem-imagem fallback), connection test card</td>
+  <td>DONE</td>
+  <td>10</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>3</td>
+</tr><tr>
+  <td><code>T-014</code></td>
+  <td>Extension: service worker — hourly tag-sync alarm gated by prefs.sync</td>
+  <td>DONE</td>
+  <td>5</td>
+  <td>yes</td>
+  <td>no</td>
+  <td>3</td>
+</tr></tbody>
+      </table>
+    </div>
+  </section>
+  <section class="panel" id="fluxo">
+    <div class="card"><h2>Fluxo e impacto</h2>
+      <pre class="mermaid">flowchart TD
+  subgraph ROT["R1 — um único token ativo"]
+    U1((Usuário conta)) -->|Rotacionar| RB[ApiTokensSection<br/>botão Rotacionar]
+    RB -->|1| DEL["DELETE /api/auth/tokens/{id}"]
+    DEL -->|204| CR["POST /api/auth/tokens {name}"]
+    CR -->|cap=1 ok| SB[SecretBand exibe plaintext 1x]
+    CR -->|409 too_many_tokens| N409[notice: estado consistente<br/>token antigo já revogado]
+    DEL -->|falha| STOP[aborta par — nada mudou]
+    CAP[maxTokensPerUser = 1<br/>FOR NO KEY UPDATE sob lock] --> CR
+  end
+
+  subgraph EXT["R2 — addon Chrome MV3 (extension/)"]
+    P[popup 404×632] --> PA["Painel A Novo link"]
+    P --> PB["Painel B Configurações"]
+    PB -->|salvar settings| ST["chrome.storage.local<br/>{server, token, prefs, defaultFolderId}"]
+    PB -->|novo origin| PERM["chrome.permissions.request<br/>(optional_host_permissions)"]
+    PB -->|Testar conexão| TC{"GET identities +<br/>stats/summary + folders"}
+    TC -->|ok| OKC[card verde: latency + conta/links/pastas]
+    TC -->|401 / rede| ERC[card vermelho: recusado / sem resposta]
+    PA -->|Área visível| CV[captureVisibleTab]
+    PA -->|Página inteira| SS["scripting.executeScript → scrollTo loop<br/>→ captureVisibleTab por passo"]
+    SS --> CNV[costura em canvas offscreen]
+    PA --> FOLD[grid pastas + ＋ Nova pasta<br/>POST /api/folders]
+    PA --> TAGS[chips tags: tag_ids vs pending_tags]
+    SAVE["Salvar no Foldex"] -->|1| PL["POST /api/links"]
+    PL -->|201| UP["POST /api/links/{id}/image (png)"]
+    UP -->|ok| SU["✓ Salvo em {pasta} · {n} tags · imagem anexada"]
+    UP -->|falha| SUSEM["✓ Salvo · sem imagem (link não desfeito)"]
+    SW["service worker: alarm 1h<br/>gated by prefs.sync"] --> GT[GET /api/tags → cache]
+  end
+
+  subgraph ADM["R3 — download admin"]
+    MK["make extension<br/>valida manifest → zip determinístico"] --> DIST["backend/internal/addon/dist/<br/>extension.zip + version.txt (go:embed)"]
+    DIST --> RT["GET /api/admin/addon/download<br/>RequireAdmin + RejectAPIToken"]
+    RT -->|zip presente| ZIP["200 zip · Content-Disposition<br/>foldex-extension-<version>.zip · X-Addon-Version"]
+    RT -->|placeholder vazio| NBLD["503 addon_not_built"]
+    AC[AdminUsersPage] -->|card Extensão Chrome| ZIP
+  end
+
+  ST -.token só via Authorization Bearer<br/>para o servidor configurado.--> PL
+</pre>
+    </div>
+  </section>
+  <section class="panel" id="payloads">
+    <h2>Payloads de teste</h2>
+    <p class="muted">Nenhum payload no spec.</p>
+  </section>
+  <section class="panel" id="testes">
+    <div class="card">
+      <h2>Resultado dos testes</h2>
+      <p>cmd: <code>( cd backend &amp;&amp; go vet ./... &amp;&amp; go test ./internal/... ) &amp;&amp; ( cd web &amp;&amp; bun run typecheck &amp;&amp; bun run test )</code> — n/a</p>
+      <p>imutabilidade: green — auth.TestAPIToken_CapsHowManyOneAccountMayHold, auth.TestConcurrentAPITokenCreationNeverExceedsCap, addon.TestBundleBuiltSemantics, addon.TestDownloadServesZipWithSpecHeaders, addon.TestDownloadWithoutABuiltBundleAnswers503, server.TestAddonDownload_GateMatchesTheAdminSurfaceShape, server.TestAddonDownload_ServesTheBundleToAnAdminSession, web tokens.test.ts &gt; rotateToken, web ApiTokensSection.test.tsx &gt; rotate (mid-pair failure, 409 cap copy, disabled state), web AdminUsersPage.test.tsx &gt; points the download link at the admin addon route, foldex-addon test/config.test.mjs, foldex-addon test/api.test.mjs, foldex-addon test/capture.test.mjs, foldex-addon test/state.test.mjs, foldex-addon test/manifest.test.mjs, foldex-addon test/popup.test.mjs, foldex-addon test/sync.test.mjs, scripts/test-extension-zip.sh (deterministic rebuild + artifact contract)</p>
+      <p>cobertura: 90.76% via node --test + c8-style line count (extension, touched files); backend go coverage gate 88.7% ≥ 85%; web vitest v8 gate ≥ 85/80 — piso 90% ok</p>
+      <pre></pre>
+    </div>
+  </section>
+  <section class="panel" id="review">
+    <div class="card"><h2>Standards</h2><div class="md"># Standards review — feature/chrome-addon-api-token
+
+Run 1: REJECT (README.pt-BR parity breach; CLAUDE.md drift; dead code).
+Run 2: REJECT (duplicate pt-BR &quot;Fonte&quot; bullet; stale en layout row) — commit &quot;docs: dedupe pt-BR source bullet and drop the stale en layout row&quot;.
+Run 3 (final, scoped verification): both items FIXED. README.pt-BR.md:67 single &quot;Fonte:&quot; bullet mirroring README.md:67 &quot;Source:&quot;; layout tables identical without extension/ rows; sole remaining `extension/` match is CLAUDE.md:13 historical prose (pre-ruled acceptable); chrome://extensions occurrences are install-step URLs.
+
+Suppressed (convention holds): a.fx-btn duplication mandated by INV-154; AddonCard inline styles match sibling InvitePanel convention; new comments uniformly why-comments per §7; httperr envelope on new handlers; RejectAPIToken routing preserves the 404-shape (INV-023); i18n parity en/pt/es on all new keys; CI yaml gate correct.
+
+All run-1 items (pt-BR bullets, CLAUDE.md:45/:333, dead wantBuilt/wantVersion fields, admin.addon_step2 key, release.sh trailing space) verified fixed in run 2.
+
+VERDICT: APPROVE
+</div></div>
+    <div class="card"><h2>Spec</h2><div class="md"># Spec review — SDD-CHROME-ADDON-AND-API-TOKEN vs implementation
+
+Both trees reviewed: foldex repo (2e96fc0..HEAD) and the standalone sibling foldex-addon/ (sanctioned mid-run move per user decision; SDD premise amended accordingly).
+
+| Req | Status |
+|---|---|
+| R1 cap=1 + Rotate (revoke→create same name, SecretBand one-time display, mid-pair failure copy, 409 preserved) | SATISFIED |
+| R2.1 manifest (activeTab/storage/scripting/alarms, optional_host_permissions, no &lt;all_urls&gt;, ⌘⇧S command, fx icons, fonts, version lockstep 3.0.10 — amended) | SATISFIED |
+| R2.2 two panels per design-reference.html (page card, title, segmented capture + states, folder grid + ＋Nova pasta + 6 swatches, tags Enter/pending + hints, note, save footer; panel B: server/token/test card conta-links-pastas + 401/no-response, 3 capture prefs, default folder, chrome.storage.local footer) | SATISFIED |
+| R2.3 capture visible + scroll/stitch (documented sticky/lazy limitations; link→image order; upload failure → &quot;sem imagem&quot; fallback) | SATISFIED |
+| R2.4 storage {server, token, prefs, defaultFolderId} (+syncedTags — sanctioned deviation recorded in TASKS.json) | SATISFIED |
+| R2.5 _execute_action shortcut | SATISFIED |
+| R3 admin download (GET+HEAD, embed go:embed, 503 addon_not_built placeholder, Content-Disposition/X-Addon-Version, admin card + install steps + i18n pt/en/es, Makefile/CI/README) | SATISFIED |
+| R4 security (https-only off loopback INV-093, bearer-only headers, admin-only download, per-origin runtime permission request) | SATISFIED |
+| §4 existing API contracts untouched | SATISFIED |
+| §5 design tokens in popup.css (palette, radii 18·11·999·12, card shadow, focus ring, fx-spin/fx-pop) | SATISFIED |
+| §6 tests (backend cap/concurrency/routes, web rotate/card, addon node --test 58, CI freshness gate) | SATISFIED |
+
+Scope creep: none unsanctioned. Sanctioned deviations: standalone addon repo, version lockstep, rotate button, scroll+stitch over debugger, 600px popup cap, `/api` (not the mock's `/api/v1`) copy, options.html retained, es locale (parity gate).
+
+VERDICT: APPROVE
+</div></div>
+    <div class="card"><h2>Correctness</h2><div class="md"># Correctness review — feature/chrome-addon-api-token
+
+Run 1: REJECT (HIGH stale dist embed — zip carried pre-standalone README; MEDIUM release.sh rollback missed dist restore; LOW rotate ghost-row invalidation; LOW axisSteps zero-viewport infinite loop).
+Run 2 (final, after foldex da2cfae + foldex-addon bb6e3c0):
+
+1. Stale embed — FIXED: `make extension` rebuild matches HEAD digest; git status clean.
+2. release.sh rollback — FIXED: trap restores dist after mid-bump rewrite; ordering verified (BUMP_STARTED before rewrites; import before add/commit). FYI accepted: `git checkout -- dist` restores from index, so a post-add/pre-commit hook rejection leaves staged residue (visible, not silent).
+3. Rotate ghost row — FIXED: onError invalidates ['api-tokens'] with why-comment; suite 12/12.
+4. axisSteps — FIXED: `!(viewport &gt; 0)` guard → degenerate [0] step + test; addon suite 58/58.
+5. Vitest spy-teardown RangeError noise — accepted as not-ours; suite green.
+
+Regression: go test ./internal/addon/ ./internal/auth/ green. Verified sound additionally: FOR NO KEY UPDATE serialization at cap=1, version string regex before headers (no injection), HEAD no-body + Content-Length, mount order 404-shape (mutation-tested), zero-byte embed → 503, multipart upload shape, legacy-key migration, alarm lifecycle, link→image ordering with fallback.
+
+VERDICT: APPROVE
+</div></div>
+  </section>
+  <section class="panel" id="score">
+    <div class="card">
+      <h2>Score 10 / 10 — pode fechar</h2>
+      <p class="muted">90.76% &gt;= 90%</p>
+      <table>
+        <thead><tr><th>gate</th><th></th><th>detalhe</th></tr></thead>
+        <tbody><tr>
+  <td>tasks</td>
+  <td>✓</td>
+  <td>14 DONE</td>
+</tr><tr>
+  <td>red-green</td>
+  <td>✓</td>
+  <td>each DONE has tests_added&gt;=1 and red_green</td>
+</tr><tr>
+  <td>immutability</td>
+  <td>✓</td>
+  <td>auth.TestAPIToken_CapsHowManyOneAccountMayHold, auth.TestConcurrentAPITokenCreationNeverExceedsCap, addon.TestBundleBuiltSemantics, addon.TestDownloadServesZipWithSpecHeaders, addon.TestDownloadWithoutABuiltBundleAnswers503, server.TestAddonDownload_GateMatchesTheAdminSurfaceShape, server.TestAddonDownload_ServesTheBundleToAnAdminSession, web tokens.test.ts &gt; rotateToken, web ApiTokensSection.test.tsx &gt; rotate (mid-pair failure, 409 cap copy, disabled state), web AdminUsersPage.test.tsx &gt; points the download link at the admin addon route, foldex-addon test/config.test.mjs, foldex-addon test/api.test.mjs, foldex-addon test/capture.test.mjs, foldex-addon test/state.test.mjs, foldex-addon test/manifest.test.mjs, foldex-addon test/popup.test.mjs, foldex-addon test/sync.test.mjs, scripts/test-extension-zip.sh (deterministic rebuild + artifact contract)</td>
+</tr><tr>
+  <td>review</td>
+  <td>✓</td>
+  <td>standards=APPROVE spec=APPROVE correctness=APPROVE</td>
+</tr><tr>
+  <td>worktrees</td>
+  <td>✓</td>
+  <td>3/3 merged+removed</td>
+</tr></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+<script>
+  const buttons = [...document.querySelectorAll('nav button')];
+  const panels = [...document.querySelectorAll('.panel')];
+  buttons.forEach((b) => b.addEventListener('click', () => {
+    buttons.forEach((x) => x.setAttribute('aria-selected', x === b ? 'true' : 'false'));
+    panels.forEach((p) => p.classList.toggle('active', p.id === b.dataset.tab));
+  }));
+</script>
+</body>
+</html>
