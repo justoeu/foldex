@@ -209,23 +209,32 @@ func TestAPIToken_CapsHowManyOneAccountMayHold(t *testing.T) {
 	h := newHarness(t)
 	admin := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
 
-	for i := range 20 {
-		rec := admin.do(http.MethodPost, "/api/auth/tokens",
-			map[string]any{"name": "token " + itoa(int64(i))})
-		require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
-	}
-	rec := admin.do(http.MethodPost, "/api/auth/tokens", map[string]any{"name": "one too many"})
-	assert.Equal(t, http.StatusConflict, rec.Code)
+	rec := admin.do(http.MethodPost, "/api/auth/tokens", map[string]any{"name": "extension"})
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+
+	rec = admin.do(http.MethodPost, "/api/auth/tokens", map[string]any{"name": "a spare"})
+	assert.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
 	assert.Equal(t, "too_many_tokens", errCode(t, rec))
+
+	// Rotation is revoke-then-create. The seat must free the moment the old
+	// token dies, or rotating bricks the account out of the API entirely.
+	rec = admin.do(http.MethodGet, "/api/auth/tokens", nil)
+	list := decode(t, rec)["tokens"].([]any)
+	require.Len(t, list, 1)
+	id := int64(list[0].(map[string]any)["id"].(float64))
+	require.Equal(t, http.StatusNoContent,
+		admin.do(http.MethodDelete, "/api/auth/tokens/"+itoa(id), nil).Code)
+
+	rec = admin.do(http.MethodPost, "/api/auth/tokens", map[string]any{"name": "extension"})
+	assert.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
 }
 
 func TestConcurrentAPITokenCreationNeverExceedsCap(t *testing.T) {
 	h := newHarness(t)
 	admin := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
-	for i := range 19 {
-		h.mintToken(t, admin, "existing "+itoa(int64(i)))
-	}
-
+	// The account holds NOTHING yet and the cap is one: two racing creates
+	// must serialize on the owner row. A handler-side count would let both
+	// read zero live tokens and mint two credentials.
 	ctx := context.Background()
 	blocker, err := h.pool.Begin(ctx)
 	require.NoError(t, err)
@@ -263,7 +272,7 @@ func TestConcurrentAPITokenCreationNeverExceedsCap(t *testing.T) {
 	var live int
 	require.NoError(t, h.pool.QueryRow(ctx,
 		`SELECT count(*) FROM api_token WHERE user_id = $1 AND revoked_at IS NULL`, uid).Scan(&live))
-	assert.Equal(t, 20, live)
+	assert.Equal(t, 1, live)
 }
 
 // The sweeper is what bounds api_token and oauth_state over time. Neither is a
@@ -346,8 +355,14 @@ func TestAPIToken_HonoursTheRequestedExpiry(t *testing.T) {
 	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
 	assert.NotEmpty(t, decode(t, rec)["expires_at"])
 
+	// The account may hold one live token, so the second create only fits
+	// after the first is revoked — the same rotation the UI does.
+	first := int64(decode(t, rec)["id"].(float64))
+	require.Equal(t, http.StatusNoContent,
+		admin.do(http.MethodDelete, "/api/auth/tokens/"+itoa(first), nil).Code)
+
 	rec = admin.do(http.MethodPost, "/api/auth/tokens", map[string]any{"name": "forever"})
-	require.Equal(t, http.StatusCreated, rec.Code)
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
 	assert.Nil(t, decode(t, rec)["expires_at"])
 }
 
@@ -404,14 +419,25 @@ func TestAPIToken_ListsNewestFirst(t *testing.T) {
 	h := newHarness(t)
 	admin := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
 
-	for _, name := range []string{"oldest", "middle", "newest"} {
-		h.mintToken(t, admin, name)
+	// One live token per account, so the siblings are seeded straight into
+	// the table: the ordering under test is ListAPITokens' ORDER BY, which
+	// does not care how a row was born.
+	var uid int64
+	require.NoError(t, h.pool.QueryRow(context.Background(),
+		`SELECT id FROM app_user WHERE email = 'admin@example.com'`).Scan(&uid))
+	h.mintToken(t, admin, "oldest")
+	_, err := h.pool.Exec(context.Background(),
+		`UPDATE api_token SET created_at = now() WHERE name = $1`, "oldest")
+	require.NoError(t, err)
+	for i, name := range []string{"middle", "newest"} {
 		// created_at has sub-second resolution, but two inserts inside the same
-		// tick would make the order arbitrary and the test flaky.
-		_, err := h.pool.Exec(context.Background(),
-			`UPDATE api_token SET created_at = now() WHERE name = $1`, name)
-		require.NoError(t, err)
+		// tick would make the order arbitrary and the test flaky. Hashes are
+		// globally unique, so each seeded row carries its own dummy.
 		time.Sleep(2 * time.Millisecond)
+		_, err := h.pool.Exec(context.Background(),
+			`INSERT INTO api_token (user_id, name, token_hash) VALUES ($1, $2, $3)`,
+			uid, name, []byte{byte(i + 1)})
+		require.NoError(t, err)
 	}
 
 	rec := admin.do(http.MethodGet, "/api/auth/tokens", nil)
@@ -428,7 +454,12 @@ func TestAPIToken_RevokedTokensLeaveTheList(t *testing.T) {
 	h := newHarness(t)
 	admin := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
 	h.mintToken(t, admin, "doomed")
-	h.mintToken(t, admin, "survivor")
+	// The second live row is seeded directly: the cap allows one mint, and
+	// the contract under test is the LIST, not the create.
+	_, err := h.pool.Exec(context.Background(),
+		`INSERT INTO api_token (user_id, name, token_hash)
+		 SELECT id, 'survivor', '\x02' FROM app_user WHERE email = 'admin@example.com'`)
+	require.NoError(t, err)
 
 	rec := admin.do(http.MethodGet, "/api/auth/tokens", nil)
 	list := decode(t, rec)["tokens"].([]any)
