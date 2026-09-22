@@ -168,6 +168,9 @@ describe('ApiTokensSection', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/old token was revoked/i)
     expect(screen.getByRole('alert')).toHaveTextContent(/create a token/i)
+    // The revoke half already landed, so the list must refetch — a stale row
+    // would render the revoked token as live and rotate-a-ghost would 404.
+    expect(vi.mocked(http.get).mock.calls.filter((c) => c[0] === '/api/auth/tokens').length).toBeGreaterThan(1)
   })
 
   it('answers a 409 from the create half with the cap copy', async () => {

@@ -6,6 +6,7 @@ package addon
 import (
 	_ "embed"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -43,9 +44,18 @@ func Embedded() Bundle {
 // Built reports whether a real extension zip is present. An empty zip or the
 // placeholder version means the binary was built without `make extension`,
 // and the download route must say so rather than serve garbage bytes.
+//
+// The version is also shape-checked here: the build pipeline regex-gates it
+// before it ever reaches dist/version.txt, but Built is the last line before
+// the value lands in response headers — a hand-edited commit must not get
+// that far.
 func (b Bundle) Built() bool {
-	return len(b.zip) > 0 && b.version != "" && b.version != notBuiltVersion
+	return len(b.zip) > 0 && versionShape.MatchString(b.version) && b.version != notBuiltVersion
 }
+
+// versionShape is the dotted triple Chrome requires of manifest versions —
+// the same contract build-extension-zip.py enforces at import time.
+var versionShape = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
 
 // Version returns the manifest version the zip was built from.
 func (b Bundle) Version() string { return b.version }

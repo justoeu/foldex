@@ -55,7 +55,7 @@ fi
 
 PKG=web/package.json
 COMPOSE=docker-compose.yml
-FOLDEX_ADDON_DIR="${FOLDEX_ADDON_DIR:-../foldex-addon}"
+export FOLDEX_ADDON_DIR="${FOLDEX_ADDON_DIR:-../foldex-addon}"
 PIN_AWK="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/compose-image-pin.awk"
 if [ ! -f "$PIN_AWK" ]; then
   echo "✗ missing $PIN_AWK" >&2
@@ -88,9 +88,13 @@ rollback_bump() {
   for leftover in "${COMPOSE_FILES[@]}"; do
     rm -f "$leftover.tmp"
   done
-  # make extension may have rewritten the embed before the failure — the
-  # release started clean, so HEAD's dist is the authoritative state.
-  git checkout -- backend/internal/addon/dist 2>/dev/null || true
+  # The addon import may have rewritten the embed before the failure, and
+  # git add may have staged it. Staged adds are invisible to git clean, so:
+  # unstage first, restore what HEAD knows, then drop never-committed files
+  # (first import into a repo without dist committed).
+  git restore --staged -- backend/internal/addon/dist 2>/dev/null || true
+  git checkout HEAD -- backend/internal/addon/dist 2>/dev/null || true
+  git clean -fqd -- backend/internal/addon/dist 2>/dev/null || true
   if [ "$status" -ne 0 ] && [ "$BUMP_STARTED" -eq 1 ]; then
     if ! git restore --staged --worktree -- "${VERSION_FILES[@]}"; then
       echo "✗ release failed and automatic version rollback also failed" >&2
@@ -122,6 +126,12 @@ if ! [[ "$CUR" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
   exit 1
 fi
 
+# docker-compose.yml is the only file REQUIRED to run the full service set;
+# the others are in scope when they exist but may legitimately be partial.
+require_for() {
+  [ "$1" = "$COMPOSE" ] && echo 1 || echo 0
+}
+
 compose_version_is() {
   awk -f "$PIN_AWK" -v expected="$2" -v require_services="${3:-1}" "$1"
 }
@@ -136,8 +146,7 @@ if [ ! -f "$ADDON_MANIFEST" ]; then
   exit 1
 fi
 for compose_file in "${COMPOSE_FILES[@]}"; do
-  if [ "$compose_file" = "$COMPOSE" ]; then require=1; else require=0; fi
-  if ! compose_version_is "$compose_file" "$CUR" "$require"; then
+  if ! compose_version_is "$compose_file" "$CUR" "$(require_for "$compose_file")"; then
     echo "✗ $compose_file does not pin every Foldex image to $CUR" >&2
     exit 1
   fi
@@ -198,8 +207,7 @@ update_compose_version() {
 BUMP_STARTED=1
 update_version "$PKG"
 for compose_file in "${COMPOSE_FILES[@]}"; do
-  if [ "$compose_file" = "$COMPOSE" ]; then require=1; else require=0; fi
-  update_compose_version "$compose_file" "$require"
+  update_compose_version "$compose_file" "$(require_for "$compose_file")"
 done
 
 # Sanity check — all release-owned versions should now report NEW.
@@ -211,8 +219,7 @@ for f in "$PKG"; do
   fi
 done
 for compose_file in "${COMPOSE_FILES[@]}"; do
-  if [ "$compose_file" = "$COMPOSE" ]; then require=1; else require=0; fi
-  if ! compose_version_is "$compose_file" "$NEW" "$require"; then
+  if ! compose_version_is "$compose_file" "$NEW" "$(require_for "$compose_file")"; then
     echo "✗ bump failed for $compose_file" >&2
     exit 1
   fi
@@ -220,8 +227,9 @@ done
 
 # Re-import the addon AFTER the version rewrite: the import gate requires
 # addon version == app version, which only holds once $PKG reports NEW.
-# The refreshed dist rides the same bump commit.
-make extension
+# The refreshed dist rides the same bump commit. The python script is called
+# directly (not via make) so a release needs nothing but the repo itself.
+python3 scripts/build-extension-zip.py
 ADDON_DIST_V=$(cat backend/internal/addon/dist/version.txt)
 if [ "$ADDON_DIST_V" != "$NEW" ]; then
   echo "✗ addon embed still at $ADDON_DIST_V — bump foldex-addon to $NEW first, then re-run" >&2

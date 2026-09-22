@@ -20,6 +20,8 @@ func TestBundleBuiltSemantics(t *testing.T) {
 		{name: "placeholder dist", zip: nil, version: "0.0.0"},
 		{name: "empty version", zip: []byte("PK"), version: ""},
 		{name: "placeholder version with bytes", zip: []byte("PK"), version: "0.0.0"},
+		{name: "hand-edited version with header-breaking bytes", zip: []byte("PK"), version: "9.9.9\"\r\n"},
+		{name: "non-triple version", zip: []byte("PK"), version: "v9.9"},
 	} {
 		b := addon.NewBundle(tc.zip, tc.version)
 		assert.False(t, b.Built(), tc.name)

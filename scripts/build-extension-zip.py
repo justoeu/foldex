@@ -26,7 +26,8 @@ SRC = Path(os.environ.get("FOLDEX_ADDON_DIR", ROOT.parent / "foldex-addon"))
 DIST = ROOT / "backend/internal/addon/dist"
 
 # Test sources never ship inside the extension an admin downloads: they are
-# dev-only in either layout wt3 may use (a test/ dir or co-located *.test.*).
+# dev-only in either layout the addon project uses (a test/ dir or
+# co-located *.test.*).
 EXCLUDED_DIRS = {"node_modules", ".git", "test", "tests"}
 EXCLUDED_SUFFIXES = (".test.js", ".test.mjs", ".test.cjs")
 
@@ -67,14 +68,21 @@ def collect() -> list[Path]:
 
 def main() -> None:
     if not SRC.is_dir():
-        fail(f"addon project not found at {SRC} — clone foldex-addon next to "
-             f"this repo or point FOLDEX_ADDON_DIR at it")
+        # A foldex-only checkout (no sibling addon project) can still build:
+        # the committed dist is a build input, not a generated cache. Refuse
+        # only when there is nothing to embed at all.
+        if (DIST / "extension.zip").is_file() and (DIST / "version.txt").is_file():
+            print(f"addon project not found at {SRC} — keeping the committed "
+                  f"dist ({(DIST / 'version.txt').read_text(encoding='utf-8').strip()})")
+            return
+        fail(f"addon project not found at {SRC} and no committed dist — clone "
+             f"foldex-addon next to this repo or point FOLDEX_ADDON_DIR at it")
 
     manifest_path = SRC / "manifest.json"
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        fail(f"extension/manifest.json does not parse: {exc}")
+        fail(f"{manifest_path} does not parse: {exc}")
 
     version = str(manifest.get("version", ""))
     if not re.fullmatch(r"\d+\.\d+\.\d+", version):

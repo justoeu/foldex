@@ -179,11 +179,10 @@ git init -q "$TMP/repo"
 git -C "$TMP/repo" config user.name test
 git -C "$TMP/repo" config user.email test@foldex.invalid
 printf 'main\n' >"$TMP/repo/state"
-mkdir -p "$TMP/repo/web" "$TMP/repo/extension"
+mkdir -p "$TMP/repo/web"
 printf '{"version":"1.2.3"}\n' >"$TMP/repo/web/package.json"
-printf '{"version":"1.2.3"}\n' >"$TMP/repo/extension/manifest.json"
 write_compose 1.2.3 1.2.3
-git -C "$TMP/repo" add state web/package.json extension/manifest.json docker-compose.yml
+git -C "$TMP/repo" add state web/package.json docker-compose.yml
 git -C "$TMP/repo" commit -qm main
 git -C "$TMP/repo" branch -M main
 git -C "$TMP/repo" remote add origin "$TMP/origin.git"
@@ -358,7 +357,6 @@ fi
 
 git -C "$TMP/repo" switch -q main
 printf '{"version":"1.2.4"}\n' >"$TMP/repo/web/package.json"
-printf '{"version":"1.2.4"}\n' >"$TMP/repo/extension/manifest.json"
 write_compose 1.2.4 1.2.4
 git -C "$TMP/repo" commit -qam 'version 1.2.4'
 git -C "$TMP/repo" push -qu origin main
