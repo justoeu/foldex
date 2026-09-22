@@ -1133,7 +1133,12 @@
     "invalid_name": "Dê um nome curto ao token para reconhecê-lo depois.",
     "card_title": "Tokens de API",
     "list_label": "Tokens ativos",
-    "revoke": "Revogar"
+    "revoke": "Revogar",
+    "rotate": "Rotacionar",
+    "rotate_label": "Rotacionar {{name}}",
+    "rotate_title": "Rotacionar este token?",
+    "rotate_message": "“{{name}}” é revogado primeiro e um novo é emitido no lugar. O que ainda usa o valor antigo para de funcionar até ser atualizado.",
+    "rotate_failed": "O token antigo foi revogado, mas o novo não pôde ser criado. Você pode criar um token normalmente abaixo."
   },
   "admin": {
     "users_title": "Contas",
@@ -1677,7 +1682,16 @@
     "activity_lede": "O que esta conta criou, editou e excluiu. Só você vê esta lista.",
     "activity_empty": "Nenhuma atividade registrada ainda.",
     "activity_unavailable": "Não foi possível carregar sua atividade.",
-    "activity_more": "Carregar mais antigos"
+    "activity_more": "Carregar mais antigos",
+    "addon_title": "Extensão Chrome",
+    "addon_desc": "Salve qualquer página desta instância do Foldex direto do navegador. O zip abaixo é construído por este servidor; a versão vem no nome do arquivo baixado.",
+    "addon_download": "Baixar .zip",
+    "addon_version_note": "O arquivo chega como foldex-extension-<version>.zip, com a versão também nos headers do download.",
+    "addon_steps_title": "Instalação",
+    "addon_step1": "Baixe o .zip e extraia.",
+    "addon_step2": "Abra chrome://extensions.",
+    "addon_step3": "Ative o Developer mode e escolha “Load unpacked”, apontando para a pasta extraída.",
+    "addon_permissions": "Permissões: activeTab, storage, scripting e alarms, além do acesso à origem deste servidor — a origem só é pedida quando você salva um endereço de servidor."
   },
   "profile": {
     "name_label": "Nome de exibição",

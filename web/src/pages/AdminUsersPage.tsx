@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Icon, I } from '../components/icons'
 import { CreateUserDialog } from '../components/admin/CreateUserDialog'
 import { InvitePanel } from '../components/admin/InvitePanel'
+import { AddonCard } from '../components/admin/AddonCard'
 import { UserRowActions } from '../components/admin/UserRowActions'
 import {
   deleteUser,
@@ -234,6 +235,8 @@ export function AdminUsersPage() {
       </section>
 
       <InvitePanel onError={onError} onClearError={() => setError('')} />
+
+      <AddonCard />
 
       {createOpen && <CreateUserDialog onClose={() => setCreateOpen(false)} />}
     </div>
