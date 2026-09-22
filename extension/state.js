@@ -37,7 +37,8 @@ export function selectFolder(currentFolderId, folderId) {
 // Hint values, not strings: formatting/plurals live behind chrome.i18n in
 // the controller.
 export function folderHint(selectedFolder) {
-  return selectedFolder ? selectedFolder.count ?? 0 : null;
+  if (!selectedFolder) return null;
+  return selectedFolder.count ?? selectedFolder.link_count ?? 0;
 }
 
 export function tagHint(selected) {

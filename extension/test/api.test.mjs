@@ -8,6 +8,7 @@ import {
   listIdentities,
   listTags,
   statsSummary,
+  testConnection,
   uploadLinkImage,
 } from "../api.js";
 import { jsonResponse, mockChrome, mockFetch } from "./helpers.mjs";
@@ -21,7 +22,8 @@ describe("read endpoints", () => {
       if (url.endsWith("/api/folders")) return jsonResponse([{ id: 1, name: "IA" }]);
       if (url.endsWith("/api/tags")) return jsonResponse([{ id: 2, name: "git" }]);
       if (url.endsWith("/api/stats/summary")) return jsonResponse({ total_links: 62 });
-      if (url.endsWith("/api/auth/identities")) return jsonResponse([{ id: 9 }]);
+      if (url.endsWith("/api/auth/identities"))
+        return jsonResponse({ identities: [{ provider: "google", email_at_link: "valmir@x.test" }] });
       return jsonResponse({});
     });
 
@@ -33,7 +35,9 @@ describe("read endpoints", () => {
     assert.deepEqual(folders, [{ id: 1, name: "IA" }]);
     assert.deepEqual(tags, [{ id: 2, name: "git" }]);
     assert.deepEqual(summary, { total_links: 62 });
-    assert.deepEqual(identities, [{ id: 9 }]);
+    assert.deepEqual(identities, [
+      { provider: "google", email_at_link: "valmir@x.test" },
+    ]);
     assert.equal(calls.requests.length, 0);
     assert.equal(calls.contains.length, 4);
     for (const call of fetchCalls) {
@@ -42,6 +46,29 @@ describe("read endpoints", () => {
       assert.equal(call.options.redirect, "error");
       assert.equal(call.options.method, undefined);
     }
+  });
+
+  test("testConnection aggregates latency, account, links and folders in one user gesture", async () => {
+    const { chromeApi, calls } = mockChrome();
+    const { fetchImpl } = mockFetch((url) => {
+      if (url.endsWith("/api/folders")) return jsonResponse([{ id: 1 }, { id: 2 }]);
+      if (url.endsWith("/api/stats/summary")) return jsonResponse({ total_links: 62 });
+      if (url.endsWith("/api/auth/identities"))
+        return jsonResponse({ identities: [{ provider: "google", email_at_link: "valmir@x.test" }] });
+      return jsonResponse({});
+    });
+    let clock = 0;
+    const now = () => (clock += 128);
+
+    const result = await testConnection(SETTINGS, { chromeApi, fetchImpl, now });
+
+    assert.deepEqual(result, {
+      latencyMs: 128,
+      account: "valmir@x.test",
+      totalLinks: 62,
+      folderCount: 2,
+    });
+    assert.deepEqual(calls.requests, [{ origins: ["https://foldex.example/*"] }]);
   });
 
   test("reads without granted origin fail fast with an actionable message and zero fetches", async () => {

@@ -1,57 +1,15 @@
 {
-  "extName": {
-    "message": "Foldex Capture"
-  },
-  "extDescription": {
-    "message": "Guarda la pestaña actual en tu gestor de marcadores Foldex."
-  },
-  "saveToFoldex": {
-    "message": "Guardar en Foldex"
-  },
-  "url": {
-    "message": "URL"
-  },
-  "title": {
-    "message": "Título"
-  },
-  "description": {
-    "message": "Descripción"
-  },
-  "tags": {
-    "message": "Etiquetas"
-  },
   "save": {
     "message": "Guardar"
   },
   "settings": {
     "message": "Configuración"
   },
-  "urlRequired": {
-    "message": "La URL es obligatoria"
-  },
-  "saving": {
-    "message": "Guardando…"
-  },
-  "saved": {
-    "message": "Guardado ✓"
-  },
   "saveFailed": {
     "message": "No se pudo guardar: $1"
   },
-  "tagsLoadFailed": {
-    "message": "No se pudieron cargar las etiquetas: $1 — revisa la configuración"
-  },
   "settingsLoadFailed": {
     "message": "No se pudo cargar la configuración: $1"
-  },
-  "tabReadFailed": {
-    "message": "No se pudo leer esta pestaña: $1"
-  },
-  "notSignedIn": {
-    "message": "no has iniciado sesión — configura un token de API en ajustes"
-  },
-  "tokenForbidden": {
-    "message": "este token no está permitido aquí"
   },
   "optionsTitle": {
     "message": "Foldex — Configuración"

@@ -1,98 +1,68 @@
-import {
-  apiUrl,
-  authHeaders,
-  getStoredConfig,
-  normalizeBaseUrl,
-  requestOriginAccess,
-  setStoredConfig,
-} from "./config.js";
+import { testConnection } from "./api.js";
+import { requestOriginAccess } from "./config.js";
 import { t } from "./i18n.js";
+import { loadSettings, saveSettings } from "./storage.js";
 
-function normalizeOptions(values) {
-  return {
-    baseUrl: normalizeBaseUrl(values.baseUrl),
-    apiToken: values.apiToken.trim(),
-  };
-}
-
-export async function saveOptions(values, { chromeApi = chrome } = {}) {
-  const config = normalizeOptions(values);
-  await requestOriginAccess(config.baseUrl, chromeApi);
-  await setStoredConfig(config, chromeApi);
-  return config;
-}
-
-export async function testConnection(
-  values,
-  { chromeApi = chrome, fetchImpl = fetch } = {},
-) {
-  const config = normalizeOptions(values);
-  await requestOriginAccess(config.baseUrl, chromeApi);
-
-  const resp = await fetchImpl(apiUrl(config.baseUrl, "/api/tags"), {
-    headers: authHeaders(config),
-    redirect: "error",
-  });
-  if (resp.status === 401 || resp.status === 403) {
-    throw new Error(t(chromeApi, "tokenRejected", [String(resp.status)]));
-  }
-  if (!resp.ok) throw new Error("HTTP " + resp.status);
-  const tags = await resp.json();
-  return tags.length;
-}
-
+// The popup's Panel B is the primary settings surface (SDD R2.2); this page
+// remains as the full-window fallback and shares the same modules.
 export function initOptionsPage({
   documentApi = document,
   chromeApi = chrome,
+  fetchImpl = fetch,
 } = {}) {
   const $ = (id) => documentApi.getElementById(id);
   const statusEl = $("status");
+  const T = (key, substitutions) => t(chromeApi, key, substitutions);
 
   function setStatus(msg, level) {
     statusEl.textContent = msg || "";
     statusEl.className = "status" + (level ? " " + level : "");
   }
 
-  function readOptions() {
-    return {
-      baseUrl: $("baseUrl").value,
-      apiToken: $("apiToken").value,
-    };
-  }
+  const readInputs = () => ({
+    server: $("server").value,
+    token: $("token").value,
+  });
 
-  const ready = getStoredConfig(chromeApi)
-    .then((config) => {
-      $("baseUrl").value = config.baseUrl;
-      $("apiToken").value = config.apiToken;
+  const ready = loadSettings(chromeApi)
+    .then((settings) => {
+      $("server").value = settings.server;
+      $("token").value = settings.token;
     })
-    .catch((error) =>
-      setStatus(t(chromeApi, "settingsLoadFailed", [error.message]), "error"),
-    );
+    .catch((error) => setStatus(T("settingsLoadFailed", [error.message]), "error"));
 
   async function save() {
-    setStatus(t(chromeApi, "requestingAccess"));
+    setStatus(T("requestingAccess"));
     try {
-      const config = await saveOptions(readOptions(), { chromeApi });
-      $("baseUrl").value = config.baseUrl;
-      setStatus(t(chromeApi, "savedOk"), "ok");
+      const candidate = readInputs();
+      await requestOriginAccess(candidate.server, chromeApi);
+      await saveSettings(candidate, chromeApi);
+      setStatus(T("savedOk"), "ok");
     } catch (error) {
-      setStatus(t(chromeApi, "notSaved", [error.message]), "error");
+      setStatus(T("notSaved", [error.message]), "error");
     }
   }
 
   async function testCurrentConnection() {
-    setStatus(t(chromeApi, "testing"));
+    setStatus(T("testing"));
     try {
-      const tagCount = await testConnection(readOptions(), { chromeApi });
-      setStatus(t(chromeApi, "connected", [String(tagCount)]), "ok");
+      const result = await testConnection(readInputs(), { chromeApi, fetchImpl });
+      setStatus(T("connected", [String(result.totalLinks ?? 0)]), "ok");
     } catch (error) {
-      setStatus(t(chromeApi, "failed", [error.message]), "error");
+      setStatus(
+        error.status
+          ? T("tokenRejected", [String(error.status)])
+          : T("failed", [error.message]),
+        "error",
+      );
     }
   }
 
-  $("save").addEventListener("click", save);
-  $("test").addEventListener("click", testCurrentConnection);
+  $("save").addEventListener("click", () => void save());
+  $("test").addEventListener("click", () => void testCurrentConnection());
   return { ready, save, testCurrentConnection };
 }
 
-if (typeof document !== "undefined") initOptionsPage();
+if (typeof document !== "undefined" && typeof chrome !== "undefined") {
+  initOptionsPage();
+}

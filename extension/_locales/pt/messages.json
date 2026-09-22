@@ -1,57 +1,15 @@
 {
-  "extName": {
-    "message": "Foldex Capture"
-  },
-  "extDescription": {
-    "message": "Salve a aba atual no seu gerenciador de favoritos Foldex."
-  },
-  "saveToFoldex": {
-    "message": "Salvar no Foldex"
-  },
-  "url": {
-    "message": "URL"
-  },
-  "title": {
-    "message": "Título"
-  },
-  "description": {
-    "message": "Descrição"
-  },
-  "tags": {
-    "message": "Tags"
-  },
   "save": {
     "message": "Salvar"
   },
   "settings": {
     "message": "Configurações"
   },
-  "urlRequired": {
-    "message": "A URL é obrigatória"
-  },
-  "saving": {
-    "message": "Salvando…"
-  },
-  "saved": {
-    "message": "Salvo ✓"
-  },
   "saveFailed": {
     "message": "Falha ao salvar: $1"
   },
-  "tagsLoadFailed": {
-    "message": "Não foi possível carregar as tags: $1 — verifique as configurações"
-  },
   "settingsLoadFailed": {
     "message": "Não foi possível carregar as configurações: $1"
-  },
-  "tabReadFailed": {
-    "message": "Não foi possível ler esta aba: $1"
-  },
-  "notSignedIn": {
-    "message": "não autenticado — defina um token de API nas configurações"
-  },
-  "tokenForbidden": {
-    "message": "este token não é permitido aqui"
   },
   "optionsTitle": {
     "message": "Foldex — Configurações"

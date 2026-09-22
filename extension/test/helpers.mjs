@@ -2,26 +2,32 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const EN_MESSAGES = JSON.parse(
-  readFileSync(
-    join(dirname(fileURLToPath(import.meta.url)), "..", "_locales", "en", "messages.json"),
-    "utf8",
-  ),
-);
+const LOCALES_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "_locales");
+
+const MESSAGES = {};
+for (const locale of ["en", "pt", "es"]) {
+  MESSAGES[locale] = JSON.parse(
+    readFileSync(join(LOCALES_ROOT, locale, "messages.json"), "utf8"),
+  );
+}
 
 // Mirrors the callback style config.js expects: runtime.lastError is set
 // synchronously during the call and cleared right after, like Chrome does.
+// Tests default to pt because the SDD copy is written in pt-BR.
 export function mockChrome({
   requestGranted = true,
   containsGranted = true,
   storageGetError = "",
   stored = {},
+  tabs = [],
+  locale = "pt",
 } = {}) {
+  const messages = MESSAGES[locale] ?? MESSAGES.en;
   const calls = { requests: [], contains: [], reads: [], writes: [], removals: [] };
   const chromeApi = {
     i18n: {
       getMessage(key, substitutions) {
-        const entry = EN_MESSAGES[key];
+        const entry = messages[key];
         if (!entry) return "";
         let text = entry.message;
         const list =
@@ -32,8 +38,15 @@ export function mockChrome({
         return text;
       },
     },
-    runtime: { openOptionsPage() {} },
-    tabs: { async query() { return []; } },
+    runtime: {
+      openOptionsPage() {},
+      getManifest: () => ({ version: "1.0.0" }),
+    },
+    tabs: {
+      async query() {
+        return tabs;
+      },
+    },
     permissions: {
       request(permission, callback) {
         calls.requests.push(permission);

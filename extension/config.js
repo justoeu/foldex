@@ -106,24 +106,3 @@ export async function requireOriginAccess(baseUrl, chromeApi) {
   if (!granted) throw permissionError(baseUrl);
   return normalizeBaseUrl(baseUrl);
 }
-
-export function getStoredConfig(chromeApi) {
-  return callChrome(chromeApi, chromeApi.storage.local, 'get', DEFAULT_CONFIG)
-    .then((config) => {
-      // Releases before the SHARED_SECRET removal left the key behind; it is
-      // inert now — clear it so secret material does not linger in storage.
-      // Guarded because test doubles and old Chrome versions may lack remove().
-      try {
-        if (typeof chromeApi.storage.local.remove === 'function') {
-          chromeApi.storage.local.remove('sharedSecret');
-        }
-      } catch {
-        // Cleanup is best-effort; never block config loading on it.
-      }
-      return config;
-    });
-}
-
-export function setStoredConfig(config, chromeApi) {
-  return callChrome(chromeApi, chromeApi.storage.local, 'set', config);
-}

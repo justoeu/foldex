@@ -6,6 +6,28 @@ import {
   requireOriginAccess,
 } from "./config.js";
 
+// Latency probe + the three numbers the connection card shows (SDD R2.2-B4):
+// account (first linked identity, if any), total links, folder count.
+export async function testConnection(
+  settings,
+  { chromeApi = chrome, fetchImpl = fetch, now = () => performance.now() } = {},
+) {
+  const started = now();
+  await requestOriginAccess(settings.server, chromeApi);
+  const [identities, summary, folders] = await Promise.all([
+    listIdentities(settings, { chromeApi, fetchImpl }),
+    statsSummary(settings, { chromeApi, fetchImpl }),
+    listFolders(settings, { chromeApi, fetchImpl }),
+  ]);
+  const first = Array.isArray(identities) ? identities[0] : null;
+  return {
+    latencyMs: Math.round(now() - started),
+    account: first ? first.email_at_link || first.provider || null : null,
+    totalLinks: summary?.total_links ?? null,
+    folderCount: Array.isArray(folders) ? folders.length : null,
+  };
+}
+
 // The backend answers {error:{code,message}} — surface the human message it
 // already wrote; the raw slice is only for non-JSON bodies.
 async function unwrapError(resp) {
@@ -81,7 +103,10 @@ export function statsSummary(settings, { chromeApi = chrome, fetchImpl = fetch }
 }
 
 export function listIdentities(settings, { chromeApi = chrome, fetchImpl = fetch } = {}) {
-  return read(settings, "/api/auth/identities", { chromeApi, fetchImpl });
+  // The endpoint wraps the rows: {identities: [...]}, unlike the others.
+  return read(settings, "/api/auth/identities", { chromeApi, fetchImpl }).then(
+    (body) => body?.identities ?? [],
+  );
 }
 
 export function createFolder(settings, folder, { chromeApi = chrome, fetchImpl = fetch } = {}) {
