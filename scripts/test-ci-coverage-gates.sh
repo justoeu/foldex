@@ -118,17 +118,23 @@ for threshold in 'lines: 85' 'statements: 85' 'functions: 85' 'branches: 80'; do
   grep -Fq "$threshold" "$VITEST_CONFIG" || fail "missing frontend threshold: $threshold"
 done
 
-extension_gate=$(step_block "extension tests")
-[[ -n "$extension_gate" ]] || fail "blocking extension tests are missing from CI"
-grep -Eq '^[[:space:]]+working-directory: extension$' <<<"$extension_gate" ||
-  fail "extension tests must run from the extension package"
-grep -Eq '^[[:space:]]+run: bun run test$' <<<"$extension_gate" ||
-  fail "extension CI must use its package test script"
-if grep -Eq '^[[:space:]]+continue-on-error:[[:space:]]*true$' <<<"$extension_gate"; then
-  fail "extension tests must block CI"
+# The addon source lives in the sibling foldex-addon/ project, so CI cannot
+# run its tests; the repo-side contract is the embed freshness gate — the
+# committed dist must match the app version or a release would silently ship
+# a stale addon.
+addon_gate=$(step_block "addon embed freshness")
+[[ -n "$addon_gate" ]] || fail "the addon embed freshness gate is missing from CI"
+grep -Fq 'dist/version.txt' <<<"$addon_gate" ||
+  fail "the freshness gate must read the committed dist version"
+grep -Fq 'web/package.json' <<<"$addon_gate" ||
+  fail "the freshness gate must compare against the app version"
+grep -Eq 'addon embed \$DIST_V != app \$APP_V|!= app' <<<"$addon_gate" ||
+  fail "the freshness gate must fail loudly on drift"
+grep -Eq '^[[:space:]]+test -s backend/internal/addon/dist/extension.zip$' <<<"$addon_gate" ||
+  fail "the freshness gate must assert the zip is present and non-empty"
+if grep -Eq '^[[:space:]]+continue-on-error:[[:space:]]*true$' <<<"$addon_gate"; then
+  fail "the addon freshness gate must block CI"
 fi
-[[ $(grep -Ec '^[[:space:]]+run: bun run test$' <<<"$frontend_job") -eq 1 ]] ||
-  fail "extension CI must run its test suite exactly once"
 
 while IFS= read -r image; do
   [[ -z "$image" ]] && continue
