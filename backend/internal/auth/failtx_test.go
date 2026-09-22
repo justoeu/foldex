@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"foldex/internal/pkg/authctx"
 )
@@ -46,6 +47,7 @@ func (okRow) Scan(...any) error { return nil }
 type emptyRows struct{}
 
 func (emptyRows) Close()                                       {}
+func (emptyRows) TypeMap() *pgtype.Map                         { return nil }
 func (emptyRows) Err() error                                   { return nil }
 func (emptyRows) CommandTag() pgconn.CommandTag                { return pgconn.CommandTag{} }
 func (emptyRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
@@ -128,6 +130,7 @@ type failRows struct {
 }
 
 func (r *failRows) Close()                                       {}
+func (r *failRows) TypeMap() *pgtype.Map                         { return nil }
 func (r *failRows) Err() error                                   { return r.err }
 func (r *failRows) CommandTag() pgconn.CommandTag                { return pgconn.CommandTag{} }
 func (r *failRows) FieldDescriptions() []pgconn.FieldDescription { return nil }

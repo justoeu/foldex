@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -55,6 +56,7 @@ func (r *gatedClickRows) Scan(dest ...any) error {
 }
 
 func (r *gatedClickRows) Close()                                       {}
+func (r *gatedClickRows) TypeMap() *pgtype.Map                         { return nil }
 func (r *gatedClickRows) Err() error                                   { return r.err }
 func (r *gatedClickRows) CommandTag() pgconn.CommandTag                { return pgconn.CommandTag{} }
 func (r *gatedClickRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
