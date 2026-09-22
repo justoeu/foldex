@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Icon, I } from './icons'
 import { Notice, SectionBlock, SectionCard, SectionRow } from './account/SectionCard'
 import { useConfirm } from './ConfirmDialog'
-import { listTokens, createToken, revokeToken, type ApiToken } from '../api/tokens'
+import { listTokens, createToken, revokeToken, rotateToken, type ApiToken } from '../api/tokens'
 import { apiErrorCode as errCode } from '../lib/apiError'
 import { SecretBand } from './SecretBand'
 
@@ -44,6 +44,24 @@ export function ApiTokensSection() {
     onError: (err) => setError(messageFor(err, t)),
   })
 
+  const rotate = useMutation({
+    mutationFn: rotateToken,
+    onSuccess: async (tok) => {
+      setCreated(tok)
+      setName('')
+      setError('')
+      await qc.invalidateQueries({ queryKey: ['api-tokens'] })
+    },
+    onError: (err) =>
+      setError(
+        // The cap copy stays truthful in the one race that can produce it
+        // here (another token created between the two halves); every other
+        // failure needs the pair-specific wording, because the generic
+        // message would leave the user believing the old token still works.
+        errCode(err) === 'too_many_tokens' ? messageFor(err, t) : t('tokens.rotate_failed'),
+      ),
+  })
+
   async function askRevoke(tok: ApiToken) {
     const ok = await confirmAction({
       title: t('tokens.revoke_title'),
@@ -51,6 +69,15 @@ export function ApiTokensSection() {
       destructive: true,
     })
     if (ok) revoke.mutate(tok.id)
+  }
+
+  async function askRotate(tok: ApiToken) {
+    const ok = await confirmAction({
+      title: t('tokens.rotate_title'),
+      message: t('tokens.rotate_message', { name: tok.name }),
+      destructive: true,
+    })
+    if (ok) rotate.mutate(tok)
   }
 
   return (
@@ -87,13 +114,23 @@ export function ApiTokensSection() {
                   : t('tokens.never_used')
               }
               action={
-                <button
-                  className="fx-btn fx-btn-danger"
-                  aria-label={t('tokens.revoke_label', { name: tok.name })}
-                  onClick={() => void askRevoke(tok)}
-                >
-                  <Icon d={I.trash} size={13} /> {t('tokens.revoke')}
-                </button>
+                <>
+                  <button
+                    className="fx-btn"
+                    aria-label={t('tokens.rotate_label', { name: tok.name })}
+                    disabled={rotate.isPending}
+                    onClick={() => void askRotate(tok)}
+                  >
+                    <Icon d={I.refresh} size={13} /> {t('tokens.rotate')}
+                  </button>
+                  <button
+                    className="fx-btn fx-btn-danger"
+                    aria-label={t('tokens.revoke_label', { name: tok.name })}
+                    onClick={() => void askRevoke(tok)}
+                  >
+                    <Icon d={I.trash} size={13} /> {t('tokens.revoke')}
+                  </button>
+                </>
               }
             />
           ))}

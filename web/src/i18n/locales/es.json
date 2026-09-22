@@ -1133,7 +1133,12 @@
     "invalid_name": "Dale al token un nombre corto para reconocerlo después.",
     "card_title": "Tokens de API",
     "list_label": "Tokens activos",
-    "revoke": "Revocar"
+    "revoke": "Revocar",
+    "rotate": "Rotar",
+    "rotate_label": "Rotar {{name}}",
+    "rotate_title": "¿Rotar este token?",
+    "rotate_message": "“{{name}}” se revoca primero y se emite uno nuevo en su lugar. Lo que siga usando el valor antiguo dejará de funcionar hasta que se actualice.",
+    "rotate_failed": "El token antiguo fue revocado, pero el nuevo no se pudo crear. Puedes crear un token con normalidad más abajo."
   },
   "admin": {
     "users_title": "Cuentas",
