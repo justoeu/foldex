@@ -1,33 +1,275 @@
 {
-  "extName": { "message": "Foldex Capture" },
-  "extDescription": { "message": "Save the current tab to your Foldex bookmark manager." },
-  "saveToFoldex": { "message": "Save to Foldex" },
-  "url": { "message": "URL" },
-  "title": { "message": "Title" },
-  "description": { "message": "Description" },
-  "tags": { "message": "Tags" },
-  "save": { "message": "Save" },
-  "settings": { "message": "Settings" },
-  "urlRequired": { "message": "URL is required" },
-  "saving": { "message": "Saving…" },
-  "saved": { "message": "Saved ✓" },
-  "saveFailed": { "message": "Save failed: $1" },
-  "tagsLoadFailed": { "message": "Could not load tags: $1 — check settings" },
-  "settingsLoadFailed": { "message": "Could not load settings: $1" },
-  "tabReadFailed": { "message": "Could not read this tab: $1" },
-  "notSignedIn": { "message": "not signed in — set an API token in settings" },
-  "tokenForbidden": { "message": "this token is not allowed here" },
-  "optionsTitle": { "message": "Foldex — Settings" },
-  "optionsHeading": { "message": "Foldex extension settings" },
-  "baseUrl": { "message": "Backend base URL" },
-  "apiToken": { "message": "API token" },
-  "apiTokenHint": { "message": "Create one in Foldex under Settings → API tokens. It reads and writes your links and notes; it cannot change your password, manage users or download a backup." },
-  "testConnection": { "message": "Test connection" },
-  "requestingAccess": { "message": "Requesting access…" },
-  "savedOk": { "message": "Saved." },
-  "notSaved": { "message": "Not saved: $1" },
-  "testing": { "message": "Testing…" },
-  "connected": { "message": "Connected. $1 tag(s) visible." },
-  "failed": { "message": "Failed: $1" },
-  "tokenRejected": { "message": "the server rejected the token (HTTP $1)" }
+  "extName": {
+    "message": "Foldex Capture"
+  },
+  "extDescription": {
+    "message": "Save the current tab to your Foldex bookmark manager."
+  },
+  "saveToFoldex": {
+    "message": "Save to Foldex"
+  },
+  "url": {
+    "message": "URL"
+  },
+  "title": {
+    "message": "Title"
+  },
+  "description": {
+    "message": "Description"
+  },
+  "tags": {
+    "message": "Tags"
+  },
+  "save": {
+    "message": "Save"
+  },
+  "settings": {
+    "message": "Settings"
+  },
+  "urlRequired": {
+    "message": "URL is required"
+  },
+  "saving": {
+    "message": "Saving…"
+  },
+  "saved": {
+    "message": "Saved ✓"
+  },
+  "saveFailed": {
+    "message": "Save failed: $1"
+  },
+  "tagsLoadFailed": {
+    "message": "Could not load tags: $1 — check settings"
+  },
+  "settingsLoadFailed": {
+    "message": "Could not load settings: $1"
+  },
+  "tabReadFailed": {
+    "message": "Could not read this tab: $1"
+  },
+  "notSignedIn": {
+    "message": "not signed in — set an API token in settings"
+  },
+  "tokenForbidden": {
+    "message": "this token is not allowed here"
+  },
+  "optionsTitle": {
+    "message": "Foldex — Settings"
+  },
+  "optionsHeading": {
+    "message": "Foldex extension settings"
+  },
+  "baseUrl": {
+    "message": "Backend base URL"
+  },
+  "apiToken": {
+    "message": "API token"
+  },
+  "apiTokenHint": {
+    "message": "Create one in Foldex under Settings → API tokens. It reads and writes your links and notes; it cannot change your password, manage users or download a backup."
+  },
+  "testConnection": {
+    "message": "Test connection"
+  },
+  "requestingAccess": {
+    "message": "Requesting access…"
+  },
+  "savedOk": {
+    "message": "Saved."
+  },
+  "notSaved": {
+    "message": "Not saved: $1"
+  },
+  "testing": {
+    "message": "Testing…"
+  },
+  "connected": {
+    "message": "Connected. $1 tag(s) visible."
+  },
+  "failed": {
+    "message": "Failed: $1"
+  },
+  "tokenRejected": {
+    "message": "the server rejected the token (HTTP $1)"
+  },
+  "brandTagline": {
+    "message": "personal · self-hosted"
+  },
+  "connConnected": {
+    "message": "connected"
+  },
+  "connOffline": {
+    "message": "offline"
+  },
+  "activePage": {
+    "message": "active page"
+  },
+  "fieldTitle": {
+    "message": "Title"
+  },
+  "fieldImage": {
+    "message": "Site image"
+  },
+  "shotVisible": {
+    "message": "Visible area"
+  },
+  "shotFull": {
+    "message": "Full page"
+  },
+  "capturing": {
+    "message": "capturing…"
+  },
+  "shotCaptionIdle": {
+    "message": "capture shows up here"
+  },
+  "shotCaptionVisible": {
+    "message": "visible area capture · $1 × $2"
+  },
+  "shotCaptionFull": {
+    "message": "full page capture · $1 × $2"
+  },
+  "recapture": {
+    "message": "Recapture"
+  },
+  "fieldFolder": {
+    "message": "Folder"
+  },
+  "hintChooseFolder": {
+    "message": "pick a folder"
+  },
+  "hintFolderLinks": {
+    "message": "$1 links"
+  },
+  "newFolder": {
+    "message": "＋ New folder"
+  },
+  "newFolderPlaceholder": {
+    "message": "folder name…"
+  },
+  "createFolderBtn": {
+    "message": "Create folder"
+  },
+  "cancelNewFolder": {
+    "message": "Cancel"
+  },
+  "fieldTags": {
+    "message": "Tags"
+  },
+  "tagInputPlaceholder": {
+    "message": "type and press enter…"
+  },
+  "hintTagsNone": {
+    "message": "none"
+  },
+  "hintTagsSelected": {
+    "message": "$1 selected"
+  },
+  "fieldNote": {
+    "message": "Note"
+  },
+  "noteOptional": {
+    "message": "(optional)"
+  },
+  "notePlaceholder": {
+    "message": "why this link matters…"
+  },
+  "saveBtn": {
+    "message": "Save to Foldex"
+  },
+  "savingBtn": {
+    "message": "Saving…"
+  },
+  "savedIn": {
+    "message": "Saved to $1"
+  },
+  "savedMetaImage": {
+    "message": "$1 tags · image attached"
+  },
+  "savedMetaNoImage": {
+    "message": "$1 tags · no image"
+  },
+  "newLink": {
+    "message": "New"
+  },
+  "settingsTitle": {
+    "message": "Settings"
+  },
+  "settingsTag": {
+    "message": "connection"
+  },
+  "fieldServer": {
+    "message": "Server address"
+  },
+  "serverHint": {
+    "message": "Self-hosted Foldex instance, with https."
+  },
+  "fieldApiToken": {
+    "message": "API token"
+  },
+  "apiTokenWhere": {
+    "message": "Profile → Tokens"
+  },
+  "testConnectionBtn": {
+    "message": "Test connection"
+  },
+  "testingBtn": {
+    "message": "Testing connection…"
+  },
+  "connOkTitle": {
+    "message": "Connection established"
+  },
+  "statAccount": {
+    "message": "account"
+  },
+  "statLinks": {
+    "message": "links"
+  },
+  "statFolders": {
+    "message": "folders"
+  },
+  "latencyMs": {
+    "message": "$1 ms"
+  },
+  "connErrRejected": {
+    "message": "Token rejected ($1)"
+  },
+  "connErrRejectedHint": {
+    "message": "check whether the token expired and the server address is correct"
+  },
+  "connErrNoResponse": {
+    "message": "Server did not respond"
+  },
+  "prefsSection": {
+    "message": "capture defaults"
+  },
+  "prefAutoLabel": {
+    "message": "Capture image automatically"
+  },
+  "prefAutoHint": {
+    "message": "when the popup opens"
+  },
+  "prefCloseLabel": {
+    "message": "Close popup after saving"
+  },
+  "prefCloseHint": {
+    "message": "returns to the page"
+  },
+  "prefSyncLabel": {
+    "message": "Sync tags from the server"
+  },
+  "prefSyncHint": {
+    "message": "refreshes the list hourly"
+  },
+  "defaultFolderSection": {
+    "message": "default folder"
+  },
+  "saveSettingsBtn": {
+    "message": "Save settings"
+  },
+  "settingsSavedBtn": {
+    "message": "Settings saved ✓"
+  },
+  "settingsFooterNote": {
+    "message": "token stored in chrome.storage.local"
+  }
 }

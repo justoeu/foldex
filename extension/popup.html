@@ -2,55 +2,216 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>__MSG_saveToFoldex__</title>
-  <style>
-    :root {
-      --bg: #0b0d12;
-      --fg: #f5f7fb;
-      --muted: #94a3b8;
-      --accent: #6366F1;
-      --line: rgba(255,255,255,0.08);
-    }
-    html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); }
-    body { width: 340px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; padding: 14px; }
-    h1 { font-size: 14px; margin: 0 0 10px; }
-    label { display: block; font-size: 11px; color: var(--muted); margin-top: 8px; }
-    input, textarea, select { width: 100%; padding: 6px 8px; box-sizing: border-box;
-      background: rgba(255,255,255,0.04); color: var(--fg); border: 1px solid var(--line);
-      border-radius: 6px; font-size: 13px; font-family: inherit; }
-    textarea { resize: vertical; min-height: 50px; }
-    .row { display: flex; gap: 8px; align-items: center; margin-top: 12px; }
-    .row .grow { flex: 1; }
-    button { background: var(--accent); color: white; border: 0; border-radius: 6px;
-      padding: 7px 12px; font-size: 13px; font-weight: 600; cursor: pointer; }
-    button.secondary { background: transparent; color: var(--muted); }
-    button:disabled { opacity: 0.5; cursor: not-allowed; }
-    .tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; max-height: 80px; overflow: auto; }
-    .tag { font-size: 11px; padding: 2px 6px; border-radius: 4px; cursor: pointer;
-      border: 1px solid var(--line); background: rgba(255,255,255,0.03); }
-    .tag.selected { background: var(--accent); color: white; border-color: var(--accent); }
-    .status { font-size: 11px; color: var(--muted); margin-top: 8px; }
-    .status.error { color: #f87171; }
-    .status.ok { color: #34d399; }
-    a { color: var(--accent); font-size: 11px; }
-  </style>
+  <title>foldex</title>
+  <link rel="stylesheet" href="popup.css" />
 </head>
 <body>
-  <h1>__MSG_saveToFoldex__</h1>
-  <label for="url">__MSG_url__</label>
-  <input id="url" type="url" />
-  <label for="title">__MSG_title__</label>
-  <input id="title" type="text" />
-  <label for="description">__MSG_description__</label>
-  <textarea id="description"></textarea>
-  <label>__MSG_tags__</label>
-  <div id="tags" class="tags"></div>
-  <div class="row">
-    <button id="save" class="grow">__MSG_save__</button>
-    <a href="#" id="openOptions">__MSG_settings__</a>
-  </div>
-  <div id="status" class="status"></div>
+  <main class="popup">
 
+    <section class="panel" id="panelA">
+      <header class="app-header">
+        <div class="logo">fx</div>
+        <div class="brand">
+          <div class="brand-name">foldex</div>
+          <div class="brand-tag">__MSG_brandTagline__</div>
+        </div>
+        <button class="conn-pill" id="connPill" type="button">
+          <span class="dot"></span><span id="connPillText">__MSG_connOffline__</span>
+        </button>
+        <button class="icon-btn" id="openSettings" type="button" title="__MSG_settingsTitle__">⚙</button>
+      </header>
+
+      <div class="body-scroll fx-scroll">
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <div class="section-tag">__MSG_activePage__</div>
+          <div class="page-card">
+            <div class="page-chip" id="pageChip">◈</div>
+            <div class="page-meta">
+              <div class="page-title" id="pageTitle"></div>
+              <div class="page-url" id="pageUrl"></div>
+            </div>
+          </div>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:7px;">
+          <label class="field-label" for="linkTitle">__MSG_fieldTitle__</label>
+          <input class="text-input" id="linkTitle" type="text" />
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <div class="field-head">
+            <span class="field-label">__MSG_fieldImage__</span>
+            <div class="segment" id="shotModes">
+              <button type="button" id="modeVisible" class="active">__MSG_shotVisible__</button>
+              <button type="button" id="modeFull">__MSG_shotFull__</button>
+            </div>
+          </div>
+          <div class="shot-frame" id="shotFrame">
+            <div class="shot-state" id="shotSpinner" hidden>
+              <div class="spinner"></div>
+              <span class="caption">__MSG_capturing__</span>
+            </div>
+            <span class="shot-caption" id="shotCaption">__MSG_shotCaptionIdle__</span>
+            <img id="shotImage" alt="" hidden />
+            <button class="recapture" id="recapture" type="button" hidden>__MSG_recapture__</button>
+          </div>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:9px;">
+          <div class="field-head">
+            <span class="field-label">__MSG_fieldFolder__</span>
+            <span class="field-hint" id="folderHint"></span>
+          </div>
+          <div class="folder-grid" id="folderGrid"></div>
+          <div class="new-folder-form" id="newFolderForm" hidden>
+            <input class="text-input" id="newFolderName" type="text"
+              placeholder="__MSG_newFolderPlaceholder__" />
+            <div class="swatches" id="swatches"></div>
+            <div class="new-folder-actions">
+              <button class="btn small" id="createFolderBtn" type="button"
+                style="flex:1;padding:9px;">__MSG_createFolderBtn__</button>
+              <button class="btn small" id="cancelNewFolder" type="button"
+                style="flex:1;padding:9px;background:#FFFFFF;color:#6B6B85;box-shadow:none;border:1px solid #E4E0F6;">__MSG_cancelNewFolder__</button>
+            </div>
+          </div>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:9px;">
+          <div class="field-head">
+            <span class="field-label">__MSG_fieldTags__</span>
+            <span class="field-hint" id="tagHint"></span>
+          </div>
+          <input class="tag-input" id="tagInput" type="text"
+            placeholder="__MSG_tagInputPlaceholder__" />
+          <div class="tag-chips" id="tagChips"></div>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:7px;">
+          <label class="field-label" for="note">__MSG_fieldNote__ <span class="optional">__MSG_noteOptional__</span></label>
+          <textarea class="note-input" id="note" placeholder="__MSG_notePlaceholder__"></textarea>
+        </div>
+      </div>
+
+      <footer class="panel-footer">
+        <div class="saved-banner" id="savedBanner" hidden>
+          <span class="saved-icon">✓</span>
+          <div class="saved-meta">
+            <span class="saved-label" id="savedLabel"></span>
+            <span class="saved-sub" id="savedMeta"></span>
+          </div>
+          <button class="new-link-btn" id="newLinkBtn" type="button">__MSG_newLink__</button>
+        </div>
+        <button class="btn" id="saveBtn" type="button">__MSG_saveBtn__</button>
+        <div class="meta-line">
+          <span id="serverMeta"></span>
+          <span>⌘ ⇧ S</span>
+        </div>
+      </footer>
+    </section>
+
+    <section class="panel" id="panelB" hidden>
+      <header class="app-header">
+        <button class="icon-btn" id="backBtn" type="button">←</button>
+        <div class="settings-title">__MSG_settingsTitle__</div>
+        <div class="settings-tag">__MSG_settingsTag__</div>
+      </header>
+
+      <div class="body-scroll fx-scroll">
+        <div style="display:flex;flex-direction:column;gap:7px;">
+          <label class="field-label" for="serverInput">__MSG_fieldServer__</label>
+          <input class="text-input mono" id="serverInput" type="url" />
+          <span class="input-hint">__MSG_serverHint__</span>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:7px;">
+          <div class="field-head">
+            <label class="field-label" for="tokenInput" style="margin-right:auto;">__MSG_fieldApiToken__</label>
+            <span class="field-hint">__MSG_apiTokenWhere__</span>
+          </div>
+          <div class="token-row">
+            <input class="text-input mono" id="tokenInput" type="password"
+              autocomplete="off" />
+            <button class="token-eye" id="tokenToggle" type="button">👁</button>
+          </div>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          <button class="outline-btn" id="testBtn" type="button">__MSG_testConnectionBtn__</button>
+          <div class="result-card ok" id="connOkCard" hidden>
+            <div class="result-head">
+              <span class="result-icon">✓</span>
+              <span class="result-title">__MSG_connOkTitle__</span>
+              <span class="result-latency" id="latencyLabel"></span>
+            </div>
+            <div class="stat-row">
+              <div class="stat">
+                <div class="stat-label">__MSG_statAccount__</div>
+                <div class="stat-value" id="statAccount"></div>
+              </div>
+              <div class="stat">
+                <div class="stat-label">__MSG_statLinks__</div>
+                <div class="stat-value" id="statLinks"></div>
+              </div>
+              <div class="stat">
+                <div class="stat-label">__MSG_statFolders__</div>
+                <div class="stat-value" id="statFolders"></div>
+              </div>
+            </div>
+          </div>
+          <div class="result-card err" id="connErrCard" hidden>
+            <div class="result-head">
+              <span class="result-icon">!</span>
+              <span class="result-title" id="connErrTitle"></span>
+            </div>
+            <span class="result-hint" id="connErrHint">__MSG_connErrRejectedHint__</span>
+          </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          <div class="section-tag">__MSG_prefsSection__</div>
+          <div class="pref-list">
+            <button class="pref" id="prefAuto" type="button">
+              <span class="pref-text">
+                <span class="pref-label">__MSG_prefAutoLabel__</span>
+                <span class="pref-hint">__MSG_prefAutoHint__</span>
+              </span>
+              <span class="track"><span class="knob"></span></span>
+            </button>
+            <button class="pref" id="prefClose" type="button">
+              <span class="pref-text">
+                <span class="pref-label">__MSG_prefCloseLabel__</span>
+                <span class="pref-hint">__MSG_prefCloseHint__</span>
+              </span>
+              <span class="track"><span class="knob"></span></span>
+            </button>
+            <button class="pref" id="prefSync" type="button">
+              <span class="pref-text">
+                <span class="pref-label">__MSG_prefSyncLabel__</span>
+                <span class="pref-hint">__MSG_prefSyncHint__</span>
+              </span>
+              <span class="track"><span class="knob"></span></span>
+            </button>
+          </div>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:9px;">
+          <div class="section-tag">__MSG_defaultFolderSection__</div>
+          <div class="default-folder-chips" id="defaultFolderChips"></div>
+        </div>
+      </div>
+
+      <footer class="panel-footer">
+        <button class="btn" id="saveSettingsBtn" type="button">__MSG_saveSettingsBtn__</button>
+        <div class="meta-line">
+          <span>__MSG_settingsFooterNote__</span>
+          <span id="versionMeta"></span>
+        </div>
+      </footer>
+    </section>
+
+  </main>
   <script type="module" src="popup.js"></script>
 </body>
 </html>

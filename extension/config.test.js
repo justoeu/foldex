@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
-import { DEFAULT_CONFIG, normalizeBaseUrl } from "./config.js";
+import {
+  DEFAULT_CONFIG,
+  normalizeBaseUrl,
+  permissionForBaseUrl,
+} from "./config.js";
 
 // The Bearer token rides every extension call. Over plain http to a
 // non-loopback host it is cleartext on the wire for anyone on-path (ARP
@@ -43,5 +47,28 @@ describe("normalizeBaseUrl rejects cleartext non-loopback origins", () => {
 
   test("empty input still falls back to the safe default", () => {
     expect(normalizeBaseUrl("  ")).toBe("http://localhost:9089");
+  });
+
+  // Ported from permissions.test.js (superseded by the manifest/node suites)
+  // when the popup/options rework landed — same coverage, same module.
+  test("normalizes the backend URL while retaining a reverse-proxy path", () => {
+    expect(
+      normalizeBaseUrl(" HTTPS://Foldex.Example:443/app///?ignored=1#ignored "),
+    ).toBe("https://foldex.example/app");
+    expect(normalizeBaseUrl("http://localhost:9089/")).toBe(
+      "http://localhost:9089",
+    );
+    expect(permissionForBaseUrl("https://foldex.example/app")).toEqual({
+      origins: ["https://foldex.example/*"],
+    });
+    expect(permissionForBaseUrl("http://localhost:9089")).toEqual({
+      origins: ["http://localhost:9089/*"],
+    });
+    expect(() => normalizeBaseUrl("ftp://foldex.example")).toThrow(
+      "HTTP or HTTPS",
+    );
+    expect(() =>
+      normalizeBaseUrl("https://user:secret@foldex.example"),
+    ).toThrow("credentials");
   });
 });
