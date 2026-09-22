@@ -59,6 +59,15 @@ open https://localhost:9444
 
 Mais fluxos (notas, unlock de pasta, backup): [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
+## Extensão Chrome
+
+A extensão MV3 salva a página atual direto na sua biblioteca (título, pasta, tags, screenshot). Ela autentica com um token de API de **Settings → API tokens** — cada conta mantém exatamente um token ativo; use **Rotacionar** para trocá-lo.
+
+- **Download:** administradores baixam o zip na área de administração (`GET /api/admin/addon/download`, versão no header `X-Addon-Version`). Um binário construído sem o bundle responde `503 addon_not_built` nessa rota.
+- **Build via fonte:** `make extension` empacota `extension/` de forma determinística no diretório de embed do backend; o rebuild do backend (`make -C backend build`) já depende disso.
+- **Instalação:** extraia o zip, abra `chrome://extensions`, ative o **modo do desenvolvedor**, **Carregar sem compactação** e aponte para a pasta extraída.
+- **Testes:** `make test-extension` (o mesmo comando do CI).
+
 ## Atalhos
 
 | Atalho | Ação |

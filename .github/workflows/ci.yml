@@ -123,8 +123,9 @@ jobs:
         working-directory: web
         run: bun run typecheck
       - name: extension tests
-        working-directory: extension
-        run: bun run test
+        # Single entry point: the same `make test-extension` an operator runs
+        # locally, so CI can never drift from the documented command.
+        run: make test-extension
       - name: extension i18n parity
         run: node scripts/test-extension-i18n.mjs
       - name: tests + coverage gate

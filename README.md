@@ -59,6 +59,15 @@ open https://localhost:9444
 
 More flows (notes, folder unlock, backup): [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
+## Chrome extension
+
+The MV3 extension saves the page you are on straight into your library (title, folder, tags, screenshot). It authenticates with an API token from **Settings → API tokens** — each account holds exactly one live token; use **Rotate** to replace it.
+
+- **Download:** administrators get the zip from the admin area (`GET /api/admin/addon/download`, version in the `X-Addon-Version` header). A binary built without the bundle answers `503 addon_not_built` there instead.
+- **Build from source:** `make extension` zips `extension/` deterministically into the backend's embed dir, then rebuild the backend (`make -C backend build` depends on it).
+- **Install:** extract the zip, open `chrome://extensions`, enable **Developer mode**, **Load unpacked**, point at the extracted folder.
+- **Tests:** `make test-extension` (the same command CI runs).
+
 ## Shortcuts
 
 | Shortcut | Action |

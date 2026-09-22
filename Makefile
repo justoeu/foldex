@@ -171,6 +171,20 @@ test-web: ## Run frontend tests
 coverage-web: ## Frontend coverage gate (>= 85%)
 	cd web && npm run coverage --silent
 
+# The extension zip is a BUILD INPUT of the backend (go:embed in
+# internal/addon) and its output is committed — the backend Docker context is
+# ./backend, so the released image embeds exactly what dist/ holds. The target
+# is phony on purpose: the extension/ source directory would otherwise
+# satisfy a file target named `extension` and silently skip the recipe.
+extension: ## Build the Chrome extension zip into backend/internal/addon/dist
+	python3 scripts/build-extension-zip.py
+
+# Runs the extension's own runner (package.json "test"). Today that is
+# `bun test`; when the pure modules move to node:test the script changes and
+# this target keeps the same entry point.
+test-extension: ## Run the extension test suite
+	cd extension && bun run test
+
 test-all: test-integration test-web ## Run every test, every layer
 
 coverage-all: coverage-backend coverage-web ## Enforce coverage on every layer
@@ -190,4 +204,5 @@ release-major: ## Bump major (1.0.8 → 2.0.0) and commit locally
         db-up db-down db-nuke db-logs storage-up storage-down storage-logs \
         restart-backend restart-web migrate-up migrate-down seed psql healthz \
         test-backend test-integration coverage-backend test-web coverage-web test-all coverage-all \
+        extension test-extension \
         release-patch release-minor release-major
