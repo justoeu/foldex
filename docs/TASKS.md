@@ -1281,3 +1281,17 @@ configuração; a regra tem que valer sozinha*.
   pareamento e o fantasma apareceu. Agora strings/comentários são consumidos num único
   passe (alternância), e o pré-filtro regex de false-arm ignora parênteses no vão entre
   os `?` — irmãos entre parênteses (`LinkDialog.tsx:474`) não são aninhamento.
+
+### Log — duplicação Sonar 0.6% (2026-09-21)
+
+- Overall 541 linhas / 26 blocos. QG (new code) já estava OK (0.51% ≤ 3%).
+- Extraídos os clones baratos: `httperr.DecodeBody` (create/update Chi),
+  `contenthttp.Map` (tag_taken + folder_locked + FromDomain), `appsetting.GetJSON/Upsert`
+  (policy + abusepolicy). DTOs passam a `domainerr.InvalidInput`.
+- Deixado de propósito: 2FA vs e-mail (INV-005), Setup/Reset screens, métricas backup-agent.
+
+## 2026-09-18 — Chrome addon + API token (feature/chrome-addon-api-token)
+- API token: cap 20→1 (409 preservado), Rotacionar (revoke→create, SecretBand, mid-pair copy + refetch).
+- Addon Chrome: projeto standalone `foldex-addon/` (irmão do repo) — popup 2 painéis, captura visível+full-page scroll/stitch incremental (1 canvas + 1 tile por vez, caps 40 tiles/2^28px + degrade), pasta/tag pickers, nota, ⌘⇧S, sync alarm horário com lifecycle, i18n en/pt/es, 75 testes node.
+- Embed: `internal/addon` (go:embed, 503 addon_not_built), download admin-only GET+HEAD, import com lockstep gate, CI freshness gate, release.sh re-importa no bump + rollback completo (unstage→checkout→clean).
+- mmh score 10/10; sweep 5 agentes: blockers/HIGH corrigidos (fixtures case 6, rollback staging, build sem irmão, ~300MB→bounded, Built() shape-check); re-run verde.

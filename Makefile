@@ -1,4 +1,7 @@
 SHELL := /bin/bash
+
+# The Chrome addon is a separate project cloned next to this repo.
+FOLDEX_ADDON_DIR ?= ../foldex-addon
 .DEFAULT_GOAL := help
 
 ENV_FILE     ?= .env
@@ -171,12 +174,29 @@ test-web: ## Run frontend tests
 coverage-web: ## Frontend coverage gate (>= 85%)
 	cd web && npm run coverage --silent
 
+# The addon zip is a BUILD INPUT of the backend (go:embed in internal/addon)
+# and its output is committed — the backend Docker context is ./backend, so
+# the released image embeds exactly what dist/ holds. The source lives in the
+# sibling foldex-addon/ project; this target IMPORTS and re-zips it
+# deterministically, refusing when addon and app versions drift apart.
+extension: ## Import the addon zip (sibling foldex-addon/) into backend/internal/addon/dist
+	python3 scripts/build-extension-zip.py
+
+# Runs the addon project's own runner (package.json "test"). The addon lives
+# OUTSIDE this repo (sibling foldex-addon/), so the target is a dev-only
+# convenience: absent sibling -> warning + skip, never a hard failure (CI has
+# no access to the sibling and relies on the embed-freshness gate instead).
+test-extension: ## Run the addon test suite (sibling project; skips if absent)
+	@if [ -d "$(FOLDEX_ADDON_DIR)" ]; then \
+		cd "$(FOLDEX_ADDON_DIR)" && npm test; \
+	else echo "test-extension: $(FOLDEX_ADDON_DIR) not present — skipping (dev-only target)"; fi
+
 test-all: test-integration test-web ## Run every test, every layer
 
 coverage-all: coverage-backend coverage-web ## Enforce coverage on every layer
 
 # ── Release ─────────────────────────────────────────────────────────────
-# Bumps web/package.json + extension/manifest.json and commits. After pushing
+# Bumps web/package.json (+ re-imports the addon embed) and commits. After pushing
 # main, dispatch release.yml with vX.Y.Z; the validated workflow creates the
 # tag and publishes Docker images without a tag-push trigger.
 release-patch: ## Bump patch (1.0.8 → 1.0.9) and commit locally
@@ -190,4 +210,5 @@ release-major: ## Bump major (1.0.8 → 2.0.0) and commit locally
         db-up db-down db-nuke db-logs storage-up storage-down storage-logs \
         restart-backend restart-web migrate-up migrate-down seed psql healthz \
         test-backend test-integration coverage-backend test-web coverage-web test-all coverage-all \
+        extension test-extension \
         release-patch release-minor release-major

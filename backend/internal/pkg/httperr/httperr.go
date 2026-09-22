@@ -31,6 +31,45 @@ func DecodeJSONWithCap[T any](w http.ResponseWriter, r *http.Request, capBytes i
 	return in, nil
 }
 
+// Body is the DTO contract DecodeBody expects: Normalize mutates in place,
+// Validate returns domainerr.InvalidInput (mapped to 400 invalid_input).
+type Body interface {
+	Normalize()
+	Validate() error
+}
+
+// DecodeBody is DecodeJSON plus Normalize/Validate, writing the envelope and
+// returning false so create/update handlers don't copy the same 12-line
+// refusal. T must be a struct whose pointer implements Body.
+func DecodeBody[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
+	return DecodeBodyWithCap[T](w, r, JSONBodyCap)
+}
+
+// DecodeBodyWithCap is DecodeBody with a caller-supplied cap (notes).
+func DecodeBodyWithCap[T any](w http.ResponseWriter, r *http.Request, capBytes int64) (T, bool) {
+	var zero T
+	in, err := DecodeJSONWithCap[T](w, r, capBytes)
+	if err != nil {
+		Write(w, err)
+		return zero, false
+	}
+	body, ok := any(&in).(Body)
+	if !ok {
+		Write(w, ErrInternal)
+		return zero, false
+	}
+	body.Normalize()
+	if err := body.Validate(); err != nil {
+		if mapped := FromDomain(err); mapped != nil {
+			Write(w, mapped)
+		} else {
+			Write(w, err)
+		}
+		return zero, false
+	}
+	return in, true
+}
+
 type Error struct {
 	Status  int    `json:"-"`
 	Code    string `json:"code"`

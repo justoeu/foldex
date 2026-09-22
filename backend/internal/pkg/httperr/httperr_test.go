@@ -149,6 +149,61 @@ func TestParseID(t *testing.T) {
 	}
 }
 
+type sampleBody struct {
+	Name string `json:"name"`
+}
+
+func (s *sampleBody) Normalize() { s.Name = "n:" + s.Name }
+
+func (s sampleBody) Validate() error {
+	if s.Name == "n:" {
+		return domainerr.InvalidInput("name is required")
+	}
+	return nil
+}
+
+func TestDecodeBody_NormalizesAndValidates(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"name":"x"}`))
+	w := httptest.NewRecorder()
+	in, ok := DecodeBody[sampleBody](w, req)
+	require.True(t, ok)
+	assert.Equal(t, "n:x", in.Name)
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestDecodeBody_InvalidInputWrites400(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"name":""}`))
+	w := httptest.NewRecorder()
+	_, ok := DecodeBody[sampleBody](w, req)
+	require.False(t, ok)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	var body struct {
+		Error Error `json:"error"`
+	}
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&body))
+	assert.Equal(t, "invalid_input", body.Error.Code)
+	assert.Equal(t, "name is required", body.Error.Message)
+}
+
+func TestDecodeBody_MissingBodyContractWrites500(t *testing.T) {
+	type raw struct {
+		Name string `json:"name"`
+	}
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"name":"x"}`))
+	w := httptest.NewRecorder()
+	_, ok := DecodeBody[raw](w, req)
+	require.False(t, ok)
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+func TestDecodeBody_InvalidJSONWrites400(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{`))
+	w := httptest.NewRecorder()
+	_, ok := DecodeBody[sampleBody](w, req)
+	require.False(t, ok)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
 func TestFromDomain(t *testing.T) {
 	assert.Equal(t, ErrNotFound, FromDomain(domainerr.ErrNotFound))
 	assert.Equal(t, ErrNotFound, FromDomain(fmt.Errorf("wrap: %w", domainerr.ErrNotFound)))

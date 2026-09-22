@@ -1133,7 +1133,12 @@
     "invalid_name": "Dale al token un nombre corto para reconocerlo después.",
     "card_title": "Tokens de API",
     "list_label": "Tokens activos",
-    "revoke": "Revocar"
+    "revoke": "Revocar",
+    "rotate": "Rotar",
+    "rotate_label": "Rotar {{name}}",
+    "rotate_title": "¿Rotar este token?",
+    "rotate_message": "“{{name}}” se revoca primero y se emite uno nuevo en su lugar. Lo que siga usando el valor antiguo dejará de funcionar hasta que se actualice.",
+    "rotate_failed": "El token antiguo fue revocado, pero el nuevo no se pudo crear. Puedes crear un token con normalidad más abajo."
   },
   "admin": {
     "users_title": "Cuentas",
@@ -1677,7 +1682,15 @@
     "activity_lede": "Lo que esta cuenta creó, editó y eliminó. Solo usted ve esta lista.",
     "activity_empty": "Ninguna actividad registrada aún.",
     "activity_unavailable": "No se pudo cargar su actividad.",
-    "activity_more": "Cargar más antiguos"
+    "activity_more": "Cargar más antiguos",
+    "addon_title": "Extensión de Chrome",
+    "addon_desc": "Guarda cualquier página de esta instancia de Foldex directamente desde el navegador. El zip de abajo lo construye este servidor; la versión viene en el nombre del archivo descargado.",
+    "addon_download": "Descargar .zip",
+    "addon_version_note": "El archivo llega como foldex-extension-<version>.zip, con la versión también en las cabeceras de la descarga.",
+    "addon_steps_title": "Instalación",
+    "addon_step1": "Descarga el .zip y extráelo.",
+    "addon_step3": "Activa el Developer mode y elige “Load unpacked”, apuntando a la carpeta extraída.",
+    "addon_permissions": "Permisos: activeTab, storage, scripting y alarms, además del acceso al origen de este servidor; el origen solo se pide al guardar una dirección del servidor."
   },
   "profile": {
     "name_label": "Nombre visible",

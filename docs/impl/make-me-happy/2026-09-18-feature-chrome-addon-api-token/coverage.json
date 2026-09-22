@@ -1,0 +1,6 @@
+{
+  "pct": 90.76,
+  "tool": "node --test + c8-style line count (extension, touched files); backend go coverage gate 88.7% ≥ 85%; web vitest v8 gate ≥ 85/80",
+  "report": "extension modules line coverage: state 100 · api 100 · storage 97.8 · sync 92.7 · popup 90.7 · capture 73.6 (DOM-only composeStitch uncovered) · config 89.8+legacy-suite",
+  "floor": 90
+}

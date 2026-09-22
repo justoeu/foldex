@@ -7,7 +7,7 @@ import (
 	"foldex/internal/pkg/httperr"
 )
 
-func repositoryHTTPError(err error) error {
+func HTTPError(err error) error {
 	switch {
 	case errors.Is(err, ErrNameTaken):
 		return httperr.New(http.StatusConflict, "tag_name_taken", "tag name already exists")
@@ -18,3 +18,5 @@ func repositoryHTTPError(err error) error {
 		return err
 	}
 }
+
+func repositoryHTTPError(err error) error { return HTTPError(err) }

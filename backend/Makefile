@@ -88,7 +88,13 @@ tidy: ## Run go mod tidy
 run: ## Run backend locally (expects local Postgres on :5432)
 	go run ./cmd/server
 
-build: ## Build binary into ./bin
+# The extension zip is regenerated rather than trusted: it is a build input
+# of the binary (go:embed), and a stale committed dist/ is invisible to every
+# check that does not rebuild it.
+extension-dist:
+	@$(MAKE) --no-print-directory -C .. extension
+
+build: extension-dist ## Build binary into ./bin
 	go build -o bin/foldex ./cmd/server
 
 fmt-check: ## Fail if any Go file under ./internal or ./cmd is not gofmt-clean
@@ -142,4 +148,4 @@ migrate-down: ## Revert the most recent migration
 migrate-create: ## Create a new migration: make migrate-create NAME=add_x
 	$(MIGRATE) create -ext sql -dir /migrations -seq $(NAME)
 
-.PHONY: help tidy run build fmt-check test test-integration coverage coverage-run coverage-check coverage-html migrate-up migrate-down migrate-create
+.PHONY: help tidy run build extension-dist fmt-check test test-integration coverage coverage-run coverage-check coverage-html migrate-up migrate-down migrate-create

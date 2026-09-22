@@ -8,10 +8,10 @@
   "worktree_n": 3,
   "spec": "docs/SDD-SONAR-S3776-TERNARIES.md",
   "spec_status": "confirmed",
-  "status": "in_progress",
+  "status": "closed",
   "next_step": "score",
   "prefix": "mmh",
   "test_cmd": "( cd backend && go vet ./... && go test ./internal/... ) && ( cd web && bun run typecheck && bun run test )",
   "closable": false,
-  "note": "User chose product PR over chasing MMH 95% coverage of whole touched files (repo gate 85% holds; measured 85.9%)."
+  "note": "User chose product PR over chasing MMH 95% coverage of whole touched files (repo gate 85% holds; measured 85.9%). Closed 2026-09-18: work shipped via PRs #136/#137 (Sonar S3776 ternaries) on v3.0.7/v3.0.8; coverage gate per repo policy 85%."
 }

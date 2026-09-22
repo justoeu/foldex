@@ -17,6 +17,11 @@ dist/
 .vite/
 *.local
 
+# The addon embed artifacts are BUILD INPUTS, committed on purpose: the
+# backend Docker build context is ./backend, so an ignored dist/ would ship
+# binaries whose download route can never serve the extension.
+!backend/internal/addon/dist/
+
 # Vitest coverage HTML reports — local-only artifact
 web/coverage/
 

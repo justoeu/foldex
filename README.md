@@ -59,6 +59,15 @@ open https://localhost:9444
 
 More flows (notes, folder unlock, backup): [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
+## Chrome extension
+
+The MV3 extension saves the page you are on straight into your library (title, folder, tags, screenshot). It authenticates with an API token from **Settings → API tokens** — each account holds exactly one live token; use **Rotate** to replace it.
+
+- **Download:** administrators get the zip from the admin area (`GET /api/admin/addon/download`, version in the `X-Addon-Version` header). A binary built without the bundle answers `503 addon_not_built` there instead.
+- **Source:** the addon is developed in a separate project, `foldex-addon/`, cloned next to this repo (`FOLDEX_ADDON_DIR` overrides). `make extension` imports it deterministically into the backend's embed dir and refuses when the addon and app versions drift apart; `make -C backend build` depends on it.
+- **Install:** extract the zip, open `chrome://extensions`, enable **Developer mode**, **Load unpacked**, point at the extracted folder.
+- **Tests:** run inside the addon project (`npm test`); CI enforces the committed embed matches the app version (freshness gate).
+
 ## Shortcuts
 
 | Shortcut | Action |
@@ -74,7 +83,6 @@ More flows (notes, folder unlock, backup): [`docs/ARCHITECTURE.md`](docs/ARCHITE
 |---|---|
 | `backend/` | Go API, workers |
 | `web/` | React SPA |
-| `extension/` | Manifest V3 |
 | `docs/` | Vision, architecture, SDDs |
 
 ## Docs
@@ -82,7 +90,7 @@ More flows (notes, folder unlock, backup): [`docs/ARCHITECTURE.md`](docs/ARCHITE
 - [Vision](docs/VISION.md) · [Architecture](docs/ARCHITECTURE.md) · [Auth / RBAC](docs/SDD-AUTH-RBAC.md)
 - [Backup ZIP](docs/SDD-BACKUP-RESTORE.md) · [Ops backups](docs/SDD-OPS-BACKUP.md)
 - [Folder passwords](docs/SDD-FOLDER-MASTER-PASSWORD.md) · [E-mail](docs/SDD-EMAIL-ASYNC.md)
-- [Extension](extension/README.md)
+- Extension: separate sibling repo `foldex-addon/`
 
 ## License
 

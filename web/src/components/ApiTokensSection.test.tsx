@@ -122,4 +122,92 @@ describe('ApiTokensSection', () => {
     renderWithProviders(<ApiTokensSection />)
     expect(await screen.findByText(/cannot change your password/i)).toBeInTheDocument()
   })
+
+  // ── Rotation ────────────────────────────────────────────────────────
+
+  function mockRotatePair() {
+    vi.spyOn(http, 'delete').mockResolvedValue({ data: {} } as never)
+    return vi.spyOn(http, 'post').mockResolvedValue({
+      data: { id: 8, name: 'extension', scope: 'content', created_at: '', token: 'fx_2_secret' },
+    } as never)
+  }
+
+  async function rotateThe(user: ReturnType<typeof userEvent.setup>, name: string) {
+    await user.click(await screen.findByRole('button', { name: new RegExp(`rotate ${name}`, 'i') }))
+    await user.click(screen.getByRole('button', { name: /^confirm$/i }))
+  }
+
+  // Rotation is the replace flow the one-token cap implies: the new plaintext
+  // must land in the same single-display band creation uses.
+  it('shows the rotated token in the secret band', async () => {
+    const user = userEvent.setup()
+    mockList([{ id: 7, name: 'extension', scope: 'content', created_at: '' }])
+    mockRotatePair()
+    renderWithProviders(<ApiTokensSection />)
+
+    await rotateThe(user, 'extension')
+
+    expect(await screen.findByTestId('new-token')).toHaveTextContent('fx_2_secret')
+    expect(vi.mocked(http.delete)).toHaveBeenCalledWith('/api/auth/tokens/7')
+    expect(vi.mocked(http.post)).toHaveBeenCalledWith('/api/auth/tokens', { name: 'extension' })
+  })
+
+  // The pair is not a transaction. When the create half fails the honest
+  // message is the one that says the old token is GONE and a new one can be
+  // created normally — not a generic "something went wrong".
+  it('explains the mid-pair failure instead of failing generically', async () => {
+    const user = userEvent.setup()
+    mockList([{ id: 7, name: 'extension', scope: 'content', created_at: '' }])
+    vi.spyOn(http, 'delete').mockResolvedValue({ data: {} } as never)
+    vi.spyOn(http, 'post').mockRejectedValue({
+      response: { status: 500, data: { error: { code: 'internal' } } },
+    })
+    renderWithProviders(<ApiTokensSection />)
+
+    await rotateThe(user, 'extension')
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/old token was revoked/i)
+    expect(screen.getByRole('alert')).toHaveTextContent(/create a token/i)
+    // The revoke half already landed, so the list must refetch — a stale row
+    // would render the revoked token as live and rotate-a-ghost would 404.
+    expect(vi.mocked(http.get).mock.calls.filter((c) => c[0] === '/api/auth/tokens').length).toBeGreaterThan(1)
+  })
+
+  it('answers a 409 from the create half with the cap copy', async () => {
+    const user = userEvent.setup()
+    mockList([{ id: 7, name: 'extension', scope: 'content', created_at: '' }])
+    vi.spyOn(http, 'delete').mockResolvedValue({ data: {} } as never)
+    vi.spyOn(http, 'post').mockRejectedValue({
+      response: { status: 409, data: { error: { code: 'too_many_tokens' } } },
+    })
+    renderWithProviders(<ApiTokensSection />)
+
+    await rotateThe(user, 'extension')
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/revoke an existing token/i)
+  })
+
+  it('disables the rotate button while the pair is in flight', async () => {
+    const user = userEvent.setup()
+    mockList([{ id: 7, name: 'extension', scope: 'content', created_at: '' }])
+    let releaseRevoke: (() => void) | undefined
+    vi.spyOn(http, 'delete').mockImplementation(
+      () => new Promise((res) => { releaseRevoke = () => res({ data: {} } as never) }),
+    )
+    vi.spyOn(http, 'post').mockResolvedValue({
+      data: { id: 8, name: 'extension', scope: 'content', created_at: '', token: 'fx_2_secret' },
+    } as never)
+    renderWithProviders(<ApiTokensSection />)
+
+    const btn = await screen.findByRole('button', { name: /rotate extension/i })
+    await user.click(btn)
+    await user.click(screen.getByRole('button', { name: /^confirm$/i }))
+
+    expect(screen.getByRole('button', { name: /rotate extension/i })).toBeDisabled()
+
+    releaseRevoke?.()
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /rotate extension/i })).toBeEnabled(),
+    )
+  })
 })

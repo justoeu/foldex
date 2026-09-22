@@ -1,0 +1,178 @@
+{
+  "tasks": [
+    {
+      "id": "T-001",
+      "title": "Backend: maxTokensPerUser 20 → 1 with adapted cap tests",
+      "slice": "Token cap + addon embed + download route + Makefile/CI/README (backend worktree)",
+      "worktree": 1,
+      "status": "DONE",
+      "tests_added": 2,
+      "red_green": true,
+      "immutability": false,
+      "depends_on": []
+    },
+    {
+      "id": "T-002",
+      "title": "backend/internal/addon package: go:embed dist zip+version with placeholder semantics",
+      "slice": "Token cap + addon embed + download route + Makefile/CI/README (backend worktree)",
+      "worktree": 1,
+      "status": "DONE",
+      "tests_added": 3,
+      "red_green": true,
+      "immutability": false,
+      "depends_on": []
+    },
+    {
+      "id": "T-003",
+      "title": "GET /api/admin/addon/download route (admin-only, RejectAPIToken, 503 addon_not_built, HEAD support)",
+      "slice": "Token cap + addon embed + download route + Makefile/CI/README (backend worktree)",
+      "worktree": 1,
+      "status": "DONE",
+      "tests_added": 4,
+      "red_green": true,
+      "immutability": false,
+      "depends_on": [
+        "T-002"
+      ]
+    },
+    {
+      "id": "T-004",
+      "title": "make extension + test-extension targets, build dependency, CI wiring, README addon section",
+      "slice": "Token cap + addon embed + download route + Makefile/CI/README (backend worktree)",
+      "worktree": 1,
+      "status": "DONE",
+      "tests_added": 2,
+      "red_green": true,
+      "immutability": false,
+      "depends_on": [
+        "T-003",
+        "T-008",
+        "T-012"
+      ]
+    },
+    {
+      "id": "T-005",
+      "title": "Web: rotateToken helper in api/tokens.ts (revoke → create same name) + unit tests",
+      "slice": "Rotate button + admin addon card + i18n pt/en (web worktree)",
+      "worktree": 2,
+      "status": "DONE",
+      "tests_added": 3,
+      "red_green": true,
+      "immutability": false,
+      "depends_on": []
+    },
+    {
+      "id": "T-006",
+      "title": "ApiTokensSection: Rotacionar button with success / mid-pair failure / 409 notices",
+      "slice": "Rotate button + admin addon card + i18n pt/en (web worktree)",
+      "worktree": 2,
+      "status": "DONE",
+      "tests_added": 4,
+      "red_green": true,
+      "immutability": false,
+      "depends_on": [
+        "T-005"
+      ]
+    },
+    {
+      "id": "T-007",
+      "title": "Admin page: card Extensão Chrome (download, version, install steps, permissions note, i18n pt/en)",
+      "slice": "Rotate button + admin addon card + i18n pt/en (web worktree)",
+      "worktree": 2,
+      "status": "DONE",
+      "tests_added": 4,
+      "red_green": true,
+      "immutability": false,
+      "depends_on": []
+    },
+    {
+      "id": "T-008",
+      "title": "Extension: storage layer (server/token/prefs/defaultFolderId defaults + normalization + origin rules)",
+      "slice": "extension/ rework to SDD: manifest, 2-panel popup, capture, storage, api client, node --test (extension worktree)",
+      "worktree": 3,
+      "status": "DONE",
+      "tests_added": 8,
+      "red_green": true,
+      "immutability": false,
+      "depends_on": []
+    },
+    {
+      "id": "T-009",
+      "title": "Extension: api client module (URL join, Bearer headers, error mapping, all SDD §4 endpoints)",
+      "slice": "extension/ rework to SDD: manifest, 2-panel popup, capture, storage, api client, node --test (extension worktree)",
+      "worktree": 3,
+      "status": "DONE",
+      "tests_added": 9,
+      "red_green": true,
+      "immutability": false,
+      "depends_on": [
+        "T-008"
+      ]
+    },
+    {
+      "id": "T-010",
+      "title": "Extension: capture module — visibleTab + scroll/stitch math (steps, offsets/rows, dpr, canvas compose)",
+      "slice": "extension/ rework to SDD: manifest, 2-panel popup, capture, storage, api client, node --test (extension worktree)",
+      "worktree": 3,
+      "status": "DONE",
+      "tests_added": 7,
+      "red_green": true,
+      "immutability": false,
+      "depends_on": []
+    },
+    {
+      "id": "T-011",
+      "title": "Extension: folder/tag state reducers (chips toggle, tag_ids vs pending_tags, hints)",
+      "slice": "extension/ rework to SDD: manifest, 2-panel popup, capture, storage, api client, node --test (extension worktree)",
+      "worktree": 3,
+      "status": "DONE",
+      "tests_added": 4,
+      "red_green": true,
+      "immutability": false,
+      "depends_on": []
+    },
+    {
+      "id": "T-012",
+      "title": "Extension: manifest to SDD (+scripting, +alarms, commands ⌘⇧S, icons fx-16/32/48/128, fonts woff2) + 2-panel popup structure",
+      "slice": "extension/ rework to SDD: manifest, 2-panel popup, capture, storage, api client, node --test (extension worktree)",
+      "worktree": 3,
+      "status": "DONE",
+      "tests_added": 4,
+      "red_green": true,
+      "immutability": false,
+      "depends_on": []
+    },
+    {
+      "id": "T-013",
+      "title": "Extension: popup controller — panel A/B switching, save flow (link → image → success, sem-imagem fallback), connection test card",
+      "slice": "extension/ rework to SDD: manifest, 2-panel popup, capture, storage, api client, node --test (extension worktree)",
+      "worktree": 3,
+      "status": "DONE",
+      "tests_added": 10,
+      "red_green": true,
+      "immutability": false,
+      "depends_on": [
+        "T-008",
+        "T-009",
+        "T-010",
+        "T-011",
+        "T-012"
+      ]
+    },
+    {
+      "id": "T-014",
+      "title": "Extension: service worker — hourly tag-sync alarm gated by prefs.sync",
+      "slice": "extension/ rework to SDD: manifest, 2-panel popup, capture, storage, api client, node --test (extension worktree)",
+      "worktree": 3,
+      "status": "DONE",
+      "tests_added": 5,
+      "red_green": true,
+      "immutability": false,
+      "depends_on": [
+        "T-008",
+        "T-009"
+      ]
+    }
+  ],
+  "note": "Mid-run change (user): extension/ source moved OUT of the repo into the standalone sibling project foldex-addon/ (commit 04e7502 there). Slice-1 reworked the import pipeline (lockstep version gate, CI freshness gate, release.sh re-import); slice-3 carries the removal."
+}

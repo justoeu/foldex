@@ -36,10 +36,13 @@ var (
 	ErrTooManyAPITokens = errors.New("auth: too many api tokens")
 )
 
-// maxTokensPerUser bounds how many live tokens one account may hold. This is
-// enforced under the owner row lock in CreateAPIToken, not by a handler-side
+// maxTokensPerUser bounds how many live tokens one account may hold. One,
+// not "a few": the extension is the single intended holder, and rotation is
+// revoke-then-create — so a second live token is always an old credential
+// that was never revoked, i.e. exactly the leak this cap exists to surface.
+// Enforced under the owner row lock in CreateAPIToken, not by a handler-side
 // count that parallel requests can all pass.
-const maxTokensPerUser = 20
+const maxTokensPerUser = 1
 
 // APIToken is one long-lived credential, as its owner sees it.
 type APIToken struct {

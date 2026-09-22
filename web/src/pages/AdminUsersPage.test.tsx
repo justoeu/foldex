@@ -408,3 +408,61 @@ describe('creating a user', () => {
     expect(dialog.getByRole('button', { name: /add user/i })).toBeEnabled()
   })
 })
+
+// ── Chrome extension card ───────────────────────────────────────────────
+//
+// The zip is embedded in the server binary and the route is admin-only, so
+// the card's whole job is to hand the administrator the file and the three
+// steps it takes to load it.
+
+describe('AdminUsersPage — Chrome extension card', () => {
+  it('renders the card title and description', async () => {
+    render([me])
+    expect(await screen.findByRole('heading', { name: /chrome extension/i })).toBeInTheDocument()
+    expect(screen.getByText(/save any page/i)).toBeInTheDocument()
+  })
+
+  it('points the download link at the admin addon route', async () => {
+    render([me])
+    expect(await screen.findByRole('link', { name: /download .*\.zip/i })).toHaveAttribute(
+      'href',
+      '/api/admin/addon/download',
+    )
+  })
+
+  it('walks through the three install steps', async () => {
+    render([me])
+    expect(await screen.findByText(/download the \.zip and extract/i)).toBeInTheDocument()
+    expect(screen.getByText('chrome://extensions')).toBeInTheDocument()
+    expect(screen.getByText(/developer mode/i)).toBeInTheDocument()
+    expect(screen.getByText(/load unpacked/i)).toBeInTheDocument()
+  })
+
+  // The parity test guards the whole tree; this pins the card's own keys so
+  // a rename that strands one locale is caught by the card that needs it.
+  it('carries the addon strings in every locale', async () => {
+    render([me])
+    await screen.findByRole('heading', { name: /chrome extension/i })
+
+    const { default: en } = await import('../i18n/locales/en.json')
+    const { default: pt } = await import('../i18n/locales/pt.json')
+    const { default: es } = await import('../i18n/locales/es.json')
+    const KEYS = [
+      'addon_title',
+      'addon_desc',
+      'addon_download',
+      'addon_version_note',
+      'addon_steps_title',
+      'addon_step1',
+      'addon_step3',
+      'addon_permissions',
+    ]
+    for (const locale of [en, pt, es]) {
+      const admin = (locale as { admin: Record<string, unknown> }).admin
+      for (const key of KEYS) {
+        expect(typeof admin[key], `${key} must be a non-empty string`).toBe('string')
+        expect((admin[key] as string).trim().length, `${key} must not be blank`).toBeGreaterThan(0)
+      }
+    }
+  })
+})

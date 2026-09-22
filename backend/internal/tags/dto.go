@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"foldex/internal/pkg/cssvalid"
+	"foldex/internal/pkg/domainerr"
 )
 
 type CreateInput struct {
@@ -84,8 +85,4 @@ func (u UpdateInput) Validate() error {
 	return nil
 }
 
-type validationErr string
-
-func (e validationErr) Error() string { return string(e) }
-
-func errMsg(s string) error { return validationErr(s) }
+func errMsg(s string) error { return domainerr.InvalidInput(s) }

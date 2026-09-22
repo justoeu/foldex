@@ -1783,7 +1783,8 @@ input.fx-input:focus-visible, select.fx-input:focus-visible, textarea.fx-input:f
  * account page next to styled controls made it obvious. Element-qualified, as
  * §5 requires.
  */
-button.fx-btn {
+button.fx-btn,
+a.fx-btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 7px;
   height: 38px; padding: 0 15px;
   border: 1px solid var(--fx-border);
@@ -1794,15 +1795,19 @@ button.fx-btn {
   cursor: pointer;
   transition: border-color .15s, color .15s, background .15s;
 }
-button.fx-btn:hover:not(:disabled) { border-color: var(--fx-accent); color: var(--fx-accent); }
-button.fx-btn:focus-visible { outline: 2px solid var(--fx-accent); outline-offset: 2px; }
+button.fx-btn:hover:not(:disabled),
+a.fx-btn:hover { border-color: var(--fx-accent); color: var(--fx-accent); }
+button.fx-btn:focus-visible,
+a.fx-btn:focus-visible { outline: 2px solid var(--fx-accent); outline-offset: 2px; }
 button.fx-btn:disabled { opacity: 0.55; cursor: not-allowed; }
-button.fx-btn-primary {
+button.fx-btn-primary,
+a.fx-btn-primary {
   border-color: transparent;
   background: linear-gradient(135deg, var(--fx-accent), var(--fx-accent-2));
   color: #fff;
 }
-button.fx-btn-primary:hover:not(:disabled) { filter: brightness(1.05); color: #fff; border-color: transparent; }
+button.fx-btn-primary:hover:not(:disabled),
+a.fx-btn-primary:hover { filter: brightness(1.05); color: #fff; border-color: transparent; }
 /*
  * `.fx-btn-danger` was the fourth class in this family with no rule anywhere —
  * found the same way as the three above, by putting the controls next to each
@@ -1820,6 +1825,15 @@ button.fx-btn-danger:hover:not(:disabled) {
   background: color-mix(in srgb, var(--fx-danger) 16%, transparent);
   color: var(--fx-danger);
 }
+/*
+ * The addon download is the one fx-btn that is a link: a download needs a
+ * real href so the session cookie rides along and Content-Disposition can
+ * name the file — a button faking it with window.open loses both. The
+ * button rules above group `a.` twins in the same element-qualified
+ * selectors (INV-154) instead of carrying a parallel block; anchors also
+ * need the reset text-decoration.
+ */
+a.fx-btn { text-decoration: none; }
 
 .fx-btn-ghost { height: 38px; padding: 0 14px; border-radius: 10px; font-size: 13px; color: var(--fx-ink-2); }
 .fx-btn-ghost:hover { background: var(--fx-bg-tint); color: var(--fx-ink); }

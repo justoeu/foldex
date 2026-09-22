@@ -268,16 +268,22 @@ echo "✓ case 5b: a variant suffix must be a name, never a second version"
 
 GATE_ROOT=$(mktemp -d)
 trap 'rm -f "$HARNESS" "$FIXTURE" "$COMPOSE_FIXTURE"; rm -rf "$GATE_ROOT"' EXIT
-mkdir -p "$GATE_ROOT/repo/scripts" "$GATE_ROOT/repo/web" "$GATE_ROOT/repo/extension"
+mkdir -p "$GATE_ROOT/repo/scripts" "$GATE_ROOT/repo/web"
 cp "$RELEASE" "$GATE_ROOT/repo/scripts/release.sh"
-# release.sh resolves the shared awk relative to its own location, so the
-# fixture needs it beside the copy or every run here dies on the missing file.
+# release.sh resolves the shared awk and the addon importer relative to its
+# own location, so the fixture needs both beside the copy or every run here
+# dies on a missing file.
 mkdir -p "$GATE_ROOT/repo/scripts/lib"
 cp "$SCRIPT_DIR/lib/compose-image-pin.awk" "$GATE_ROOT/repo/scripts/lib/"
+cp "$SCRIPT_DIR/build-extension-zip.py" "$GATE_ROOT/repo/scripts/"
+# The addon lives in a sibling project; the release path re-imports its zip
+# AFTER the bump, so the sibling must already sit at the NEW version.
+write_addon_sibling() {
+  mkdir -p "$1/foldex-addon"
+  printf '{"version":"%s"}\n' "$2" >"$1/foldex-addon/manifest.json"
+}
+write_addon_sibling "$GATE_ROOT" "1.2.4"
 cat >"$GATE_ROOT/repo/web/package.json" <<'JSON'
-{"version":"1.2.3"}
-JSON
-cat >"$GATE_ROOT/repo/extension/manifest.json" <<'JSON'
 {"version":"1.2.3"}
 JSON
 cat >"$GATE_ROOT/repo/docker-compose.yml" <<'YAML'
@@ -341,7 +347,13 @@ if [ "$(git -C "$GATE_ROOT/repo" rev-parse HEAD)" != "$INITIAL_SHA" ] ||
   exit 1
 fi
 grep -Fq '"version":"1.2.3"' "$GATE_ROOT/repo/web/package.json" || exit 1
-grep -Fq '"version":"1.2.3"' "$GATE_ROOT/repo/extension/manifest.json" || exit 1
+# The addon import ran before the failed commit; rollback must have removed
+# its untracked output entirely — a leftover dist file would leave the tree
+# dirty and slip into the next commit.
+[ ! -e "$GATE_ROOT/repo/backend/internal/addon/dist/version.txt" ] || {
+  echo "✗ rollback left the imported addon dist behind" >&2
+  exit 1
+}
 grep -Fq 'foldex-backend:${FOLDEX_VERSION:-1.2.3}' "$GATE_ROOT/repo/docker-compose.yml" || exit 1
 grep -Fq 'foldex-web:${FOLDEX_VERSION:-1.2.3}' "$GATE_ROOT/repo/docker-compose.yml" || exit 1
 echo "✓ case 6: dirty/off-main gates remain closed and failed commits roll back"
@@ -602,7 +614,6 @@ echo "✓ case 8: a missing image is refused and a reused web image is accepted"
 # passes an unanchored regex and still executes.
 for payload in '1.0.PATH[$(touch canary)]' '1.0.0+PATH[$(touch canary)]'; do
   printf '{"version":"%s"}\n' "$payload" >"$GATE_ROOT/repo/web/package.json"
-  printf '{"version":"%s"}\n' "$payload" >"$GATE_ROOT/repo/extension/manifest.json"
   # shellcheck disable=SC2016
   printf 'services:\n  backend:\n    image: justoeu/foldex-backend:${FOLDEX_VERSION:-%s}\n  web:\n    image: justoeu/foldex-web:${FOLDEX_VERSION:-%s}\n' \
     "$payload" "$payload" >"$GATE_ROOT/repo/docker-compose.yml"
@@ -634,7 +645,6 @@ echo "✓ case 9: versions read from disk are validated before they are evaluate
 # release version. This runs the script instead.
 
 printf '{"version":"1.2.3"}\n' >"$GATE_ROOT/repo/web/package.json"
-printf '{"version":"1.2.3"}\n' >"$GATE_ROOT/repo/extension/manifest.json"
 # shellcheck disable=SC2016
 printf 'services:\n  backend:\n    image: justoeu/foldex-backend:${FOLDEX_VERSION:-1.2.3}\n  web:\n    image: justoeu/foldex-web:${FOLDEX_VERSION:-1.2.3}\n' \
   >"$GATE_ROOT/repo/docker-compose.yml"

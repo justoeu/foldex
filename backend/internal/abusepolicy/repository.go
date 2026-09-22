@@ -5,8 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"foldex/internal/pkg/appsetting"
 )
 
 // settingKey is the single app_setting row this whole policy lives in.
@@ -52,18 +53,9 @@ func NewRepository(pool *pgxpool.Pool) *Repository { return &Repository{pool: po
 // above it silently lose unrelated settings too, and a rule getting stricter
 // must never be the thing that switches the other rules off.
 func (r *Repository) Get(ctx context.Context) (Policy, error) {
-	var raw string
-	err := r.pool.QueryRow(ctx,
-		`SELECT value FROM app_setting WHERE key = $1`, settingKey).Scan(&raw)
-	if err == pgx.ErrNoRows {
-		return Default(), nil
-	}
+	p, err := appsetting.GetJSON(ctx, r.pool, settingKey, Default())
 	if err != nil {
-		return Default(), fmt.Errorf("abuse policy get: %w", err)
-	}
-	p := Default()
-	if err := json.Unmarshal([]byte(raw), &p); err != nil {
-		return Default(), nil
+		return Default(), err
 	}
 	return p.Sanitize(), nil
 }
@@ -83,12 +75,8 @@ func (r *Repository) Set(ctx context.Context, p Policy) error {
 	if err != nil {
 		return fmt.Errorf("abuse policy encode: %w", err)
 	}
-	_, err = r.pool.Exec(ctx, `
-		INSERT INTO app_setting (key, value) VALUES ($1, $2)
-		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
-		settingKey, string(encoded))
-	if err != nil {
-		return fmt.Errorf("abuse policy set: %w", err)
+	if err := appsetting.Upsert(ctx, r.pool, settingKey, string(encoded)); err != nil {
+		return err
 	}
 	return nil
 }
