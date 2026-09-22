@@ -80,6 +80,15 @@ function fakePlain() {
 
 function fakeDocument() {
   const elements = Object.fromEntries(ALL_IDS.map((id) => [id, fakeElement()]));
+  // Mirror the initial attributes popup.html ships, so tests reason about
+  // the same initial visibility the real document has.
+  for (const id of [
+    "panelB", "shotSpinner", "shotImage", "recapture", "newFolderForm",
+    "savedBanner", "connOkCard", "connErrCard",
+  ]) {
+    elements[id].hidden = true;
+  }
+  elements.tokenInput.type = "password";
   return {
     elements,
     documentApi: {
@@ -128,23 +137,32 @@ function apiRouter(calls = []) {
 
 async function boot(overrides = {}) {
   const calls = [];
-  const { chromeApi } = mockChrome({
+  const { chromeApi, calls: chromeCalls } = mockChrome({
     stored: overrides.stored ?? STORED,
     tabs: overrides.tabs ?? [TAB],
   });
   const { fetchImpl } = mockFetch(overrides.fetch ?? apiRouter(calls));
   const { elements, documentApi } = fakeDocument();
   const closings = [];
+  const delayed = [];
   const controller = createPopupController({
     documentApi,
     chromeApi,
     fetchImpl,
     closeFn: () => closings.push(Date.now()),
-    delayFn: (ms, fn) => fn(),
+    delayFn: overrides.delayFn ?? ((ms, fn) => fn()),
     dataUrlToBlob: async () => new Blob(["png"], { type: "image/png" }),
   });
   await controller.ready;
-  return { controller, elements, chromeApi, fetchCalls: calls, closings };
+  return {
+    controller,
+    elements,
+    chromeApi,
+    chromeCalls,
+    fetchCalls: calls,
+    closings,
+    delayed,
+  };
 }
 
 describe("popup controller", () => {
@@ -322,5 +340,77 @@ describe("popup controller", () => {
     assert.equal(elements.folderHint.textContent, "0 links");
     assert.equal(elements.folderGrid.children.length, 4);
     assert.ok(elements.folderGrid.children[3].classList.contains("active"));
+  });
+
+  test("settings panel: eye toggle, pref toggles, persist normalizes and requests origin", async () => {
+    const pendingDelays = [];
+    const { elements, chromeCalls } = await boot({
+      delayFn: (ms, fn) => pendingDelays.push(fn),
+    });
+
+    assert.equal(elements.tokenInput.type, "password");
+    elements.tokenToggle.dispatch("click");
+    assert.equal(elements.tokenInput.type, "text");
+    assert.equal(elements.tokenToggle.textContent, "🙈");
+    elements.tokenToggle.dispatch("click");
+    assert.equal(elements.tokenInput.type, "password");
+    assert.equal(elements.tokenToggle.textContent, "👁");
+
+    elements.prefSync.dispatch("click");
+    assert.ok(elements.prefSync.classList.contains("on"));
+    elements.prefClose.dispatch("click");
+    assert.ok(elements.prefClose.classList.contains("on"));
+
+    elements.serverInput.value = "https://foldex.example/";
+    elements.saveSettingsBtn.dispatch("click");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.deepEqual(chromeCalls.requests, [{ origins: ["https://foldex.example/*"] }]);
+    assert.deepEqual(chromeCalls.writes.at(-1), {
+      server: "https://foldex.example",
+      token: "fx_token",
+      prefs: { auto: true, close: true, sync: true },
+      defaultFolderId: 1,
+    });
+    assert.equal(elements.saveSettingsBtn.textContent, "Configurações salvas ✓");
+    assert.ok(elements.saveSettingsBtn.classList.contains("saved-state-btn"));
+
+    for (const fn of pendingDelays) fn();
+    assert.equal(elements.saveSettingsBtn.textContent, "Salvar configurações");
+  });
+
+  test("mode switch triggers capture; save failure surfaces on the button; Novo resets", async () => {
+    const { controller, elements } = await boot({
+      stored: { ...STORED, prefs: { auto: false, close: false, sync: false } },
+    });
+
+    elements.modeFull.dispatch("click");
+    assert.ok(elements.modeFull.classList.contains("active"));
+    assert.ok(!elements.modeVisible.classList.contains("active"));
+    // captureVisibleTab is absent from the mock, so capture fails silently —
+    // the frame must settle back to the idle caption, never stay spinning.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(elements.shotSpinner.hidden, true);
+
+    const conflict = async () =>
+      jsonResponse(
+        { error: { code: "url_taken", message: "url already bookmarked" } },
+        { status: 409 },
+      );
+    const failing = await boot({
+      stored: { ...STORED, prefs: { auto: false, close: false, sync: false } },
+      fetch: conflict,
+    });
+    await failing.controller.save();
+    assert.equal(failing.elements.savedBanner.hidden, true);
+    assert.equal(failing.elements.saveBtn.textContent, "Falha ao salvar: url already bookmarked");
+    assert.equal(failing.elements.saveBtn.disabled, false);
+
+    await controller.save();
+    assert.equal(elements.savedBanner.hidden, false);
+    elements.newLinkBtn.dispatch("click");
+    assert.equal(elements.savedBanner.hidden, true);
+    assert.equal(elements.saveBtn.hidden, false);
+    assert.equal(elements.saveBtn.textContent, "Salvar no Foldex");
   });
 });

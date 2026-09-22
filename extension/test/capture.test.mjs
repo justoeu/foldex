@@ -1,7 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 
-import { axisSteps, capturePlan } from "../capture.js";
+import { axisSteps, captureFullPage, capturePlan, captureVisible } from "../capture.js";
 
 describe("axisSteps", () => {
   test("exact multiples never duplicate the final offset", () => {
@@ -56,5 +56,73 @@ describe("capturePlan", () => {
     assert.deepEqual(plan.steps, [{ x: 0, y: 0 }]);
     assert.equal(plan.canvasWidth, 1600);
     assert.equal(plan.canvasHeight, 900);
+  });
+});
+
+describe("chrome-driven capture glue", () => {
+  function captureChrome(log) {
+    return {
+      runtime: {},
+      scripting: {
+        executeScript({ func, args }, callback) {
+          if (func.name === "PAGE_METRICS") {
+            callback([
+              {
+                result: {
+                  scrollWidth: 2000,
+                  scrollHeight: 1000,
+                  viewportWidth: 1000,
+                  viewportHeight: 500,
+                  devicePixelRatio: 2,
+                },
+              },
+            ]);
+          } else {
+            log.push({ scroll: args });
+            callback([{ result: null }]);
+          }
+        },
+      },
+      tabs: {
+        captureVisibleTab(windowId, options, callback) {
+          log.push({ captured: options });
+          callback("data:image/png;base64,AAA");
+        },
+      },
+    };
+  }
+
+  test("captureFullPage scrolls every plan step, captures per step, and returns the plan", async () => {
+    const log = [];
+    const { plan, images } = await captureFullPage(7, captureChrome(log));
+
+    assert.deepEqual(plan.steps, [
+      { x: 0, y: 0 },
+      { x: 1000, y: 0 },
+      { x: 0, y: 500 },
+      { x: 1000, y: 500 },
+    ]);
+    assert.equal(images.length, 4);
+    assert.deepEqual(
+      log.map((entry) => entry.scroll ?? entry.captured),
+      [
+        [0, 0],
+        { format: "png" },
+        [1000, 0],
+        { format: "png" },
+        [0, 500],
+        { format: "png" },
+        [1000, 500],
+        { format: "png" },
+      ],
+    );
+  });
+
+  test("captureVisible asks for a png dataUrl", async () => {
+    const log = [];
+    const dataUrl = await captureVisible(captureChrome(log));
+
+    assert.equal(dataUrl, "data:image/png;base64,AAA");
+    assert.deepEqual(log, [{ captured: { format: "png" } }]);
   });
 });
