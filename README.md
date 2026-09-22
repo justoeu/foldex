@@ -91,7 +91,7 @@ The MV3 extension saves the page you are on straight into your library (title, f
 - [Vision](docs/VISION.md) · [Architecture](docs/ARCHITECTURE.md) · [Auth / RBAC](docs/SDD-AUTH-RBAC.md)
 - [Backup ZIP](docs/SDD-BACKUP-RESTORE.md) · [Ops backups](docs/SDD-OPS-BACKUP.md)
 - [Folder passwords](docs/SDD-FOLDER-MASTER-PASSWORD.md) · [E-mail](docs/SDD-EMAIL-ASYNC.md)
-- [Extension](extension/README.md)
+- Extension: separate sibling repo `foldex-addon/`
 
 ## License
 

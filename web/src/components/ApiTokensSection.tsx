@@ -52,14 +52,19 @@ export function ApiTokensSection() {
       setError('')
       await qc.invalidateQueries({ queryKey: ['api-tokens'] })
     },
-    onError: (err) =>
+    onError: (err) => {
+      // Whatever broke, the revoke half may already have landed: refetch so
+      // the list never shows a revoked token as live (rotating a ghost row
+      // would 404).
+      void qc.invalidateQueries({ queryKey: ['api-tokens'] })
       setError(
         // The cap copy stays truthful in the one race that can produce it
         // here (another token created between the two halves); every other
         // failure needs the pair-specific wording, because the generic
         // message would leave the user believing the old token still works.
         errCode(err) === 'too_many_tokens' ? messageFor(err, t) : t('tokens.rotate_failed'),
-      ),
+      )
+    },
   })
 
   async function askRevoke(tok: ApiToken) {

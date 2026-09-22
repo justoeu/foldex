@@ -55,7 +55,7 @@ fi
 
 PKG=web/package.json
 COMPOSE=docker-compose.yml
-FOLDEX_ADDON_DIR="${FOLDEX_ADDON_DIR:-../foldex-addon}" 
+FOLDEX_ADDON_DIR="${FOLDEX_ADDON_DIR:-../foldex-addon}"
 PIN_AWK="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/compose-image-pin.awk"
 if [ ! -f "$PIN_AWK" ]; then
   echo "✗ missing $PIN_AWK" >&2
@@ -88,6 +88,9 @@ rollback_bump() {
   for leftover in "${COMPOSE_FILES[@]}"; do
     rm -f "$leftover.tmp"
   done
+  # make extension may have rewritten the embed before the failure — the
+  # release started clean, so HEAD's dist is the authoritative state.
+  git checkout -- backend/internal/addon/dist 2>/dev/null || true
   if [ "$status" -ne 0 ] && [ "$BUMP_STARTED" -eq 1 ]; then
     if ! git restore --staged --worktree -- "${VERSION_FILES[@]}"; then
       echo "✗ release failed and automatic version rollback also failed" >&2

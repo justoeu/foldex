@@ -1,0 +1,120 @@
+{
+  "error_envelope": {
+    "shape": "{\"error\": {\"code\": \"<code>\", \"message\": \"<message>\"}}",
+    "source": "backend/internal/pkg/httperr"
+  },
+  "payloads": [
+    {
+      "task_refs": ["T-001", "T-005", "T-006"],
+      "contract": "POST /api/auth/tokens",
+      "request": { "name": "extension" },
+      "response_201": {
+        "id": 7,
+        "name": "extension",
+        "scope": "content",
+        "created_at": "2026-09-18T12:00:00Z",
+        "token": "fx_7_<secret-shown-once>"
+      },
+      "response_409_too_many": {
+        "error": {
+          "code": "too_many_tokens",
+          "message": "revoke an existing token before creating another"
+        }
+      },
+      "note": "Cap is 1 (SDD R1). Rotate = DELETE the active token then POST with the SAME name."
+    },
+    {
+      "task_refs": ["T-005", "T-006"],
+      "contract": "DELETE /api/auth/tokens/{id}",
+      "request": "DELETE /api/auth/tokens/7",
+      "response": { "status": 204, "body": null },
+      "note": "Mid-pair failure (revoke ok, create fails): old token stays revoked; UI notice explains user can create again."
+    },
+    {
+      "task_refs": ["T-003", "T-004", "T-007"],
+      "contract": "GET /api/admin/addon/download",
+      "request": "GET /api/admin/addon/download (admin session cookie; API tokens rejected)",
+      "response_200": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/zip",
+          "Content-Disposition": "attachment; filename=\"foldex-extension-1.0.0.zip\"",
+          "X-Addon-Version": "1.0.0"
+        },
+        "body": "<zip bytes from go:embed backend/internal/addon/dist/extension.zip>"
+      },
+      "response_503_not_built": {
+        "error": { "code": "addon_not_built", "message": "run make extension before building the backend" }
+      },
+      "note": "Non-admin and API-token callers get the admin surface's 404 (route hidden, per mount.go gate order). HEAD on the same route returns headers without body — used by the web admin card to show the version."
+    },
+    {
+      "task_refs": ["T-009", "T-013"],
+      "contract": "POST /api/links",
+      "request": {
+        "url": "https://example.com/post",
+        "title": "Example post",
+        "description": "nota opcional do popup",
+        "folder_id": 3,
+        "tag_ids": [11, 12],
+        "pending_tags": ["nova-tag"]
+      },
+      "response_201": { "id": 42, "url": "https://example.com/post", "title": "Example post" },
+      "note": "tag_ids = chips existentes (GET /api/tags); pending_tags = digitadas no popup e ainda não criadas."
+    },
+    {
+      "task_refs": ["T-009", "T-013"],
+      "contract": "POST /api/links/{id}/image",
+      "request": "multipart/form-data; file=<full-page-or-viewport png> (campo file)",
+      "response_201": { "status": 201 },
+      "note": "Called only after POST /api/links succeeds. Upload failure does NOT undo the link — success meta shows 'sem imagem'."
+    },
+    {
+      "task_refs": ["T-009", "T-011", "T-013"],
+      "contract": "POST /api/folders",
+      "request": { "name": "Leitura", "color": "#5B54E8" },
+      "response_201": { "id": 9, "name": "Leitura", "color": "#5B54E8" },
+      "note": "Used by Painel A inline ＋ Nova pasta mini-form (name + 6 swatches); created folder becomes selected."
+    },
+    {
+      "task_refs": ["T-009", "T-013"],
+      "contract": "GET /api/folders",
+      "request": "GET /api/folders (Authorization: Bearer fx_...)",
+      "response_200": { "folders": [{ "id": 3, "name": "Dev", "color": "#10B981" }] },
+      "note": "Panel A grid chips (dot + count when payload carries it) and Panel B default-folder chips; connection card uses array length."
+    },
+    {
+      "task_refs": ["T-009", "T-011", "T-013"],
+      "contract": "GET /api/tags",
+      "request": "GET /api/tags (Authorization: Bearer fx_...)",
+      "response_200": { "tags": [{ "id": 11, "name": "rust" }, { "id": 12, "name": "go" }] },
+      "note": "Initial chip list; toggling maps to tag_ids. Service worker hourly sync refreshes this cache when prefs.sync is on."
+    },
+    {
+      "task_refs": ["T-009", "T-013"],
+      "contract": "GET /api/stats/summary",
+      "request": "GET /api/stats/summary (Authorization: Bearer fx_...)",
+      "response_200": { "summary": { "total_links": 412 } },
+      "note": "Connection test card reads summary.total_links."
+    },
+    {
+      "task_refs": ["T-009", "T-013"],
+      "contract": "GET /api/auth/identities",
+      "request": "GET /api/auth/identities (Authorization: Bearer fx_...)",
+      "response_200_or_omitted": {
+        "identities": [{ "id": 1, "email": "user@example.com" }]
+      },
+      "note": "First identity feeds the 'conta' line of the green card; if the token cannot read it, omit the line. 401 maps to 'Token recusado (401)' red card; network failure maps to 'Servidor não respondeu'."
+    },
+    {
+      "task_refs": ["T-009"],
+      "contract": "api client error mapping (extension)",
+      "cases": [
+        { "when": "resp.status === 401", "then": "Error 'Token recusado (401)'" },
+        { "when": "fetch rejects (network)", "then": "Error 'Servidor não respondeu'" },
+        { "when": "redirect", "then": "redirect: 'error' — never follow with Bearer attached" }
+      ],
+      "note": "Token only ever in Authorization header, only to the configured origin."
+    }
+  ]
+}

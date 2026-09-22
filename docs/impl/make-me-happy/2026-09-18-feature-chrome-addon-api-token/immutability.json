@@ -1,0 +1,136 @@
+{
+  "suite": [
+    "auth.TestAPIToken_CapsHowManyOneAccountMayHold",
+    "auth.TestConcurrentAPITokenCreationNeverExceedsCap",
+    "addon.TestBundleBuiltSemantics",
+    "addon.TestDownloadServesZipWithSpecHeaders",
+    "addon.TestDownloadWithoutABuiltBundleAnswers503",
+    "server.TestAddonDownload_GateMatchesTheAdminSurfaceShape",
+    "server.TestAddonDownload_ServesTheBundleToAnAdminSession",
+    "web tokens.test.ts > rotateToken",
+    "web ApiTokensSection.test.tsx > rotate (mid-pair failure, 409 cap copy, disabled state)",
+    "web AdminUsersPage.test.tsx > points the download link at the admin addon route",
+    "foldex-addon test/config.test.mjs",
+    "foldex-addon test/api.test.mjs",
+    "foldex-addon test/capture.test.mjs",
+    "foldex-addon test/state.test.mjs",
+    "foldex-addon test/manifest.test.mjs",
+    "foldex-addon test/popup.test.mjs",
+    "foldex-addon test/sync.test.mjs",
+    "scripts/test-extension-zip.sh (deterministic rebuild + artifact contract)"
+  ],
+  "green": true,
+  "tasks_covered": [
+    "T-001", "T-002", "T-003", "T-004", "T-005", "T-006", "T-007",
+    "T-008", "T-009", "T-010", "T-011", "T-012", "T-013", "T-014"
+  ],
+  "method": "mutation/reversal sanity on the merged tree (foldex @ HEAD, addon @ 04e7502): each mutation applied with sed/python, verified applied, targeted test run expected RED, then reverted and re-run GREEN. No tree left dirty.",
+  "tasks": [
+    {
+      "id": "T-001",
+      "immutability": true,
+      "mutation": "maxTokensPerUser 1 -> 20 (repository_apitoken.go)",
+      "red": "TestAPIToken_CapsHowManyOneAccountMayHold + TestConcurrentAPITokenCreationNeverExceedsCap both FAIL (integration, testcontainers)",
+      "green_after_revert": true
+    },
+    {
+      "id": "T-002",
+      "immutability": true,
+      "mutation": "Bundle.Built() placeholder-version check removed (zip bytes + '0.0.0' counts as built)",
+      "red": "TestBundleBuiltSemantics FAIL ('placeholder version with bytes')",
+      "green_after_revert": true
+    },
+    {
+      "id": "T-003",
+      "immutability": true,
+      "mutation": "ar.Use(authgate.RejectAPIToken) commented out in adminSurface (mount.go)",
+      "red": "TestAddonDownload_GateMatchesTheAdminSurfaceShape/admin_API_token_is_out_of_scope FAIL (token would get 200 instead of 403 token_scope)",
+      "green_after_revert": true
+    },
+    {
+      "id": "T-004",
+      "immutability": true,
+      "mutation": "web/package.json version 3.0.10 -> 9.9.9 (lockstep drift)",
+      "red": "make extension refuses: 'addon version 3.0.10 != app version 9.9.9' (build-extension-zip.py lockstep gate); scripts/test-extension-zip.sh also proves deterministic rebuild + version.txt mirror + zip artifact contract (green)",
+      "green_after_revert": true,
+      "note": "CI freshness gate (ci.yml:125-133) verified by inspection; local equivalent exercised via make extension gate"
+    },
+    {
+      "id": "T-005",
+      "immutability": true,
+      "mutation": "rotateToken order swapped (create before revoke)",
+      "red": "tokens.test.ts 'fails fast without creating when the revoke half fails' FAIL",
+      "green_after_revert": true
+    },
+    {
+      "id": "T-006",
+      "immutability": true,
+      "mutation": "rotate onError always uses generic messageFor (drops tokens.rotate_failed mid-pair copy)",
+      "red": "ApiTokensSection.test.tsx 'explains the mid-pair failure instead of failing generically' FAIL",
+      "green_after_revert": true
+    },
+    {
+      "id": "T-007",
+      "immutability": true,
+      "mutation": "AddonCard href '/api/admin/addon/download' -> '#'",
+      "red": "AdminUsersPage.test.tsx 'points the download link at the admin addon route' FAIL",
+      "green_after_revert": true
+    },
+    {
+      "id": "T-008",
+      "immutability": true,
+      "mutation": "normalizeBaseUrl loopback rule disabled (if (false)) in foldex-addon/config.js",
+      "red": "config.test.mjs: 'rejects http on a LAN host' + 'rejects http on a remote hostname' FAIL (2/7)",
+      "green_after_revert": true
+    },
+    {
+      "id": "T-009",
+      "immutability": true,
+      "mutation": "read() headers emptied (Bearer token dropped) in foldex-addon/api.js",
+      "red": "api.test.mjs 'read endpoints' FAIL",
+      "green_after_revert": true
+    },
+    {
+      "id": "T-010",
+      "immutability": true,
+      "mutation": "axisSteps final edge step pushed as last+1 (off-by-one, overshoots the edge)",
+      "red": "capture.test.mjs 6 FAIL (axisSteps, capturePlan, capture glue)",
+      "green_after_revert": true
+    },
+    {
+      "id": "T-011",
+      "immutability": true,
+      "mutation": "splitTagSelection pushes unknown tag names into tag_ids instead of pending_tags",
+      "red": "state.test.mjs 'tag chips' FAIL",
+      "green_after_revert": true
+    },
+    {
+      "id": "T-012",
+      "immutability": true,
+      "mutation": "'scripting' permission removed from manifest.json (JSON kept valid)",
+      "red": "manifest.test.mjs 'manifest (SDD R2.1)' + permissions assertion FAIL (2 not ok)",
+      "green_after_revert": true,
+      "note": "first attempt (deleting 'alarms',) was a no-op sed — line has no trailing comma; re-run with a real mutation"
+    },
+    {
+      "id": "T-013",
+      "immutability": true,
+      "mutation": "upload-failure catch rethrows instead of swallowing (kills the sem-imagem fallback)",
+      "red": "popup.test.mjs 'popup controller' FAIL (save-with-image-failure path)",
+      "green_after_revert": true
+    },
+    {
+      "id": "T-014",
+      "immutability": true,
+      "mutation": "shouldSyncTags drops the prefs?.sync gate (syncs even when pref is off)",
+      "red": "sync.test.mjs 'tag sync gating' + one more FAIL (2 not ok)",
+      "green_after_revert": true
+    }
+  ],
+  "final_state": {
+    "foldex": "pre-existing dirty set only (M backend/internal/addon/dist/extension.zip byte-identical before/after runs; untracked SDD + $OUT docs). extension.zip digest 773d7f8641d3d1b6 unchanged.",
+    "foldex-addon": "clean at 04e7502; full suite re-run green 57/57",
+    "web": "3 targeted files green 43/43 after reverts",
+    "backend": "targeted auth + server integration tests green after reverts; ./internal/addon green"
+  }
+}

@@ -1689,7 +1689,6 @@
     "addon_version_note": "The file arrives as foldex-extension-<version>.zip, with the version also in the download headers.",
     "addon_steps_title": "Installation",
     "addon_step1": "Download the .zip and extract it.",
-    "addon_step2": "Open chrome://extensions.",
     "addon_step3": "Enable Developer mode and choose “Load unpacked”, pointing at the extracted folder.",
     "addon_permissions": "Permissions: activeTab, storage, scripting and alarms, plus access to this server's origin — the origin is requested only when you save a server address."
   },

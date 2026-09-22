@@ -13,11 +13,9 @@ import (
 
 func TestBundleBuiltSemantics(t *testing.T) {
 	for _, tc := range []struct {
-		name        string
-		zip         []byte
-		version     string
-		wantBuilt   bool
-		wantVersion string
+		name    string
+		zip     []byte
+		version string
 	}{
 		{name: "placeholder dist", zip: nil, version: "0.0.0"},
 		{name: "empty version", zip: []byte("PK"), version: ""},

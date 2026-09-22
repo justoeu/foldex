@@ -1,0 +1,15 @@
+{
+  "app": "foldex",
+  "branch": "main",
+  "into": "feature/chrome-addon-api-token",
+  "head": "2e96fc07cd7d731bfcbfd308ca268dcf57803e77",
+  "kind": "feature",
+  "loop": "full",
+  "worktree_n": 3,
+  "spec": "docs/SDD-CHROME-ADDON-AND-API-TOKEN",
+  "coverage_floor": 90,
+  "status": "in_progress",
+  "next_step": "planner",
+  "prefix": "mmh",
+  "test_cmd": "( cd backend && go vet ./... && go test ./internal/... ) && ( cd web && bun run typecheck && bun run test )"
+}

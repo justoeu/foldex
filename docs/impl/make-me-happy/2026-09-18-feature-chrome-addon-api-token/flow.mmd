@@ -1,0 +1,40 @@
+flowchart TD
+  subgraph ROT["R1 — um único token ativo"]
+    U1((Usuário conta)) -->|Rotacionar| RB[ApiTokensSection<br/>botão Rotacionar]
+    RB -->|1| DEL["DELETE /api/auth/tokens/{id}"]
+    DEL -->|204| CR["POST /api/auth/tokens {name}"]
+    CR -->|cap=1 ok| SB[SecretBand exibe plaintext 1x]
+    CR -->|409 too_many_tokens| N409[notice: estado consistente<br/>token antigo já revogado]
+    DEL -->|falha| STOP[aborta par — nada mudou]
+    CAP[maxTokensPerUser = 1<br/>FOR NO KEY UPDATE sob lock] --> CR
+  end
+
+  subgraph EXT["R2 — addon Chrome MV3 (extension/)"]
+    P[popup 404×632] --> PA["Painel A Novo link"]
+    P --> PB["Painel B Configurações"]
+    PB -->|salvar settings| ST["chrome.storage.local<br/>{server, token, prefs, defaultFolderId}"]
+    PB -->|novo origin| PERM["chrome.permissions.request<br/>(optional_host_permissions)"]
+    PB -->|Testar conexão| TC{"GET identities +<br/>stats/summary + folders"}
+    TC -->|ok| OKC[card verde: latency + conta/links/pastas]
+    TC -->|401 / rede| ERC[card vermelho: recusado / sem resposta]
+    PA -->|Área visível| CV[captureVisibleTab]
+    PA -->|Página inteira| SS["scripting.executeScript → scrollTo loop<br/>→ captureVisibleTab por passo"]
+    SS --> CNV[costura em canvas offscreen]
+    PA --> FOLD[grid pastas + ＋ Nova pasta<br/>POST /api/folders]
+    PA --> TAGS[chips tags: tag_ids vs pending_tags]
+    SAVE["Salvar no Foldex"] -->|1| PL["POST /api/links"]
+    PL -->|201| UP["POST /api/links/{id}/image (png)"]
+    UP -->|ok| SU["✓ Salvo em {pasta} · {n} tags · imagem anexada"]
+    UP -->|falha| SUSEM["✓ Salvo · sem imagem (link não desfeito)"]
+    SW["service worker: alarm 1h<br/>gated by prefs.sync"] --> GT[GET /api/tags → cache]
+  end
+
+  subgraph ADM["R3 — download admin"]
+    MK["make extension<br/>valida manifest → zip determinístico"] --> DIST["backend/internal/addon/dist/<br/>extension.zip + version.txt (go:embed)"]
+    DIST --> RT["GET /api/admin/addon/download<br/>RequireAdmin + RejectAPIToken"]
+    RT -->|zip presente| ZIP["200 zip · Content-Disposition<br/>foldex-extension-<version>.zip · X-Addon-Version"]
+    RT -->|placeholder vazio| NBLD["503 addon_not_built"]
+    AC[AdminUsersPage] -->|card Extensão Chrome| ZIP
+  end
+
+  ST -.token só via Authorization Bearer<br/>para o servidor configurado.--> PL

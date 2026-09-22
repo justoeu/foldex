@@ -454,7 +454,6 @@ describe('AdminUsersPage — Chrome extension card', () => {
       'addon_version_note',
       'addon_steps_title',
       'addon_step1',
-      'addon_step2',
       'addon_step3',
       'addon_permissions',
     ]

@@ -65,9 +65,9 @@ A extensão MV3 salva a página atual direto na sua biblioteca (título, pasta, 
 
 - **Download:** administradores baixam o zip na área de administração (`GET /api/admin/addon/download`, versão no header `X-Addon-Version`). Um binário construído sem o bundle responde `503 addon_not_built` nessa rota.
 - **Fonte:** o addon é desenvolvido em um projeto separado, `foldex-addon/`, clonado ao lado deste repo (`FOLDEX_ADDON_DIR` sobrescreve). `make extension` importa o zip deterministicamente para o embed do backend e recusa se as versões do addon e do app divergirem.
-- **Build via fonte:** `make extension` empacota `extension/` de forma determinística no diretório de embed do backend; o rebuild do backend (`make -C backend build`) já depende disso.
-- **Instalação:** extraia o zip, abra `chrome://extensions`, ative o **modo do desenvolvedor**, **Carregar sem compactação** e aponte para a pasta extraída.
-- **Testes:** `make test-extension` (o mesmo comando do CI).
+- **Fonte:** o addon é desenvolvido em um projeto separado, `foldex-addon/`, clonado ao lado deste repo (`FOLDEX_ADDON_DIR` sobrescreve). `make extension` importa o zip deterministicamente para o embed do backend e recusa se as versões divergirem; `make -C backend build` depende dele.
+- **Instalação:** extraia o zip, abra `chrome://extensions`, ative **Developer mode**, **Load unpacked**, aponte para a pasta extraída.
+- **Testes:** rodam dentro do projeto do addon (`npm test`); o CI valida que o embed commitado bate com a versão do app (freshness gate).
 
 ## Atalhos
 
@@ -84,7 +84,6 @@ A extensão MV3 salva a página atual direto na sua biblioteca (título, pasta, 
 |---|---|
 | `backend/` | API Go, workers |
 | `web/` | SPA React |
-| `extension/` | Manifest V3 |
 | `docs/` | Visão, arquitetura, SDDs |
 
 ## Docs
