@@ -30,3 +30,16 @@ export async function createToken(name: string): Promise<ApiToken> {
 export async function revokeToken(id: number): Promise<void> {
   await http.delete(`/api/auth/tokens/${id}`)
 }
+
+/**
+ * Replaces `current` with a fresh credential under the same name.
+ *
+ * The cap is one active token, so rotation is the honest replace flow: the
+ * old token dies first, then its successor is minted. The pair is NOT a
+ * transaction — if the create half fails the old token is already revoked,
+ * and the caller must say so rather than pretend nothing happened.
+ */
+export async function rotateToken(current: ApiToken): Promise<ApiToken> {
+  await revokeToken(current.id)
+  return createToken(current.name)
+}
