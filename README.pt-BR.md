@@ -64,7 +64,6 @@ Mais fluxos (notas, unlock de pasta, backup): [`docs/ARCHITECTURE.md`](docs/ARCH
 A extensão MV3 salva a página atual direto na sua biblioteca (título, pasta, tags, screenshot). Ela autentica com um token de API de **Settings → API tokens** — cada conta mantém exatamente um token ativo; use **Rotacionar** para trocá-lo.
 
 - **Download:** administradores baixam o zip na área de administração (`GET /api/admin/addon/download`, versão no header `X-Addon-Version`). Um binário construído sem o bundle responde `503 addon_not_built` nessa rota.
-- **Fonte:** o addon é desenvolvido em um projeto separado, `foldex-addon/`, clonado ao lado deste repo (`FOLDEX_ADDON_DIR` sobrescreve). `make extension` importa o zip deterministicamente para o embed do backend e recusa se as versões do addon e do app divergirem.
 - **Fonte:** o addon é desenvolvido em um projeto separado, `foldex-addon/`, clonado ao lado deste repo (`FOLDEX_ADDON_DIR` sobrescreve). `make extension` importa o zip deterministicamente para o embed do backend e recusa se as versões divergirem; `make -C backend build` depende dele.
 - **Instalação:** extraia o zip, abra `chrome://extensions`, ative **Developer mode**, **Load unpacked**, aponte para a pasta extraída.
 - **Testes:** rodam dentro do projeto do addon (`npm test`); o CI valida que o embed commitado bate com a versão do app (freshness gate).

@@ -83,7 +83,6 @@ The MV3 extension saves the page you are on straight into your library (title, f
 |---|---|
 | `backend/` | Go API, workers |
 | `web/` | React SPA |
-| `extension/` | Manifest V3 |
 | `docs/` | Vision, architecture, SDDs |
 
 ## Docs
