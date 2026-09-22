@@ -1,7 +1,7 @@
 {
   "name": "foldex-web",
   "private": true,
-  "version": "3.0.10",
+  "version": "3.1.0",
   "license": "MIT",
   "type": "module",
   "scripts": {
