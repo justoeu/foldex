@@ -29,6 +29,8 @@ describe("manifest (SDD R2.1)", () => {
     assert.match(manifest.version, /^\d+\.\d+\.\d+$/);
     assert.equal(manifest.default_locale, "en");
     assert.equal(manifest.action.default_popup, "popup.html");
+    assert.equal(manifest.background?.service_worker, "background.js");
+    assert.equal(manifest.background?.type, "module");
   });
 
   test("maps ⌘⇧S / Ctrl+Shift+S to opening the popup", () => {
@@ -61,7 +63,9 @@ describe("manifest (SDD R2.1)", () => {
     const namespaces = new Set();
     for (const name of readdirSync(ROOT).filter((f) => f.endsWith(".js"))) {
       const source = readFileSync(join(ROOT, name), "utf8");
-      for (const match of source.matchAll(/chromeApi\.(\w+)/g)) {
+      // background.js is the composition root and talks to the global chrome
+      // directly; everything else injects chromeApi.
+      for (const match of source.matchAll(/(?:chromeApi|chrome)\.(\w+)/g)) {
         namespaces.add(match[1]);
       }
     }
@@ -76,5 +80,6 @@ describe("manifest (SDD R2.1)", () => {
       assert.ok(manifest.permissions.includes(permission), `${permission} missing`);
     }
     assert.ok(namespaces.has("scripting"), "scripting should be in use (capture)");
+    assert.ok(namespaces.has("alarms"), "alarms should be in use (tag sync)");
   });
 });
