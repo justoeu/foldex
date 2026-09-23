@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -217,6 +218,7 @@ func TestScanListedFolderRow_FailsOnBadRows(t *testing.T) {
 type failFolderRows struct{}
 
 func (failFolderRows) Close()                                       {}
+func (failFolderRows) TypeMap() *pgtype.Map                         { return nil }
 func (failFolderRows) Err() error                                   { return errFolderTx }
 func (failFolderRows) CommandTag() pgconn.CommandTag                { return pgconn.CommandTag{} }
 func (failFolderRows) FieldDescriptions() []pgconn.FieldDescription { return nil }

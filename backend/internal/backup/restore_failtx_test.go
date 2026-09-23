@@ -6,6 +6,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 var errRestoreForced = errors.New("forced restore tx failure")
@@ -45,6 +46,7 @@ func (okRestoreRow) Scan(...any) error { return nil }
 type emptyRestoreRows struct{}
 
 func (emptyRestoreRows) Close()                                       {}
+func (emptyRestoreRows) TypeMap() *pgtype.Map                         { return nil }
 func (emptyRestoreRows) Err() error                                   { return nil }
 func (emptyRestoreRows) CommandTag() pgconn.CommandTag                { return pgconn.CommandTag{} }
 func (emptyRestoreRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
