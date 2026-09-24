@@ -1,12 +1,9 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Icon, I } from './icons'
-import { Notice, SectionBlock, SectionCard, SectionRow } from './account/SectionCard'
 import { useConfirm } from './ConfirmDialog'
 import { listTokens, createToken, revokeToken, rotateToken, type ApiToken } from '../api/tokens'
 import { apiErrorCode as errCode } from '../lib/apiError'
-import { SecretBand } from './SecretBand'
 
 /**
  * Long-lived bearer credentials for the browser extension and for scripts.

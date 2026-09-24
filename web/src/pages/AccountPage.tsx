@@ -103,15 +103,16 @@ export function AccountPage({ initialTab }: Readonly<{ initialTab?: AccountTab }
 
   const active = GROUPS.find((g) => g.id === group) ?? GROUPS[0]
   function onTabKeys(e: React.KeyboardEvent) {
-    const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End']
-    if (!keys.includes(e.key)) return
-    e.preventDefault()
     const i = GROUPS.findIndex((g) => g.id === group)
-    const next =
-      e.key === 'ArrowLeft' ? (i - 1 + GROUPS.length) % GROUPS.length
-      : e.key === 'ArrowRight' ? (i + 1) % GROUPS.length
-      : e.key === 'Home' ? 0
-      : GROUPS.length - 1
+    const byKey: Record<string, number> = {
+      ArrowLeft: (i - 1 + GROUPS.length) % GROUPS.length,
+      ArrowRight: (i + 1) % GROUPS.length,
+      Home: 0,
+      End: GROUPS.length - 1,
+    }
+    const next = byKey[e.key]
+    if (next === undefined) return
+    e.preventDefault()
     setGroup(GROUPS[next].id)
     // Roving focus: the selection moves with the arrows, and focus follows
     // the selection — the roving-tabindex contract.
@@ -123,7 +124,7 @@ export function AccountPage({ initialTab }: Readonly<{ initialTab?: AccountTab }
       <AccountHead user={user} />
 
       <nav className="fx-acc2-tabs-nav" aria-label={t('account.nav_aria')}>
-        <div className="fx-acc2-tabs" role="tablist" onKeyDown={onTabKeys}>
+        <div className="fx-acc2-tabs" role="tablist" tabIndex={-1} onKeyDown={onTabKeys}>
           {GROUPS.map((g, i) => {
             const on = g.id === group
             return (

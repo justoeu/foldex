@@ -139,6 +139,15 @@ export function ActivitySection() {
 
   const maxCount = Math.max(...chart.map((c) => c.count), 1)
 
+  // The two empty states mean different things and must not read alike: an
+  // account with no history vs. filters that match nothing of what loaded.
+  const emptyState =
+    entries.length === 0
+      ? t('admin.activity_empty')
+      : groups.length === 0
+        ? t('account.activity_no_results')
+        : ''
+
   return (
     <div>
       {feed.isPending && <div className="fx-acc2-empty fx-acc2-empty-soft">{t('common.loading')}</div>}
@@ -197,11 +206,7 @@ export function ActivitySection() {
             </div>
           </div>
 
-          {entries.length === 0 ? (
-            <div className="fx-acc2-empty">{t('admin.activity_empty')}</div>
-          ) : groups.length === 0 ? (
-            <div className="fx-acc2-empty">{t('account.activity_no_results')}</div>
-          ) : null}
+          {emptyState && <div className="fx-acc2-empty">{emptyState}</div>}
 
           <div className="fx-acc2-days">
             {groups.map((day) => (

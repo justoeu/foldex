@@ -5,39 +5,39 @@
 type TFunc = (key: string, opts?: Record<string, unknown>) => string
 
 export function relativeTime(isoOrDate: string | Date, t: TFunc): string {
-  return relativeTimeStyled(isoOrDate, t, 'short')
+  return relativeTimeShort(isoOrDate, t)
+}
+
+/** Seconds elapsed, floored at zero so server clock skew can't make a stamp
+ *  land "in the future" on screen. */
+function secondsSince(then: Date): number {
+  return Math.max(0, Math.floor((Date.now() - then.getTime()) / 1000))
 }
 
 /**
  * The long variant is the account's session list, where rows are few and the
- * sentence form reads better than clock shorthand. It shares the thresholds
- * with the short form so the two can never disagree about what "recent" means.
+ * sentence form reads better than clock shorthand. It shares the floor/now
+ * helpers with the short form so the two can never disagree about what
+ * "recent" means.
  */
 export function relativeTimeLong(isoOrDate: string | Date, t: TFunc): string {
-  return relativeTimeStyled(isoOrDate, t, 'long')
-}
-
-function relativeTimeStyled(
-  isoOrDate: string | Date,
-  t: TFunc,
-  style: 'short' | 'long',
-): string {
   const then = typeof isoOrDate === 'string' ? new Date(isoOrDate) : isoOrDate
   if (Number.isNaN(then.getTime())) return ''
-  const diffMs = Date.now() - then.getTime()
-  // Future dates collapse to "now" — keeps the UI readable when a server
-  // clock skew makes the stamp land slightly ahead.
-  const sec = Math.max(0, Math.floor(diffMs / 1000))
-  if (style === 'long') {
-    const min = Math.floor(sec / 60)
-    if (min < 1) return t('account.session_now', { defaultValue: 'active now' })
-    if (min < 60) return t('account.session_min_ago', { count: min, defaultValue: '{{count}} min ago' })
-    const hr = Math.floor(min / 60)
-    if (hr < 24) return t('account.session_hours_ago', { count: hr, defaultValue: '{{count}} h ago' })
-    const day = Math.floor(hr / 24)
-    if (day < 31) return t('account.session_days_ago', { count: day, defaultValue: '{{count}} d ago' })
-    return formatLocalYMD(then)
-  }
+  const sec = secondsSince(then)
+  const min = Math.floor(sec / 60)
+  if (min < 1) return t('account.session_now', { defaultValue: 'active now' })
+  if (min < 60) return t('account.session_min_ago', { count: min, defaultValue: '{{count}} min ago' })
+  const hr = Math.floor(min / 60)
+  if (hr < 24) return t('account.session_hours_ago', { count: hr, defaultValue: '{{count}} h ago' })
+  const day = Math.floor(hr / 24)
+  if (day < 31) return t('account.session_days_ago', { count: day, defaultValue: '{{count}} d ago' })
+  return formatLocalYMD(then)
+}
+
+function relativeTimeShort(isoOrDate: string | Date, t: TFunc): string {
+  const then = typeof isoOrDate === 'string' ? new Date(isoOrDate) : isoOrDate
+  if (Number.isNaN(then.getTime())) return ''
+  const sec = secondsSince(then)
   if (sec < 45) return t('common.time_now', { defaultValue: 'now' })
   const min = Math.floor(sec / 60)
   if (min < 60) return t('common.time_min_ago', { count: min, defaultValue: '{{count}}m ago' })
