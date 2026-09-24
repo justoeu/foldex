@@ -95,7 +95,7 @@ export function ActivitySection() {
       if (bucket) bucket.count++
     }
     return days
-  }, [entries])
+  }, [entries, t])
 
   const q = query.trim().toLowerCase()
   const filtered = useMemo(

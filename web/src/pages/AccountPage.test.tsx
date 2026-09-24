@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { screen } from '@testing-library/react'
+import { screen, within, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { AccountPage } from './AccountPage'
 import { renderWithProviders } from '../test/renderWithProviders'
@@ -48,5 +48,28 @@ describe('account page — copy contracts', () => {
   it('states what an API token cannot do on the tokens section', async () => {
     renderWithProviders(<AccountPage initialTab="tokens" />)
     expect(await screen.findByText(/does not change your password/i)).toBeInTheDocument()
+  })
+})
+
+describe('account page — tablist keyboard model', () => {
+  // The tab roles promise the APG keyboard contract; without the test the
+  // handler is silent a11y breakage waiting for a refactor.
+  it('moves selection and focus with the arrow keys, wrapping around', async () => {
+    renderWithProviders(<AccountPage />)
+    const list = await screen.findByRole('tablist')
+    const tabs = within(list).getAllByRole('tab')
+    tabs[0].focus()
+
+    fireEvent.keyDown(list, { key: 'ArrowRight' })
+    expect(tabs[1]).toHaveFocus()
+    expect(tabs[1]).toHaveAttribute('aria-selected', 'true')
+
+    fireEvent.keyDown(list, { key: 'ArrowLeft' })
+    expect(tabs[0]).toHaveFocus()
+
+    fireEvent.keyDown(list, { key: 'End' })
+    expect(tabs.at(-1)).toHaveFocus()
+    fireEvent.keyDown(list, { key: 'Home' })
+    expect(tabs[0]).toHaveFocus()
   })
 })

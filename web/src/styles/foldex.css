@@ -4353,27 +4353,3 @@ button.fx-abuse-reset:disabled { opacity: 0.5; cursor: not-allowed; }
 .fx-abuse-status { min-width: 0; flex: 1; }
 .fx-abuse-saved { margin: 0; font-size: 13px; color: var(--fx-success); }
 
-/* Atividade da própria conta (ADR-46) — a metade do split de leitura que
-   devolve o rótulo do conteúdo, porque quem lê é o dono da linha. */
-.fx-acc-activity { display: flex; flex-direction: column; gap: 12px; align-items: flex-start; }
-.fx-acc-activity-lede { margin: 0; font-size: 13px; color: var(--fx-ink-3); }
-.fx-acc-activity-list {
-  align-self: stretch; display: flex; flex-direction: column;
-  margin: 0; padding: 0; list-style: none;
-}
-.fx-acc-activity-row {
-  display: grid; grid-template-columns: 170px 150px 1fr auto;
-  gap: 12px; align-items: center;
-  padding: 10px 2px; border-bottom: 1px solid var(--fx-border-2);
-}
-.fx-acc-activity-row:last-child { border-bottom: 0; }
-.fx-acc-activity-when { font-family: var(--fx-mono); font-size: 11px; color: var(--fx-ink-4); }
-.fx-acc-activity-action { font-size: 13px; font-weight: 600; color: var(--fx-ink-2); }
-.fx-acc-activity-subject {
-  font-size: 13px; color: var(--fx-ink);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
-}
-.fx-acc-activity-ip { font-family: var(--fx-mono); font-size: 10.5px; color: var(--fx-ink-5); }
-@media (max-width: 720px) {
-  .fx-acc-activity-row { grid-template-columns: 1fr; gap: 4px; }
-}
