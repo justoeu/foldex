@@ -16,6 +16,8 @@ export type MockState = {
    * the server does not have.
    */
   activity: AuditEntryMock[]
+  /** The caller's live sessions (the redesign's device list). */
+  sessions: Array<{ id: number; created_at: string; last_seen_at: string; user_agent?: string; ip?: string; current: boolean }>
   links: Link[]
   notes: Note[]
   folders: Folder[]
@@ -139,6 +141,9 @@ export function freshState(): MockState {
   return {
     tags: [], links: [], notes: [], folders: [], folderPasswords: {},
     urlMetadataCalls: [], activity: [],
+    sessions: [
+      { id: 1, created_at: '2026-09-01T10:00:00Z', last_seen_at: '2026-09-24T12:00:00Z', user_agent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36', ip: '203.0.113.10', current: true },
+    ],
   }
 }
 
@@ -184,6 +189,7 @@ const buildRoutes = (): Record<Method, Route[]> => ({
     // route and query-param name — a suite that only blanket-mocks `http.get`
     // stays green through a rename on either side. `takenIdentifiers` is empty
     // by default, so an untouched test sees "available" and nothing blocks.
+    { url: /^\/api\/auth\/sessions$/, handle: (_m, _d, _p, s) => ({ sessions: s.sessions }) },
     { url: /^\/api\/auth\/username-available$/, handle: (_m, _d, p, s) => availability(p.get('u'), s) },
     { url: /^\/api\/admin\/users\/email-available$/, handle: (_m, _d, p, s) => availability(p.get('email'), s) },
     // Read-only here: an admin may READ the policy, and CreateUserDialog needs

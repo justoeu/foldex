@@ -14,6 +14,7 @@ import './styles/foldex.css'
 import './styles/overrides.css'
 // Last, so `.fx-auth` can rely on the tokens the two above declare.
 import './styles/auth.css'
+import './styles/account.css'
 
 const queryClient = new QueryClient({
   defaultOptions: {

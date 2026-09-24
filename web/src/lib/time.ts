@@ -2,9 +2,25 @@
 // and the "update detected ago" badge both want short copy like "2h ago" /
 // "há 3d" / "hace 5 sem", so a small helper hand-rolled against the
 // i18n key set we already maintain beats pulling in date-fns.
-export function relativeTime(
+type TFunc = (key: string, opts?: Record<string, unknown>) => string
+
+export function relativeTime(isoOrDate: string | Date, t: TFunc): string {
+  return relativeTimeStyled(isoOrDate, t, 'short')
+}
+
+/**
+ * The long variant is the account's session list, where rows are few and the
+ * sentence form reads better than clock shorthand. It shares the thresholds
+ * with the short form so the two can never disagree about what "recent" means.
+ */
+export function relativeTimeLong(isoOrDate: string | Date, t: TFunc): string {
+  return relativeTimeStyled(isoOrDate, t, 'long')
+}
+
+function relativeTimeStyled(
   isoOrDate: string | Date,
-  t: (key: string, opts?: Record<string, unknown>) => string,
+  t: TFunc,
+  style: 'short' | 'long',
 ): string {
   const then = typeof isoOrDate === 'string' ? new Date(isoOrDate) : isoOrDate
   if (Number.isNaN(then.getTime())) return ''
@@ -12,6 +28,16 @@ export function relativeTime(
   // Future dates collapse to "now" — keeps the UI readable when a server
   // clock skew makes the stamp land slightly ahead.
   const sec = Math.max(0, Math.floor(diffMs / 1000))
+  if (style === 'long') {
+    const min = Math.floor(sec / 60)
+    if (min < 1) return t('account.session_now', { defaultValue: 'active now' })
+    if (min < 60) return t('account.session_min_ago', { count: min, defaultValue: '{{count}} min ago' })
+    const hr = Math.floor(min / 60)
+    if (hr < 24) return t('account.session_hours_ago', { count: hr, defaultValue: '{{count}} h ago' })
+    const day = Math.floor(hr / 24)
+    if (day < 31) return t('account.session_days_ago', { count: day, defaultValue: '{{count}} d ago' })
+    return formatLocalYMD(then)
+  }
   if (sec < 45) return t('common.time_now', { defaultValue: 'now' })
   const min = Math.floor(sec / 60)
   if (min < 60) return t('common.time_min_ago', { count: min, defaultValue: '{{count}}m ago' })
@@ -27,7 +53,7 @@ export function relativeTime(
   return formatLocalYMD(then)
 }
 
-function formatLocalYMD(d: Date): string {
+export function formatLocalYMD(d: Date): string {
   const y = d.getFullYear()
   const m = String(d.getMonth() + 1).padStart(2, '0')
   const day = String(d.getDate()).padStart(2, '0')

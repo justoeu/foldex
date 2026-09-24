@@ -86,84 +86,123 @@ export function ApiTokensSection() {
   }
 
   return (
-    <SectionCard icon={I.link} title={t('tokens.card_title')} subtitle={t('tokens.section_desc')}>
-      {error && <Notice tone="bad">{error}</Notice>}
+    <div>
+      {error && (
+        <div className="fx-acc2-empty fx-acc2-notice-inline" role="alert">{error}</div>
+      )}
 
       {/* The one and only display of the plaintext. The server keeps sha256,
           so this is not a convenience that was skipped — showing it again is
-          genuinely impossible. That is why it gets a band of its own rather
+          genuinely impossible. That is why it gets a card of its own rather
           than a line in the list: it has to be copied before it is dismissed. */}
       {created?.token && (
-        <SecretBand
-          label={t('tokens.created_title')}
-          value={created.token}
-          testId="new-token"
-          hint={<Notice tone="info">{t('tokens.created_warning')}</Notice>}
-        >
-          <button className="fx-btn fx-btn-primary" onClick={() => setCreated(null)}>
-            {t('tokens.done')}
-          </button>
-        </SecretBand>
+        <div className="fx-acc2-token-new" data-testid="new-token-band">
+          <div className="fx-acc2-token-new-title">{t('tokens.created_title')}</div>
+          <div className="fx-acc2-token-new-sub">{t('tokens.created_warning')}</div>
+          <div className="fx-acc2-token-new-actions">
+            <code className="fx-acc2-token-value" data-testid="new-token">{created.token}</code>
+            <CopyToken value={created.token} />
+            <button type="button" className="fx-acc2-btn-outline" onClick={() => setCreated(null)}>
+              {t('tokens.done')}
+            </button>
+          </div>
+        </div>
       )}
 
-      <SectionBlock label={t('tokens.list_label')}>
-        <div className="fx-sec-rows">
-          {(tokens.data ?? []).map((tok) => (
-            <SectionRow
-              key={tok.id}
-              icon={I.link}
-              name={tok.name}
-              hint={
-                tok.last_used_at
-                  ? t('tokens.last_used', { when: new Date(tok.last_used_at).toLocaleDateString() })
-                  : t('tokens.never_used')
-              }
-              action={
-                <>
-                  <button
-                    className="fx-btn"
-                    aria-label={t('tokens.rotate_label', { name: tok.name })}
-                    disabled={rotate.isPending}
-                    onClick={() => void askRotate(tok)}
-                  >
-                    <Icon d={I.refresh} size={13} /> {t('tokens.rotate')}
-                  </button>
-                  <button
-                    className="fx-btn fx-btn-danger"
-                    aria-label={t('tokens.revoke_label', { name: tok.name })}
-                    onClick={() => void askRevoke(tok)}
-                  >
-                    <Icon d={I.trash} size={13} /> {t('tokens.revoke')}
-                  </button>
-                </>
-              }
-            />
-          ))}
-          {tokens.data?.length === 0 && <Notice tone="info">{t('tokens.empty')}</Notice>}
-        </div>
-      </SectionBlock>
-
-      <div className="fx-sec-form">
-        <label className="fx-field">
-          <span className="fx-field-label">{t('tokens.name_label')}</span>
-          <input
-            className="fx-input"
-            value={name}
-            placeholder={t('tokens.name_placeholder')}
-            onChange={(e) => setName(e.target.value)}
-          />
-        </label>
-        <div className="fx-sec-actions">
-          <button
-            className="fx-btn fx-btn-primary"
-            disabled={create.isPending || !name.trim()}
-            onClick={() => create.mutate()}
+      <div className="fx-acc2-card fx-acc2-mb16">
+        <div className="fx-acc2-card-body">
+          <form
+            className="fx-acc2-token-form"
+            onSubmit={(e) => {
+              e.preventDefault()
+              if (name.trim() && !create.isPending) create.mutate()
+            }}
           >
-            {t('tokens.create')}
-          </button>
+            <input
+              className="fx-acc2-input fx-acc2-token-name"
+              value={name}
+              placeholder={t('tokens.name_placeholder')}
+              aria-label={t('tokens.name_label')}
+              onChange={(e) => setName(e.target.value)}
+            />
+            <button
+              type="submit"
+              className="fx-acc2-btn fx-acc2-token-create"
+              disabled={create.isPending || !name.trim()}
+            >
+              {t('tokens.create')}
+            </button>
+          </form>
         </div>
       </div>
-    </SectionCard>
+
+      <div className="fx-acc2-card">
+        <div className="fx-acc2-card-head">
+          <span>{t('tokens.list_label')}</span>
+          <span className="fx-acc2-card-count">{tokens.data?.length ?? 0}</span>
+        </div>
+        {tokens.data?.length === 0 && (
+          <div className="fx-acc2-empty fx-acc2-empty-soft">{t('tokens.empty')}</div>
+        )}
+        {(tokens.data ?? []).map((tok) => (
+          <div className="fx-acc2-row" key={tok.id}>
+            <div className="fx-acc2-row-main">
+              <div className="fx-acc2-row-title">{tok.name}</div>
+              <div className="fx-acc2-row-meta">
+                <code className="fx-acc2-mono">fx_{tok.id}…</code>
+                <span className="fx-acc2-dot-sep">·</span>
+                <span>
+                  {tok.last_used_at
+                    ? t('tokens.last_used', { when: new Date(tok.last_used_at).toLocaleDateString() })
+                    : t('tokens.never_used')}
+                </span>
+              </div>
+            </div>
+            <button
+              type="button"
+              className="fx-acc2-btn-outline"
+              aria-label={t('tokens.rotate_label', { name: tok.name })}
+              disabled={rotate.isPending}
+              onClick={() => void askRotate(tok)}
+            >
+              {t('tokens.rotate')}
+            </button>
+            <button
+              type="button"
+              className="fx-acc2-btn-danger"
+              aria-label={t('tokens.revoke_label', { name: tok.name })}
+              onClick={() => void askRevoke(tok)}
+            >
+              {t('tokens.revoke')}
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/** Copy button with the "Copiado" confirmation the one-time card needs — the
+ *  plaintext leaves the screen forever on dismiss, so the click has to say it
+ *  worked without navigating anywhere. */
+function CopyToken({ value }: Readonly<{ value: string }>) {
+  const { t } = useTranslation()
+  const [copied, setCopied] = useState(false)
+  return (
+    <button
+      type="button"
+      className="fx-acc2-btn"
+      onClick={() => {
+        // "Copied" must not appear unless the clipboard write landed: the
+        // plaintext leaves the screen forever on dismiss.
+        void navigator.clipboard
+          ?.writeText(value)
+          .then(() => setCopied(true))
+          .catch(() => {})
+      }}
+    >
+      {copied ? t('tokens.copied') : t('tokens.copy')}
+    </button>
   )
 }
 

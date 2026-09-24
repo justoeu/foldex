@@ -1,0 +1,416 @@
+/* ═══ Account redesign ("Minha Conta 2b") ═════════════════════════════════
+ * Scoped flat design for the account area: opaque white cards, hairline
+ * #e9e8f0 borders, #5b4fe6 primary — deliberately NOT reusing the glass
+ * surfaces above, which live on translucency and the lilac accent. Everything
+ * hangs off .fx-account so the rest of the app keeps the Aurora look, and
+ * dark mode maps onto the same custom properties rather than a second block.
+ * Selectors stay element-qualified (INV-154) and every class used in markup
+ * has a rule here (orphan-classes guard).
+ */
+.fx-account {
+  --acc-ink: #1b1a27;
+  --acc-ink-2: #3b3950;
+  --acc-muted: #625f75;
+  --acc-faint: #8b889c;
+  --acc-faint-2: #a3a0b3;
+  --acc-sep: #c4c2d0;
+  --acc-border: #e9e8f0;
+  --acc-border-row: #eeedf3;
+  --acc-border-input: #dcdae6;
+  --acc-border-btn: #e1dfea;
+  --acc-primary: #5b4fe6;
+  --acc-primary-hover: #4a3fd6;
+  --acc-primary-link: #4336c9;
+  --acc-primary-soft: #efedfd;
+  --acc-purple-bg: #f4f2ff;
+  --acc-purple-border: #d9d4fb;
+  --acc-purple-ink: #4b4866;
+  --acc-ok: #2f9e6a;
+  --acc-ok-deep: #1a7a50;
+  --acc-ok-soft: #e7f5ee;
+  --acc-ok-banner-bg: #eef8f3;
+  --acc-ok-banner-border: #cdeadb;
+  --acc-ok-banner-ink: #14553a;
+  --acc-ok-banner-ink-2: #2d6b4f;
+  --acc-warn-ink: #9a6400;
+  --acc-warn-note: #8a5a00;
+  --acc-warn-dot: #c28a1a;
+  --acc-danger: #b83232;
+  --acc-danger-solid: #c93a3a;
+  --acc-danger-solid-hover: #b02f2f;
+  --acc-danger-border: #efc4c4;
+  --acc-danger-soft: #fdf1f1;
+  --acc-danger-alert: #f0d2d2;
+  --acc-dot-edit: #7a70e8;
+  --acc-dot-del: #d24b4b;
+  --acc-bg-soft: #fafafc;
+  --acc-track: #ecebf3;
+  --acc-placeholder: #efeef4;
+
+  font-family: 'Instrument Sans', var(--fx-ui);
+  color: var(--acc-ink);
+  display: flex; flex-direction: column; gap: 24px;
+}
+.fx-account a { color: var(--acc-primary); text-decoration: none; }
+.fx-account a:hover { color: var(--acc-primary-link); text-decoration: underline; }
+.fx-account input, .fx-account select, .fx-account button { font-family: inherit; }
+.fx-account input:focus, .fx-account select:focus {
+  outline: none; border-color: var(--acc-primary) !important;
+  box-shadow: 0 0 0 3px #e4e1fc;
+}
+.fx-account button:focus-visible { outline: 2px solid var(--acc-primary); outline-offset: 2px; }
+
+/* ── page head + grouped tab bar ─────────────────────────────────────── */
+.fx-acc2-head { display: flex; align-items: center; gap: 14px; }
+.fx-acc2-avatar {
+  width: 48px; height: 48px; border-radius: 14px; flex: none;
+  background: var(--acc-primary); color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 600; font-size: 17px;
+}
+.fx-acc2-avatar-lg { width: 56px; height: 56px; border-radius: 14px; font-size: 18px; }
+.fx-acc2-name {
+  font-family: var(--fx-display); font-size: 20px; font-weight: 600;
+  letter-spacing: -0.01em; margin: 0;
+}
+.fx-acc2-meta {
+  display: flex; gap: 6px; flex-wrap: wrap;
+  font-size: 13.5px; color: var(--acc-muted); margin-top: 2px;
+}
+.fx-acc2-meta .fx-acc2-dot { color: var(--acc-sep); }
+.fx-acc2-tabs-nav { margin: 0 -4px; }
+.fx-acc2-tabs {
+  display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none;
+  border-bottom: 1px solid var(--acc-border);
+}
+.fx-acc2-tabs::-webkit-scrollbar { display: none; }
+button.fx-acc2-tab {
+  flex: none; height: 44px; padding: 0 12px; margin-bottom: -1px;
+  border: 0; border-bottom: 2px solid transparent; background: transparent;
+  cursor: pointer; font-size: 14px; white-space: nowrap;
+  color: var(--acc-ink-2); font-weight: 500;
+}
+button.fx-acc2-tab:hover { color: var(--acc-ink); }
+button.fx-acc2-tab[aria-selected="true"] {
+  color: var(--acc-primary); font-weight: 600;
+  border-bottom-color: var(--acc-primary);
+}
+
+/* ── section shell: h2 + lede, cards, rows ──────────────────────────── */
+.fx-acc2-sections { display: flex; flex-direction: column; gap: 56px; }
+.fx-acc2-section-title {
+  font-family: var(--fx-display); font-size: 20px; font-weight: 600;
+  letter-spacing: -0.01em; margin: 0 0 6px;
+}
+p.fx-acc2-lede { margin: 0; color: var(--acc-muted); font-size: 14.5px; text-wrap: pretty; }
+.fx-acc2-card {
+  background: #fff; border: 1px solid var(--acc-border);
+  border-radius: 12px; overflow: hidden;
+}
+div.fx-acc2-card-body { padding: 24px; display: flex; flex-direction: column; gap: 20px; }
+div.fx-acc2-card-body-narrow { max-width: 440px; }
+div.fx-acc2-card-foot {
+  border-top: 1px solid var(--acc-border); padding: 14px 24px;
+  display: flex; align-items: center; justify-content: flex-end;
+  gap: 10px; flex-wrap: wrap;
+}
+div.fx-acc2-card-head {
+  padding: 14px 20px; font-size: 13.5px; font-weight: 600;
+  border-bottom: 1px solid var(--acc-border);
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
+}
+span.fx-acc2-card-count { color: var(--acc-faint); font-weight: 500; }
+div.fx-acc2-row {
+  display: flex; align-items: center; gap: 16px; padding: 18px 20px;
+  flex-wrap: wrap;
+}
+div.fx-acc2-row + div.fx-acc2-row { border-top: 1px solid var(--acc-border-row); }
+div.fx-acc2-row-main { flex: 1 1 240px; min-width: 0; }
+div.fx-acc2-row-title { font-size: 14.5px; font-weight: 600; }
+div.fx-acc2-row-sub {
+  font-size: 13.5px; color: var(--acc-muted); margin-top: 2px;
+  overflow: hidden; text-overflow: ellipsis; text-wrap: pretty;
+}
+div.fx-acc2-row-note { font-size: 12.5px; color: var(--acc-warn-note); margin-top: 6px; }
+span.fx-acc2-pill {
+  font-size: 12.5px; font-weight: 500; padding: 3px 9px; border-radius: 999px;
+  background: var(--acc-track); color: var(--acc-muted); flex: none;
+}
+span.fx-acc2-pill-ok { background: var(--acc-ok-soft); color: var(--acc-ok-deep); }
+span.fx-acc2-pill-current { background: var(--acc-primary-soft); color: var(--acc-primary); font-size: 12px; padding: 2px 8px; }
+div.fx-acc2-row-title-wrap { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+div.fx-acc2-row-meta {
+  font-size: 13px; color: var(--acc-muted); margin-top: 3px;
+  display: flex; gap: 6px; flex-wrap: wrap;
+}
+code.fx-acc2-mono { font-family: var(--fx-mono); font-size: 12px; }
+span.fx-acc2-dot-sep { color: var(--acc-sep); }
+
+/* ── forms ──────────────────────────────────────────────────────────── */
+label.fx-acc2-field { display: flex; flex-direction: column; gap: 6px; }
+span.fx-acc2-field-label { font-size: 13.5px; font-weight: 500; }
+span.fx-acc2-field-hint { font-size: 13px; color: var(--acc-muted); text-wrap: pretty; }
+input.fx-acc2-input {
+  height: 40px; padding: 0 12px; border: 1px solid var(--acc-border-input);
+  border-radius: 8px; font-size: 14.5px; color: var(--acc-ink);
+  background: #fff; width: 100%; box-sizing: border-box;
+}
+select.fx-acc2-select {
+  height: 40px; padding: 0 10px; border: 1px solid var(--acc-border-input);
+  border-radius: 8px; font-size: 14.5px; color: var(--acc-ink);
+  background: #fff; width: 100%;
+}
+textarea.fx-acc2-input { height: auto; padding: 10px 12px; resize: vertical; }
+
+/* ── buttons ────────────────────────────────────────────────────────── */
+button.fx-acc2-btn {
+  height: 36px; padding: 0 16px; border: 0; border-radius: 8px;
+  background: var(--acc-primary); color: #fff; font-size: 14px;
+  font-weight: 500; cursor: pointer;
+}
+button.fx-acc2-btn:hover:not(:disabled) { background: var(--acc-primary-hover); }
+button.fx-acc2-btn:disabled { opacity: 0.45; cursor: default; }
+button.fx-acc2-btn-outline {
+  height: 34px; padding: 0 14px; border: 1px solid var(--acc-border-btn);
+  border-radius: 8px; background: #fff; font-size: 13.5px;
+  cursor: pointer; color: var(--acc-ink); font-weight: 500;
+}
+button.fx-acc2-btn-outline:hover { background: #f3f2f8; }
+button.fx-acc2-btn-danger {
+  height: 34px; padding: 0 14px; border: 1px solid var(--acc-danger-border);
+  border-radius: 8px; background: #fff; font-size: 13.5px;
+  cursor: pointer; color: var(--acc-danger); font-weight: 500;
+}
+button.fx-acc2-btn-danger:hover { background: var(--acc-danger-soft); }
+button.fx-acc2-btn-solid-danger {
+  height: 38px; padding: 0 16px; border: 0; border-radius: 8px;
+  background: var(--acc-danger-solid); color: #fff; font-size: 14px;
+  font-weight: 500; cursor: pointer;
+}
+button.fx-acc2-btn-solid-danger:hover { background: var(--acc-danger-solid-hover); }
+span.fx-acc2-dirty { margin-right: auto; font-size: 13px; color: var(--acc-warn-ink); }
+
+/* ── 2FA banner ─────────────────────────────────────────────────────── */
+div.fx-acc2-banner-ok {
+  background: var(--acc-ok-banner-bg); border: 1px solid var(--acc-ok-banner-border);
+  border-radius: 12px; padding: 16px 20px; display: flex; align-items: center;
+  gap: 14px; margin-bottom: 16px;
+}
+span.fx-acc2-banner-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--acc-ok); flex: none; }
+div.fx-acc2-banner-title { font-weight: 600; font-size: 14.5px; color: var(--acc-ok-banner-ink); }
+div.fx-acc2-banner-sub { font-size: 13.5px; color: var(--acc-ok-banner-ink-2); margin-top: 2px; }
+
+/* ── tokens one-time card ───────────────────────────────────────────── */
+div.fx-acc2-token-new {
+  background: var(--acc-purple-bg); border: 1px solid var(--acc-purple-border);
+  border-radius: 12px; padding: 18px 20px; margin-bottom: 16px;
+}
+div.fx-acc2-token-new-title { font-weight: 600; font-size: 14.5px; }
+div.fx-acc2-token-new-sub { font-size: 13.5px; color: var(--acc-purple-ink); margin-top: 2px; }
+div.fx-acc2-token-new-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+code.fx-acc2-token-value {
+  flex: 1 1 260px; min-width: 0; background: #fff;
+  border: 1px solid var(--acc-purple-border); border-radius: 8px;
+  padding: 9px 12px; font-family: var(--fx-mono); font-size: 13px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+form.fx-acc2-token-form { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+input.fx-acc2-token-name { flex: 1 1 240px; min-width: 0; height: 38px; }
+button.fx-acc2-token-create { height: 38px; }
+
+/* ── sessions ───────────────────────────────────────────────────────── */
+div.fx-acc2-logout-all {
+  margin-top: 24px; border: 1px solid var(--acc-danger-alert);
+  border-radius: 12px; background: #fff; padding: 18px 20px;
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+}
+
+/* ── activity: chart, filters, day groups ───────────────────────────── */
+div.fx-acc2-chart-card {
+  background: #fff; border: 1px solid var(--acc-border); border-radius: 12px;
+  padding: 18px 20px; margin-bottom: 16px;
+}
+div.fx-acc2-chart-head {
+  display: flex; justify-content: space-between; align-items: baseline;
+  gap: 12px; flex-wrap: wrap; font-size: 14px; font-weight: 600;
+}
+span.fx-acc2-chart-total { font-size: 13px; color: var(--acc-muted); font-weight: 400; }
+div.fx-acc2-chart-bars { display: flex; align-items: flex-end; gap: 6px; height: 72px; margin-top: 14px; }
+div.fx-acc2-chart-col { flex: 1; display: flex; flex-direction: column; align-items: stretch; justify-content: flex-end; height: 100%; }
+div.fx-acc2-chart-bar { background: var(--acc-dot-edit); border-radius: 3px; min-height: 2px; }
+div.fx-acc2-chart-bar-empty { background: var(--acc-track); }
+div.fx-acc2-chart-labels { display: flex; gap: 6px; margin-top: 6px; }
+span.fx-acc2-chart-label {
+  flex: 1; text-align: center; font-size: 11px; color: var(--acc-faint);
+  font-family: var(--fx-mono);
+}
+div.fx-acc2-filters { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; align-items: center; }
+input.fx-acc2-search { flex: 1 1 220px; min-width: 0; height: 38px; font-size: 14px; }
+div.fx-acc2-seg { display: flex; gap: 2px; padding: 3px; background: var(--acc-track); border-radius: 9px; }
+button.fx-acc2-seg-btn {
+  height: 32px; padding: 0 12px; border: 0; border-radius: 7px;
+  font-size: 13.5px; cursor: pointer; background: transparent;
+  color: var(--acc-muted); font-weight: 500;
+}
+button.fx-acc2-seg-btn[aria-selected="true"] {
+  background: #fff; color: var(--acc-ink); box-shadow: 0 1px 2px rgba(0,0,0,0.08);
+}
+div.fx-acc2-days { display: flex; flex-direction: column; gap: 16px; }
+div.fx-acc2-day { background: #fff; border: 1px solid var(--acc-border); border-radius: 12px; overflow: hidden; }
+div.fx-acc2-day-head {
+  padding: 10px 20px; font-size: 13px; font-weight: 600; color: var(--acc-purple-ink);
+  background: var(--acc-bg-soft); border-bottom: 1px solid var(--acc-border);
+  display: flex; justify-content: space-between;
+}
+span.fx-acc2-day-count { color: var(--acc-faint); font-weight: 500; }
+div.fx-acc2-act-row {
+  display: flex; align-items: center; gap: 4px 14px; padding: 11px 20px;
+  font-size: 14px;
+}
+div.fx-acc2-act-row + div.fx-acc2-act-row { border-top: 1px solid var(--acc-border-row); }
+span.fx-acc2-act-time { font-family: var(--fx-mono); font-size: 12.5px; color: var(--acc-faint); flex: none; width: 40px; }
+span.fx-acc2-act-kind {
+  display: flex; align-items: center; gap: 7px; flex: none; width: 136px;
+  color: var(--acc-purple-ink); font-size: 13.5px;
+}
+span.fx-acc2-act-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+span.fx-acc2-act-dot-create { background: var(--acc-ok); }
+span.fx-acc2-act-dot-edit { background: var(--acc-dot-edit); }
+span.fx-acc2-act-dot-delete { background: var(--acc-dot-del); }
+span.fx-acc2-act-dot-other { background: var(--acc-warn-dot); }
+span.fx-acc2-act-title { flex: 1 1 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+span.fx-acc2-act-ip { font-family: var(--fx-mono); font-size: 11.5px; color: var(--acc-faint-2); flex: none; }
+div.fx-acc2-empty {
+  background: #fff; border: 1px solid var(--acc-border); border-radius: 12px;
+  padding: 40px 20px; text-align: center; color: var(--acc-muted); font-size: 14px;
+}
+div.fx-acc2-empty-soft { padding: 32px 20px; }
+div.fx-acc2-alert {
+  border-color: var(--acc-danger-alert); color: var(--acc-danger);
+  padding: 14px 20px; text-align: start; margin-bottom: 16px;
+  font-size: 14px;
+}
+.fx-acc2-mt16 { margin-top: 16px; }
+.fx-acc2-mt12 { margin-top: 12px; }
+.fx-acc2-mb16 { margin-bottom: 16px; }
+div.fx-acc2-notice-inline { margin-bottom: 16px; padding: 14px 20px; text-align: start; font-size: 14px; }
+
+/* ── responsive (design's <760px narrow) ────────────────────────────── */
+@media (max-width: 759px) {
+  .fx-account { gap: 20px; }
+  div.fx-acc2-row, div.fx-acc2-logout-all { padding: 14px 16px; }
+  div.fx-acc2-card-body, div.fx-acc2-card-foot, div.fx-acc2-card-head,
+  div.fx-acc2-act-row, div.fx-acc2-day-head { padding-left: 16px; padding-right: 16px; }
+  span.fx-acc2-act-title { flex-basis: 100%; white-space: normal; }
+  span.fx-acc2-act-ip { display: none; }
+}
+
+/* dark: the scoped palette re-tunes; layout rules above never repeat. */
+.fx-dark .fx-account {
+  --acc-ink: #f0eefc;
+  --acc-ink-2: #d8d4f0;
+  --acc-muted: #a49fc4;
+  --acc-faint: #8a85ab;
+  --acc-faint-2: #75709a;
+  --acc-sep: #4a4570;
+  --acc-border: rgba(120, 112, 180, 0.22);
+  --acc-border-row: rgba(120, 112, 180, 0.14);
+  --acc-border-input: rgba(120, 112, 180, 0.38);
+  --acc-border-btn: rgba(120, 112, 180, 0.34);
+  --acc-primary: #8478ff;
+  --acc-primary-hover: #978dff;
+  --acc-primary-link: #a99fff;
+  --acc-primary-soft: rgba(132, 120, 255, 0.16);
+  --acc-purple-bg: rgba(132, 120, 255, 0.10);
+  --acc-purple-border: rgba(132, 120, 255, 0.28);
+  --acc-purple-ink: #c9c3ef;
+  --acc-ok: #3fbf8a;
+  --acc-ok-deep: #7fe0b6;
+  --acc-ok-soft: rgba(47, 158, 106, 0.18);
+  --acc-ok-banner-bg: rgba(47, 158, 106, 0.10);
+  --acc-ok-banner-border: rgba(47, 158, 106, 0.30);
+  --acc-ok-banner-ink: #8fe6c0;
+  --acc-ok-banner-ink-2: #74d3a6;
+  --acc-warn-ink: #e3b04b;
+  --acc-warn-note: #d9a842;
+  --acc-warn-dot: #c28a1a;
+  --acc-danger: #ef8080;
+  --acc-danger-solid: #d24b4b;
+  --acc-danger-solid-hover: #e05b5b;
+  --acc-danger-border: rgba(210, 75, 75, 0.38);
+  --acc-danger-soft: rgba(210, 75, 75, 0.10);
+  --acc-danger-alert: rgba(210, 75, 75, 0.28);
+  --acc-dot-edit: #9a90f0;
+  --acc-dot-del: #e07070;
+  --acc-bg-soft: rgba(120, 112, 180, 0.08);
+  --acc-track: rgba(120, 112, 180, 0.18);
+  --acc-placeholder: rgba(120, 112, 180, 0.14);
+}
+.fx-dark .fx-account div.fx-acc2-card,
+.fx-dark .fx-account div.fx-acc2-chart-card,
+.fx-dark .fx-account div.fx-acc2-day,
+.fx-dark .fx-account div.fx-acc2-empty,
+.fx-dark .fx-account div.fx-acc2-logout-all { background: #221e3e; }
+.fx-dark .fx-account button.fx-acc2-seg-btn[aria-selected="true"],
+.fx-dark .fx-account button.fx-acc2-tab[aria-selected="true"] { background: transparent; }
+.fx-dark .fx-account button.fx-acc2-btn-outline,
+.fx-dark .fx-account button.fx-acc2-btn-danger,
+.fx-dark .fx-account input.fx-acc2-input,
+.fx-dark .fx-account select.fx-acc2-select,
+.fx-dark .fx-account code.fx-acc2-token-value { background: #2a2549; color: var(--acc-ink); }
+
+/* ── descendant re-skin: sections kept on the shared SectionCard/fx-* markup
+ *    get the flat look ONLY inside .fx-account; the settings/admin surfaces
+ *    that share those classes keep the glass look untouched. ─────────────── */
+.fx-account .fx-card {
+  background: #fff;
+  border: 1px solid var(--acc-border);
+  border-radius: 12px;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+.fx-account .fx-sec-body { padding: 24px; gap: 18px; }
+.fx-account .fx-sec-head { padding: 0; border: 0; gap: 12px; }
+.fx-account .fx-sec-head-icon {
+  width: 34px; height: 34px; border-radius: 10px; flex: none;
+  background: var(--acc-primary-soft); color: var(--acc-primary);
+  display: flex; align-items: center; justify-content: center;
+}
+.fx-account .fx-sec-title { font-family: var(--fx-display); font-size: 16.5px; font-weight: 600; letter-spacing: -0.01em; }
+.fx-account .fx-sec-sub { font-size: 13.5px; color: var(--acc-muted); }
+.fx-account .fx-sec-rows { gap: 0; }
+.fx-account .fx-sec-row { padding: 18px 0; border-bottom: 1px solid var(--acc-border-row); }
+.fx-account .fx-sec-row:last-child { border-bottom: 0; }
+.fx-account .fx-sec-badge { border-radius: 999px; padding: 3px 9px; font-size: 12.5px; }
+.fx-account .fx-sec-badge-on { background: var(--acc-ok-soft); color: var(--acc-ok-deep); }
+.fx-account .fx-sec-badge-off { background: var(--acc-track); color: var(--acc-muted); }
+.fx-account .fx-sec-badge-warn { background: #fdf3e4; color: var(--acc-warn-ink); }
+.fx-account .fx-sec-note-ok { background: var(--acc-ok-soft); color: var(--acc-ok-deep); border-radius: 10px; }
+.fx-account .fx-sec-note-bad { background: var(--acc-danger-soft); color: var(--acc-danger); border-radius: 10px; }
+.fx-account .fx-sec-note-info { background: var(--acc-track); color: var(--acc-muted); border-radius: 10px; }
+.fx-account .fx-field { gap: 6px; }
+.fx-account .fx-field-label { font-size: 13.5px; font-weight: 500; color: var(--acc-ink); }
+.fx-account .fx-field-hint { font-size: 13px; color: var(--acc-muted); }
+.fx-account .fx-input {
+  height: 40px; border-radius: 8px; border: 1px solid var(--acc-border-input);
+  background: #fff;
+}
+.fx-account .fx-sec-form { gap: 16px; max-width: 440px; }
+.fx-account .fx-sec-actions { padding-top: 4px; }
+button.fx-account .fx-btn, .fx-account button.fx-btn {
+  height: 36px; border-radius: 8px; font-size: 14px;
+}
+.fx-account button.fx-btn-primary {
+  border: 0; background: var(--acc-primary); color: #fff; font-weight: 500;
+}
+.fx-account button.fx-btn-primary:hover:not(:disabled) { background: var(--acc-primary-hover); }
+.fx-account button.fx-btn-danger {
+  border: 1px solid var(--acc-danger-border); background: #fff; color: var(--acc-danger);
+}
+.fx-account button.fx-btn-danger:hover:not(:disabled) { background: var(--acc-danger-soft); }
+.fx-account .fx-empty {
+  background: #fff; border: 1px solid var(--acc-border); border-radius: 12px;
+  color: var(--acc-muted); font-size: 14px;
+}
+.fx-dark .fx-account .fx-card { background: #221e3e; }
+.fx-dark .fx-account .fx-input { background: #2a2549; color: var(--acc-ink); }

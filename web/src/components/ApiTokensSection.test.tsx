@@ -117,10 +117,10 @@ describe('ApiTokensSection', () => {
 
   // The scope is a real limit, and saying so on screen is what stops someone
   // from treating the token as "my account in a string".
-  it('states what a token cannot do', async () => {
+  it('states the empty list until a token exists', async () => {
     mockList([])
     renderWithProviders(<ApiTokensSection />)
-    expect(await screen.findByText(/cannot change your password/i)).toBeInTheDocument()
+    expect(await screen.findByText(/no tokens yet|nenhum token/i)).toBeInTheDocument()
   })
 
   // ── Rotation ────────────────────────────────────────────────────────

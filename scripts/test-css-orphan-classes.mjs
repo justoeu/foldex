@@ -26,7 +26,7 @@ import { fileURLToPath } from 'node:url'
 const ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '..')
 const SRC = join(ROOT, 'web', 'src')
 const STYLES = join(SRC, 'styles')
-const SHEETS = ['foldex.css', 'overrides.css', 'auth.css']
+const SHEETS = ['foldex.css', 'overrides.css', 'auth.css', 'account.css']
 
 /**
  * Orphans that PREDATE this guard, kept so it can be turned on at all.

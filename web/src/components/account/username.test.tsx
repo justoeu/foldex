@@ -53,12 +53,11 @@ describe('the account username', () => {
     render()
     expect(screen.getByRole('group', { name: /username/i })).toBeInTheDocument()
 
-    // ...and is gone from the profile panel, so one identifier has exactly one
-    // place that edits it.
-    const user = userEvent.setup()
-    await user.click(screen.getByRole('button', { name: /profile/i }))
-    await waitFor(() => expect(screen.getByLabelText(/display name/i)).toBeInTheDocument())
-    expect(screen.queryByLabelText(/username/i)).not.toBeInTheDocument()
+    // ...and sits in its own section (Acesso), not inside the profile
+    // section, so one identifier has exactly one place that edits it.
+    const profile = screen.getByRole('region', { name: /^profile$/i })
+    expect(within(profile).getByLabelText(/display name/i)).toBeInTheDocument()
+    expect(within(profile).queryByLabelText(/^username$/i)).not.toBeInTheDocument()
   })
 
   // The hint says what happens INSTEAD, not merely that the field is empty:

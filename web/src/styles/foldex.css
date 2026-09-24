@@ -1,7 +1,7 @@
 /* Foldex · Glass / Aurora redesign — design tokens + components.
    Loaded from index.html. Light is default; .fx-dark on root flips palette. */
 
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Nunito+Sans:wght@400;600;700;800;900&family=JetBrains+Mono:wght@500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Nunito+Sans:wght@400;600;700;800;900&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@500;600&display=swap');
 
 :root {
   /* type */
@@ -869,7 +869,6 @@ button.fx-chip-close:hover { background: color-mix(in srgb, var(--chip-c) 45%, t
   font-family: var(--fx-mono); font-size: 11px; letter-spacing: 0.12em;
   text-transform: uppercase; color: var(--fx-ink-4); margin: 2px 0 0;
 }
-
 
 /* Avatar: initials square reused by the profile section and the topbar user
    menu button. Gradient uses the accent tokens (not literals) so dark mode —
@@ -3569,130 +3568,17 @@ button.fx-bkp-run-download:hover { background: var(--fx-surface-3); border-color
 
 /* ─── account page ─────────────────────────────────────────────────── */
 
-/*
- * One page for everything the signed-in user manages about themselves.
- *
- * Bands, not cards. The four tiles this replaced were four cards deep and each
- * rendered a line or two, so the chrome outweighed the content — and the
- * password and the Google link constrain each other, which a boundary between
- * two cards actively hides. Every button rule below is element-qualified: see
- * §5 and scripts/test-css-button-reset.mjs.
- */
-.fx-acct { display: flex; flex-direction: column; gap: 26px; }
-
-/* Rail beside panel. The first shape stacked all five sections in a 760px
-   column and ran to three screens: the width was wasted and nothing was
-   findable at the same time. */
-.fx-acct-split { display: grid; grid-template-columns: 232px minmax(0, 1fr); gap: 26px; align-items: start; }
-
-.fx-acct-rail { display: flex; flex-direction: column; gap: 3px; position: sticky; top: 12px; }
-
-/* Element-qualified against the `.fx-shell button` reset — see §5. */
-button.fx-acct-railbtn {
-  display: flex; align-items: center; gap: 10px;
-  width: 100%;
-  padding: 10px 12px;
-  border: 1px solid transparent;
-  border-radius: 11px;
-  background: transparent;
-  color: var(--fx-ink-3);
-  font-size: 13.5px; font-weight: 600;
-  text-align: left;
-  cursor: pointer;
-  transition: background .15s, color .15s;
-}
-button.fx-acct-railbtn:hover { background: var(--fx-bg-tint); color: var(--fx-ink); }
-button.fx-acct-railbtn:focus-visible { outline: 2px solid var(--fx-accent); outline-offset: 2px; }
-button.fx-acct-railbtn-active {
-  background: var(--fx-surface-3);
-  border-color: var(--fx-border);
-  color: var(--fx-accent);
-  box-shadow: var(--fx-shadow-1);
-}
-
-.fx-acct-panel { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
-.fx-acct-panel-title {
-  margin: 0 0 2px;
-  font-family: var(--fx-display); font-size: 18px; font-weight: 700;
-  letter-spacing: -0.02em;
-}
-
-.fx-acct-hero {
-  display: flex; align-items: center; gap: 18px;
-  padding: 20px 22px;
-  background: var(--fx-surface-3);
-  border: 1px solid var(--fx-border);
-  border-radius: 16px;
-}
-.fx-acct-hero-id { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-.fx-acct-hero-name {
-  margin: 0; font-family: var(--fx-display); font-size: 19px; font-weight: 700;
-  letter-spacing: -0.02em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.fx-acct-hero-mail { margin: 0; font-size: 13px; color: var(--fx-ink-3); }
-
-/* The chips answer "is there a password / a second factor" without scrolling
-   to the sections that change them — the state of the account was the one
-   thing the account screen did not show. */
-.fx-acct-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
-.fx-acct-chip {
-  display: inline-flex; align-items: center; gap: 5px;
-  padding: 3px 9px; border-radius: 999px;
-  font-size: 11px; font-weight: 600;
-  background: var(--fx-bg-tint); color: var(--fx-ink-3);
-}
-.fx-acct-chip-role { text-transform: capitalize; }
-.fx-acct-chip-ok { background: rgba(16, 185, 129, 0.12); color: var(--fx-success); }
-.fx-acct-chip-warn { background: rgba(245, 158, 11, 0.14); color: var(--fx-amber, #b45309); }
-
-.fx-acct-group { display: flex; flex-direction: column; gap: 10px; }
-.fx-acct-group-head { display: flex; align-items: center; gap: 9px; }
-.fx-acct-group-icon {
-  display: grid; place-items: center;
-  width: 26px; height: 26px; border-radius: 8px;
-  background: var(--fx-accent-soft); color: var(--fx-accent);
-}
-.fx-acct-group-label {
-  margin: 0; font-family: var(--fx-mono); font-size: 11px; font-weight: 600;
-  letter-spacing: 0.12em; text-transform: uppercase; color: var(--fx-ink-3);
-}
-.fx-acct-group-body { display: flex; flex-direction: column; gap: 12px; }
-
-/*
- * `.fx-acct-row`, `-row-head`, `-row-title`, `-row-value`, `-form`, `-actions`
- * and the three `-msg` rules were deleted with the panels that used them: every
- * account row is a `.fx-sec-row` now and every message a `.fx-sec-note`. The
- * provider-button rule below is the one that had to MOVE rather than go — left
- * scoped to the old class it would have kept matching nothing, which is the
- * sixth time in this repo a class in the markup had no rule behind it.
- */
-
 /* The provider button is sized for a full-width auth form; in a row it has the
-   whole remaining width to grow into, and its logo scales with it. */
+   whole remaining width to grow into, and its logo scales with it. Scoped to
+   the shared account row class (the account redesign's own styles live in
+   styles/account.css). */
 .fx-sec-row .fx-auth-oauth { width: auto; min-width: 220px; }
 .fx-sec-row .fx-auth-oauth svg,
 .fx-sec-row .fx-auth-oauth img { width: 18px; height: 18px; flex: 0 0 auto; }
+
+/* Used by CreateUserDialog's warning line; the account pages moved to
+   styles/account.css. */
 .fx-acct-hint { margin: 0; font-size: 12px; line-height: 1.5; color: var(--fx-ink-3); }
-
-/* Below the split's natural width the rail becomes a scrollable strip of tabs
-   above the panel rather than a squeezed column. */
-@media (max-width: 900px) {
-  .fx-acct-split { grid-template-columns: 1fr; gap: 16px; }
-  .fx-acct-rail {
-    position: static;
-    flex-direction: row;
-    gap: 6px;
-    overflow-x: auto;
-    padding-bottom: 4px;
-    scrollbar-width: none;
-  }
-  .fx-acct-rail::-webkit-scrollbar { display: none; }
-  button.fx-acct-railbtn { width: auto; flex: 0 0 auto; padding: 8px 13px; }
-}
-
-@media (max-width: 640px) {
-  .fx-acct-hero { flex-direction: column; align-items: flex-start; gap: 14px; }
-}
 
 /* ─── right-side drawer ────────────────────────────────────────────── */
 
@@ -3801,11 +3687,6 @@ button.fx-drawer-backdrop {
  * `.fx-modal-card-wrap .fx-card`, which neutralises the same rule for the same
  * reason one screen over.
  */
-.fx-acct-panel .fx-card:hover {
-  transform: none;
-  box-shadow: var(--fx-shadow-1);
-  border-color: var(--fx-border);
-}
 
 .fx-sec-body { gap: 16px; padding: 18px; }
 
@@ -4472,27 +4353,3 @@ button.fx-abuse-reset:disabled { opacity: 0.5; cursor: not-allowed; }
 .fx-abuse-status { min-width: 0; flex: 1; }
 .fx-abuse-saved { margin: 0; font-size: 13px; color: var(--fx-success); }
 
-/* Atividade da própria conta (ADR-46) — a metade do split de leitura que
-   devolve o rótulo do conteúdo, porque quem lê é o dono da linha. */
-.fx-acc-activity { display: flex; flex-direction: column; gap: 12px; align-items: flex-start; }
-.fx-acc-activity-lede { margin: 0; font-size: 13px; color: var(--fx-ink-3); }
-.fx-acc-activity-list {
-  align-self: stretch; display: flex; flex-direction: column;
-  margin: 0; padding: 0; list-style: none;
-}
-.fx-acc-activity-row {
-  display: grid; grid-template-columns: 170px 150px 1fr auto;
-  gap: 12px; align-items: center;
-  padding: 10px 2px; border-bottom: 1px solid var(--fx-border-2);
-}
-.fx-acc-activity-row:last-child { border-bottom: 0; }
-.fx-acc-activity-when { font-family: var(--fx-mono); font-size: 11px; color: var(--fx-ink-4); }
-.fx-acc-activity-action { font-size: 13px; font-weight: 600; color: var(--fx-ink-2); }
-.fx-acc-activity-subject {
-  font-size: 13px; color: var(--fx-ink);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
-}
-.fx-acc-activity-ip { font-family: var(--fx-mono); font-size: 10.5px; color: var(--fx-ink-5); }
-@media (max-width: 720px) {
-  .fx-acc-activity-row { grid-template-columns: 1fr; gap: 4px; }
-}

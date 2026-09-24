@@ -1,9 +1,11 @@
-import { describe, it, expect, vi } from 'vitest'
-import { screen, within } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { screen, within, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { Notice, SectionCard, SectionRow } from './SectionCard'
 import { SessionsSection } from './SessionsSection'
 import { renderWithProviders } from '../../test/renderWithProviders'
+import { freshState, installAxiosMock } from '../../test/server'
+import { http } from '../../api/client'
 import { I } from '../icons'
 
 describe('the shared account card', () => {
@@ -69,16 +71,19 @@ describe('the shared account card', () => {
 })
 
 describe('the sessions panel', () => {
-  it('tells the two sign-outs apart by what each one ends', () => {
+  beforeEach(() => {
+    installAxiosMock(freshState())
+  })
+
+  it('tells the two sign-outs apart by what each one ends', async () => {
     renderWithProviders(<SessionsSection onSignOut={() => {}} onSignOutEverywhere={() => {}} />)
 
-    // The distinction the panel exists to make. Two buttons whose labels differ
-    // by one word is not enough for an action that ends every device.
-    const here = screen.getByRole('group', { name: /^sign out$/i })
-    expect(within(here).getByText(/this browser only/i)).toBeInTheDocument()
-
-    const everywhere = screen.getByRole('group', { name: /sign out everywhere/i })
-    expect(within(everywhere).getByText(/every device/i)).toBeInTheDocument()
+    // The distinction the panel exists to make: the current row names THIS
+    // device, and the bottom card says what "everywhere" ends. Two buttons
+    // whose labels differ by one word is not enough for an action that ends
+    // every device.
+    expect(await screen.findByText(/this device/i)).toBeInTheDocument()
+    expect(screen.getByText(/every device|all sessions/i)).toBeInTheDocument()
   })
 
   // "Sign out everywhere" reads like it covers everything, and an extension
@@ -94,13 +99,82 @@ describe('the sessions panel', () => {
     renderWithProviders(<SessionsSection onSignOut={one} onSignOutEverywhere={all} />)
     const user = userEvent.setup()
 
-    const here = screen.getByRole('group', { name: /^sign out$/i })
-    await user.click(within(here).getByRole('button'))
+    await user.click(await screen.findByRole('button', { name: /^sign out$/i }))
     expect(one).toHaveBeenCalledTimes(1)
     expect(all).not.toHaveBeenCalled()
 
-    const everywhere = screen.getByRole('group', { name: /sign out everywhere/i })
-    await user.click(within(everywhere).getByRole('button'))
+    await user.click(screen.getByRole('button', { name: /sign out everywhere/i }))
     expect(all).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('the sessions device list', () => {
+  beforeEach(() => {
+    const state = freshState()
+    state.sessions = [
+      { id: 1, created_at: '2026-09-01T10:00:00Z', last_seen_at: '2026-09-24T12:00:00Z', user_agent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36', ip: '203.0.113.10', current: true },
+      { id: 2, created_at: '2026-09-20T10:00:00Z', last_seen_at: '2026-09-22T09:00:00Z', user_agent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 19_0 like Mac OS X) AppleWebKit/605.1.15 Safari/604.1', ip: '198.51.100.7', current: false },
+    ]
+    installAxiosMock(state)
+  })
+
+  // The device list is the point of the redesign: a person tells their
+  // machines apart by browser+OS words, and the row they do not recognize is
+  // the one they came here to end.
+  it('names devices from the user agent and marks the current one', async () => {
+    renderWithProviders(<SessionsSection onSignOut={() => {}} onSignOutEverywhere={() => {}} />)
+    expect(await screen.findByText(/chrome · macos/i)).toBeInTheDocument()
+    expect(screen.getByText(/safari · ios/i)).toBeInTheDocument()
+    expect(screen.getByText(/this device/i)).toBeInTheDocument()
+    expect(screen.getAllByText(/203\.0\.113\.10|198\.51\.100\.7/)).toHaveLength(2)
+  })
+
+  it('ends one foreign session after a confirmation', async () => {
+    const del = vi.spyOn(http, 'delete').mockResolvedValue({ status: 204 } as never)
+    renderWithProviders(<SessionsSection onSignOut={() => {}} onSignOutEverywhere={() => {}} />)
+    const user = userEvent.setup()
+
+    await user.click(await screen.findByRole('button', { name: /^end$/i }))
+    await user.click(screen.getByRole('button', { name: /^confirm$/i }))
+
+    await waitFor(() => expect(del).toHaveBeenCalledWith('/api/auth/sessions/2'))
+    del.mockRestore()
+  })
+
+  // The current session's row is a sign-out, not a revoke: the local session
+  // is the one being abandoned, and the row routes to the auth flow.
+  it('keeps the current row as a plain sign-out', async () => {
+    const one = vi.fn()
+    renderWithProviders(<SessionsSection onSignOut={one} onSignOutEverywhere={() => {}} />)
+    await userEvent.setup().click(await screen.findByRole('button', { name: /^sign out$/i }))
+    expect(one).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('the sessions failure paths', () => {
+  it('surfaces a failed revoke instead of failing silently', async () => {
+    const state = freshState()
+    state.sessions = [
+      { id: 1, created_at: '2026-09-01T10:00:00Z', last_seen_at: '2026-09-24T12:00:00Z', user_agent: 'Mozilla/5.0 (Macintosh) Chrome/140.0.0.0', ip: '203.0.113.10', current: true },
+      { id: 2, created_at: '2026-09-20T10:00:00Z', last_seen_at: '2026-09-22T09:00:00Z', user_agent: 'Mozilla/5.0 (iPhone) Safari/604.1', ip: '198.51.100.7', current: false },
+    ]
+    installAxiosMock(state)
+    const del = vi.spyOn(http, 'delete').mockRejectedValue(new Error('network'))
+    renderWithProviders(<SessionsSection onSignOut={() => {}} onSignOutEverywhere={() => {}} />)
+    const user = userEvent.setup()
+
+    await user.click(await screen.findByRole('button', { name: /^end$/i }))
+    await user.click(screen.getByRole('button', { name: /^confirm$/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/could not end the session/i)
+    del.mockRestore()
+  })
+
+  it('says so when the list itself cannot load', async () => {
+    const state = freshState()
+    installAxiosMock(state)
+    vi.spyOn(http, 'get').mockRejectedValue(new Error('down'))
+    renderWithProviders(<SessionsSection onSignOut={() => {}} onSignOutEverywhere={() => {}} />)
+    expect(await screen.findByText(/could not load your sessions/i)).toBeInTheDocument()
   })
 })
