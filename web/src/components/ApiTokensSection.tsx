@@ -87,7 +87,9 @@ export function ApiTokensSection() {
 
   return (
     <div>
-      {error && <div className="fx-acc2-empty" role="alert" style={{ marginBottom: 16, padding: '14px 20px', textAlign: 'start' }}>{error}</div>}
+      {error && (
+        <div className="fx-acc2-empty fx-acc2-notice-inline" role="alert">{error}</div>
+      )}
 
       {/* The one and only display of the plaintext. The server keeps sha256,
           so this is not a convenience that was skipped — showing it again is
@@ -107,7 +109,7 @@ export function ApiTokensSection() {
         </div>
       )}
 
-      <div className="fx-acc2-card" style={{ marginBottom: 16 }}>
+      <div className="fx-acc2-card fx-acc2-mb16">
         <div className="fx-acc2-card-body">
           <form
             className="fx-acc2-token-form"
@@ -191,8 +193,12 @@ function CopyToken({ value }: Readonly<{ value: string }>) {
       type="button"
       className="fx-acc2-btn"
       onClick={() => {
-        void navigator.clipboard?.writeText(value).catch(() => {})
-        setCopied(true)
+        // "Copied" must not appear unless the clipboard write landed: the
+        // plaintext leaves the screen forever on dismiss.
+        void navigator.clipboard
+          ?.writeText(value)
+          .then(() => setCopied(true))
+          .catch(() => {})
       }}
     >
       {copied ? t('tokens.copied') : t('tokens.copy')}

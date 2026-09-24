@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { formatLocalYMD } from '../../lib/time'
 import { useInfiniteQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { activityQueryKey, fetchOwnActivity, type AuditEntry } from '../../api/admin'
@@ -30,8 +31,10 @@ function entryKind(e: AuditEntry): Kind {
   return (e.entity_kind && KIND_BY_ENTITY[e.entity_kind]) || 'all'
 }
 
+/** Local civil date, matching the chart's day buckets: a UTC slice would
+ *  file entries near midnight onto the wrong day for non-UTC users. */
 function dayKey(iso: string): string {
-  return iso.slice(0, 10)
+  return formatLocalYMD(new Date(iso))
 }
 
 /**
@@ -69,7 +72,10 @@ export function ActivitySection() {
       last.length < PAGE_SIZE ? undefined : last.at(-1)?.id,
   })
 
-  const entries = feed.data?.pages.flat() ?? []
+  // Memoized: pages.flat() would allocate a fresh array per render and defeat
+  // the chart/groups memos below — every keystroke in the search box would
+  // re-bucket and re-format the whole feed.
+  const entries = useMemo(() => feed.data?.pages.flat() ?? [], [feed.data])
 
   // Chart first: counts per day over the window, computed where the bars are
   // drawn rather than kept in state — a memo over the loaded pages, so a
@@ -81,7 +87,7 @@ export function ActivitySection() {
       const d = new Date()
       d.setHours(12, 0, 0, 0)
       d.setDate(d.getDate() - i)
-      days.push({ key: toISODate(d), label: fmtDay.format(d), count: 0 })
+      days.push({ key: formatLocalYMD(d), label: fmtDay.format(d), count: 0 })
     }
     const byKey = new Map(days.map((d) => [d.key, d]))
     for (const e of entries) {
@@ -92,8 +98,12 @@ export function ActivitySection() {
   }, [entries])
 
   const q = query.trim().toLowerCase()
-  const filtered = entries.filter(
-    (e) => (kind === 'all' || entryKind(e) === kind) && (!q || (e.subject ?? '').toLowerCase().includes(q)),
+  const filtered = useMemo(
+    () =>
+      entries.filter(
+        (e) => (kind === 'all' || entryKind(e) === kind) && (!q || (e.subject ?? '').toLowerCase().includes(q)),
+      ),
+    [entries, kind, q],
   )
 
   // Grouped by calendar day, newest first. Intl carries the locale's weekday
@@ -140,7 +150,7 @@ export function ActivitySection() {
             <div className="fx-acc2-chart-head">
               <span>{t('account.activity_window', { count: CHART_DAYS })}</span>
               <span className="fx-acc2-chart-total">
-                {t('account.activity_total', { count: entries.length })}
+                {t('account.activity_total_loaded', { count: entries.length })}
               </span>
             </div>
             <div className="fx-acc2-chart-bars" role="img" aria-label={t('account.activity_chart_aria')}>
@@ -172,13 +182,12 @@ export function ActivitySection() {
               placeholder={t('account.activity_search_ph')}
               aria-label={t('account.activity_search_aria')}
             />
-            <div className="fx-acc2-seg" role="tablist" aria-label={t('account.activity_filter_aria')}>
+            <div className="fx-acc2-seg" role="group" aria-label={t('account.activity_filter_aria')}>
               {(['all', 'links', 'folders', 'backups'] as const).map((k) => (
                 <button
                   key={k}
                   type="button"
-                  role="tab"
-                  aria-selected={kind === k}
+                  aria-pressed={kind === k}
                   className="fx-acc2-seg-btn"
                   onClick={() => setKind(k)}
                 >
@@ -225,8 +234,7 @@ export function ActivitySection() {
           {feed.hasNextPage && (
             <button
               type="button"
-              className="fx-acc2-btn-outline"
-              style={{ marginTop: 16 }}
+              className="fx-acc2-btn-outline fx-acc2-mt16"
               disabled={feed.isFetchingNextPage}
               onClick={() => void feed.fetchNextPage()}
             >
@@ -244,9 +252,3 @@ function i18nLocale(): string | undefined {
   return loc || undefined
 }
 
-function toISODate(d: Date): string {
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}`
-}

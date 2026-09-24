@@ -1,6 +1,8 @@
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { http } from '../../api/client'
+import { relativeTimeLong } from '../../lib/time'
 import { useConfirm } from '../ConfirmDialog'
 
 type SessionRow = {
@@ -56,17 +58,6 @@ function deviceLabel(ua: string | undefined): string {
   return [browser, os].filter(Boolean).join(' · ')
 }
 
-function relativeLastSeen(t: (k: string, opts?: Record<string, unknown>) => string, iso: string): string {
-  const ms = Date.now() - new Date(iso).getTime()
-  const min = Math.round(ms / 60000)
-  if (min < 1) return t('account.session_now')
-  if (min < 60) return t('account.session_min_ago', { count: min })
-  const h = Math.round(min / 60)
-  if (h < 24) return t('account.session_hours_ago', { count: h })
-  const d = Math.round(h / 24)
-  return t('account.session_days_ago', { count: d })
-}
-
 /**
  * Where this account is connected, as a list — the thing people expect when a
  * screen is called "Sessões", which the previous bulk-only panel deferred on
@@ -88,9 +79,17 @@ export function SessionsSection({
 
   const sessions = useQuery({ queryKey: ['auth-sessions'], queryFn: listSessions })
 
+  const [revokeError, setRevokeError] = useState(false)
   const revoke = useMutation({
     mutationFn: revokeSession,
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ['auth-sessions'] }),
+    onSuccess: () => {
+      setRevokeError(false)
+      void qc.invalidateQueries({ queryKey: ['auth-sessions'] })
+    },
+    // Killing an unrecognized session is the one action this screen exists
+    // for; a silent failure would leave the user believing the intruder is
+    // out when the row is still live.
+    onError: () => setRevokeError(true),
   })
 
   async function askRevoke(row: SessionRow) {
@@ -108,6 +107,11 @@ export function SessionsSection({
 
   return (
     <div>
+      {revokeError && (
+        <div className="fx-acc2-empty fx-acc2-alert" role="alert">
+          {t('account.session_revoke_failed')}
+        </div>
+      )}
       {sessions.isPending && <div className="fx-acc2-empty fx-acc2-empty-soft">{t('common.loading')}</div>}
       {sessions.isError && <div className="fx-acc2-empty">{t('account.sessions_unavailable')}</div>}
 
@@ -127,7 +131,7 @@ export function SessionsSection({
                 </div>
                 <div className="fx-acc2-row-meta">
                   {row.ip && <code className="fx-acc2-mono">{row.ip}</code>}
-                  <span>{relativeLastSeen(t, row.last_seen_at)}</span>
+                  <span>{relativeTimeLong(row.last_seen_at, t)}</span>
                 </div>
               </div>
               {row.current ? (
@@ -165,7 +169,7 @@ export function SessionsSection({
       {/* API tokens are NOT sessions and survive both actions. Stated here
           because "sign out everywhere" reads like it covers everything, and an
           extension that keeps working afterwards is otherwise a surprise. */}
-      <p className="fx-acc2-lede" style={{ marginTop: 12 }}>
+      <p className="fx-acc2-lede fx-acc2-mt12">
         {t('account.group_sessions_hint')}
       </p>
     </div>

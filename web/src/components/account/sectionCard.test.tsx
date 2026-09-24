@@ -150,3 +150,31 @@ describe('the sessions device list', () => {
     expect(one).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('the sessions failure paths', () => {
+  it('surfaces a failed revoke instead of failing silently', async () => {
+    const state = freshState()
+    state.sessions = [
+      { id: 1, created_at: '2026-09-01T10:00:00Z', last_seen_at: '2026-09-24T12:00:00Z', user_agent: 'Mozilla/5.0 (Macintosh) Chrome/140.0.0.0', ip: '203.0.113.10', current: true },
+      { id: 2, created_at: '2026-09-20T10:00:00Z', last_seen_at: '2026-09-22T09:00:00Z', user_agent: 'Mozilla/5.0 (iPhone) Safari/604.1', ip: '198.51.100.7', current: false },
+    ]
+    installAxiosMock(state)
+    const del = vi.spyOn(http, 'delete').mockRejectedValue(new Error('network'))
+    renderWithProviders(<SessionsSection onSignOut={() => {}} onSignOutEverywhere={() => {}} />)
+    const user = userEvent.setup()
+
+    await user.click(await screen.findByRole('button', { name: /^end$/i }))
+    await user.click(screen.getByRole('button', { name: /^confirm$/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/could not end the session/i)
+    del.mockRestore()
+  })
+
+  it('says so when the list itself cannot load', async () => {
+    const state = freshState()
+    installAxiosMock(state)
+    vi.spyOn(http, 'get').mockRejectedValue(new Error('down'))
+    renderWithProviders(<SessionsSection onSignOut={() => {}} onSignOutEverywhere={() => {}} />)
+    expect(await screen.findByText(/could not load your sessions/i)).toBeInTheDocument()
+  })
+})

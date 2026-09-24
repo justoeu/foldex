@@ -41,3 +41,12 @@ describe('account page — grouped tabs ("temas")', () => {
     expect(screen.getByRole('tab', { name: /^security$/i })).toHaveAttribute('aria-selected', 'true')
   })
 })
+
+describe('account page — copy contracts', () => {
+  // The token scope sentence is a security contract in words: it tells the
+  // owner what a leaked token can and cannot do before they create one.
+  it('states what an API token cannot do on the tokens section', async () => {
+    renderWithProviders(<AccountPage initialTab="tokens" />)
+    expect(await screen.findByText(/does not change your password/i)).toBeInTheDocument()
+  })
+})

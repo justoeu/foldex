@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useConfirm } from '../components/ConfirmDialog'
 import { ProfileFields } from '../components/account/ProfileFields'
@@ -71,6 +71,11 @@ export function AccountPage({ initialTab }: Readonly<{ initialTab?: AccountTab }
   // instance without a client would start a flow the server refuses.
   const googleEnabled = session.status !== 'loading' && session.features.google_oauth
 
+  // Declared before the anonymous early return: hooks below the return would
+  // be skipped when the sign-out flips the session mid-flight, and React
+  // counts the difference as a broken render.
+  const tabRefs = useRef<Array<HTMLButtonElement | null>>([])
+
   if (!user) return null
 
   async function signOutEverywhere() {
@@ -97,14 +102,29 @@ export function AccountPage({ initialTab }: Readonly<{ initialTab?: AccountTab }
   }
 
   const active = GROUPS.find((g) => g.id === group) ?? GROUPS[0]
+  function onTabKeys(e: React.KeyboardEvent) {
+    const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End']
+    if (!keys.includes(e.key)) return
+    e.preventDefault()
+    const i = GROUPS.findIndex((g) => g.id === group)
+    const next =
+      e.key === 'ArrowLeft' ? (i - 1 + GROUPS.length) % GROUPS.length
+      : e.key === 'ArrowRight' ? (i + 1) % GROUPS.length
+      : e.key === 'Home' ? 0
+      : GROUPS.length - 1
+    setGroup(GROUPS[next].id)
+    // Roving focus: the selection moves with the arrows, and focus follows
+    // the selection — the roving-tabindex contract.
+    tabRefs.current[next]?.focus()
+  }
 
   return (
     <div className="fx-account">
       <AccountHead user={user} />
 
       <nav className="fx-acc2-tabs-nav" aria-label={t('account.nav_aria')}>
-        <div className="fx-acc2-tabs" role="tablist">
-          {GROUPS.map((g) => {
+        <div className="fx-acc2-tabs" role="tablist" onKeyDown={onTabKeys}>
+          {GROUPS.map((g, i) => {
             const on = g.id === group
             return (
               <button
@@ -112,8 +132,10 @@ export function AccountPage({ initialTab }: Readonly<{ initialTab?: AccountTab }
                 type="button"
                 role="tab"
                 aria-selected={on}
+                tabIndex={on ? 0 : -1}
                 className="fx-acc2-tab"
                 onClick={() => setGroup(g.id)}
+                ref={(el) => { tabRefs.current[i] = el }}
               >
                 {t(`account.group2_${g.id}`)}
               </button>

@@ -190,8 +190,7 @@ const buildRoutes = (): Record<Method, Route[]> => ({
     // stays green through a rename on either side. `takenIdentifiers` is empty
     // by default, so an untouched test sees "available" and nothing blocks.
     { url: /^\/api\/auth\/sessions$/, handle: (_m, _d, _p, s) => ({ sessions: s.sessions }) },
-        { url: /^\/api\/auth\/sessions$/, handle: (_m, _d, _p, s) => ({ sessions: s.sessions }) },
-{ url: /^\/api\/auth\/username-available$/, handle: (_m, _d, p, s) => availability(p.get('u'), s) },
+    { url: /^\/api\/auth\/username-available$/, handle: (_m, _d, p, s) => availability(p.get('u'), s) },
     { url: /^\/api\/admin\/users\/email-available$/, handle: (_m, _d, p, s) => availability(p.get('email'), s) },
     // Read-only here: an admin may READ the policy, and CreateUserDialog needs
     // the floor to generate a password the server will accept.

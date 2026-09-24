@@ -132,13 +132,38 @@ describe('the activity overview', () => {
     await openActivity()
     expect(await screen.findAllByTestId('fx-activity-row')).toHaveLength(2)
 
-    await userEvent.setup().click(screen.getByRole('tab', { name: /^folders$/i }))
+    await userEvent.setup().click(screen.getByRole('button', { name: /^folders$/i }))
     expect(screen.getAllByTestId('fx-activity-row')).toHaveLength(1)
     expect(screen.getByText(/beta folder/i)).toBeInTheDocument()
 
-    await userEvent.setup().click(screen.getByRole('tab', { name: /^all$/i }))
+    await userEvent.setup().click(screen.getByRole('button', { name: /^all$/i }))
     await userEvent.setup().type(screen.getByLabelText(/search activity/i), 'alpha')
     expect(screen.getAllByTestId('fx-activity-row')).toHaveLength(1)
     expect(screen.getByText(/alpha link/i)).toBeInTheDocument()
+  })
+})
+
+describe('the activity filters combined', () => {
+  it('narrows by kind AND subject at once', async () => {
+    state.activity = [
+      row(5, { subject: 'Alpha link', entity_kind: 'link', created_at: new Date().toISOString() }),
+      row(4, { subject: 'Alpha folder', entity_kind: 'folder', created_at: new Date().toISOString() }),
+      row(3, { subject: 'Beta link', entity_kind: 'link', created_at: new Date().toISOString() }),
+    ]
+    await openActivity()
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: /^links$/i }))
+    await user.type(screen.getByLabelText(/search activity/i), 'alpha')
+    expect(screen.getAllByTestId('fx-activity-row')).toHaveLength(1)
+    expect(screen.getByText(/alpha link/i)).toBeInTheDocument()
+  })
+
+  it('distinguishes a filtered miss from an empty account', async () => {
+    state.activity = [row(3, { subject: 'Only link', entity_kind: 'link', created_at: new Date().toISOString() })]
+    await openActivity()
+    expect(await screen.findAllByTestId('fx-activity-row')).toHaveLength(1)
+
+    await userEvent.setup().click(screen.getByRole('button', { name: /^folders$/i }))
+    expect(await screen.findByText(/nothing found for these filters/i)).toBeInTheDocument()
   })
 })

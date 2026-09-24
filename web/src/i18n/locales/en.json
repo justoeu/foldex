@@ -1158,7 +1158,10 @@
     "activity_no_results": "Nothing found for these filters.",
     "activity_day_count_one": "{{count}} action",
     "activity_day_count_other": "{{count}} actions",
-    "activity_day_tip_one": "{{day}}: {{count}} action"
+    "activity_day_tip_one": "{{day}}: {{count}} action",
+    "session_revoke_failed": "Could not end the session. Try again.",
+    "activity_total_loaded_one": "{{count}} action loaded",
+    "activity_total_loaded_other": "{{count}} actions loaded"
   },
   "tokens": {
     "section_desc": "For the browser extension and for scripts. A token reads and writes your links and notes; it cannot change your password, manage users or download a backup.",

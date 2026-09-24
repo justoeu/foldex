@@ -1158,7 +1158,10 @@
     "activity_no_results": "Nada encontrado para esses filtros.",
     "activity_day_count_one": "{{count}} ação",
     "activity_day_count_other": "{{count}} ações",
-    "activity_day_tip_one": "{{day}}: {{count}} ação"
+    "activity_day_tip_one": "{{day}}: {{count}} ação",
+    "session_revoke_failed": "Não foi possível encerrar a sessão. Tente de novo.",
+    "activity_total_loaded_one": "{{count}} ação carregada",
+    "activity_total_loaded_other": "{{count}} ações carregadas"
   },
   "tokens": {
     "section_desc": "Para a extensão do navegador e para scripts. Um token lê e escreve seus links e notas; não muda sua senha, não administra usuários e não baixa backup.",

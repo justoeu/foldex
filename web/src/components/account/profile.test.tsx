@@ -32,7 +32,7 @@ describe('account page — profile', () => {
     expect(screen.getByRole('heading', { name: 'Test Admin' })).toBeInTheDocument()
     // The e-mail shows twice in the "conta" group (head + access row); the
     // identity assertion belongs to the head.
-    expect(screen.getAllByText('admin@foldex.test').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('admin@foldex.test')).toHaveLength(2)
     expect(screen.getByText('Admin')).toBeInTheDocument() // the role chip
 
     const field = screen.getByLabelText(/display name/i)
