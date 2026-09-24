@@ -141,12 +141,9 @@ export function ActivitySection() {
 
   // The two empty states mean different things and must not read alike: an
   // account with no history vs. filters that match nothing of what loaded.
-  const emptyState =
-    entries.length === 0
-      ? t('admin.activity_empty')
-      : groups.length === 0
-        ? t('account.activity_no_results')
-        : ''
+  let emptyState = ''
+  if (entries.length === 0) emptyState = t('admin.activity_empty')
+  else if (groups.length === 0) emptyState = t('account.activity_no_results')
 
   return (
     <div>

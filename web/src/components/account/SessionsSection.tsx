@@ -31,33 +31,34 @@ async function revokeSession(id: number): Promise<void> {
  * macOS" for an Edge-on-Windows box) is worse than an ugly true one, because
  * the user decides which session to kill based on the name.
  */
-function deviceLabel(ua: string | undefined): string {
-  if (!ua) return ''
-  const browser = /Edg\//.test(ua)
-    ? 'Edge'
-    : /OPR\//.test(ua)
-      ? 'Opera'
-      : /Firefox\//.test(ua)
-        ? 'Firefox'
-        : /Chrome\//.test(ua)
-          ? 'Chrome'
-          : /Safari\//.test(ua)
-            ? 'Safari'
-            : ''
-  const os = /Windows/.test(ua)
-    ? 'Windows'
-    : /Android/.test(ua)
-      ? 'Android'
-      : /iPhone|iPad/.test(ua)
-        ? 'iOS'
-        : /Mac OS X/.test(ua)
-          ? 'macOS'
-          : /Linux/.test(ua)
-            ? 'Linux'
-            : ''
-  return [browser, os].filter(Boolean).join(' · ')
+// Ordered first-match tables: the FIRST hit wins, and the order is
+// load-bearing (Edge before Chrome — Edge's UA carries both; iOS before
+// macOS — the iPhone UA carries "like Mac OS X").
+const BROWSERS: ReadonlyArray<readonly [RegExp, string]> = [
+  [/Edg\//, 'Edge'],
+  [/OPR\//, 'Opera'],
+  [/Firefox\//, 'Firefox'],
+  [/Chrome\//, 'Chrome'],
+  [/Safari\//, 'Safari'],
+]
+
+const OSES: ReadonlyArray<readonly [RegExp, string]> = [
+  [/Windows/, 'Windows'],
+  [/Android/, 'Android'],
+  [/iPhone|iPad/, 'iOS'],
+  [/Mac OS X/, 'macOS'],
+  [/Linux/, 'Linux'],
+]
+
+function firstMatch(ua: string, table: ReadonlyArray<readonly [RegExp, string]>): string {
+  for (const [re, name] of table) if (re.test(ua)) return name
+  return ''
 }
 
+function deviceLabel(ua: string | undefined): string {
+  if (!ua) return ''
+  return [firstMatch(ua, BROWSERS), firstMatch(ua, OSES)].filter(Boolean).join(' · ')
+}
 /**
  * Where this account is connected, as a list — the thing people expect when a
  * screen is called "Sessões", which the previous bulk-only panel deferred on
