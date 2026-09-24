@@ -31,7 +31,7 @@ beforeEach(() => {
 
 async function openActivity() {
   renderWithProviders(<AccountPage />)
-  await userEvent.setup().click(await screen.findByRole('button', { name: /activity/i }))
+  await userEvent.setup().click(await screen.findByRole('tab', { name: /activity/i }))
 }
 
 describe('account page — my activity', () => {
@@ -108,5 +108,37 @@ describe('account page — my activity', () => {
     vi.spyOn(http, 'get').mockRejectedValue(new Error('boom'))
     await openActivity()
     expect(await screen.findByText(/activity could not be loaded/i)).toBeInTheDocument()
+  })
+})
+
+describe('the activity overview', () => {
+  // The chart is the summary the raw feed lacked: two weeks of bars the eye
+  // reads before any row. One bar per day, empty days included — a gap says
+  // as much as a spike.
+  it('draws one bar per day of the window, empties included', async () => {
+    state.activity = [row(3, { created_at: new Date().toISOString() })]
+    await openActivity()
+    await screen.findByTestId('fx-activity-row')
+    // role=img is the bars block; its columns are one per day, empty or not.
+    const chart = screen.getByRole('img', { name: /actions per day/i })
+    expect(chart.children).toHaveLength(14)
+  })
+
+  it('filters by kind and by subject search', async () => {
+    state.activity = [
+      row(3, { subject: 'Alpha link', entity_kind: 'link', created_at: new Date().toISOString() }),
+      row(2, { subject: 'Beta folder', entity_kind: 'folder', created_at: new Date().toISOString() }),
+    ]
+    await openActivity()
+    expect(await screen.findAllByTestId('fx-activity-row')).toHaveLength(2)
+
+    await userEvent.setup().click(screen.getByRole('tab', { name: /^folders$/i }))
+    expect(screen.getAllByTestId('fx-activity-row')).toHaveLength(1)
+    expect(screen.getByText(/beta folder/i)).toBeInTheDocument()
+
+    await userEvent.setup().click(screen.getByRole('tab', { name: /^all$/i }))
+    await userEvent.setup().type(screen.getByLabelText(/search activity/i), 'alpha')
+    expect(screen.getAllByTestId('fx-activity-row')).toHaveLength(1)
+    expect(screen.getByText(/alpha link/i)).toBeInTheDocument()
   })
 })

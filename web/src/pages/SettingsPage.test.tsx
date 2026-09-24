@@ -125,9 +125,11 @@ describe('SettingsPage — hub', () => {
     await user.click(screen.getByRole('button', { name: /open account/i }))
     expect(await screen.findByRole('heading', { name: /my account/i, level: 1 })).toBeInTheDocument()
 
-    const rail = within(screen.getByRole('navigation', { name: /account sections/i }))
-    for (const item of [/^profile$/i, /^sign-in$/i, /^two-factor$/i, /^api tokens$/i, /^sessions$/i]) {
-      expect(rail.getByRole('button', { name: item })).toBeInTheDocument()
+    // The rail became four grouped tabs; the six sections live under them
+    // (two groups hold two sections each).
+    const tabs = within(screen.getByRole('navigation', { name: /account sections/i }))
+    for (const item of [/^account$/i, /^security$/i, /^api tokens$/i, /^activity$/i]) {
+      expect(tabs.getByRole('tab', { name: item })).toBeInTheDocument()
     }
 
     await user.click(screen.getByRole('button', { name: /settings/i }))
@@ -142,28 +144,31 @@ describe('SettingsPage — hub', () => {
     await user.click(screen.getByRole('button', { name: /open account/i }))
 
     const rail = within(await screen.findByRole('navigation', { name: /account sections/i }))
-    expect(rail.getByRole('button', { name: /^profile$/i })).toHaveAttribute('aria-current', 'page')
+    expect(rail.getByRole('tab', { name: /^account$/i })).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByLabelText(/display name/i)).toBeInTheDocument()
 
-    await user.click(rail.getByRole('button', { name: /^api tokens$/i }))
+    await user.click(rail.getByRole('tab', { name: /^api tokens$/i }))
 
-    expect(rail.getByRole('button', { name: /^api tokens$/i })).toHaveAttribute('aria-current', 'page')
-    expect(rail.getByRole('button', { name: /^profile$/i })).not.toHaveAttribute('aria-current')
+    expect(rail.getByRole('tab', { name: /^api tokens$/i })).toHaveAttribute('aria-selected', 'true')
+    expect(rail.getByRole('tab', { name: /^account$/i })).not.toHaveAttribute('aria-selected', 'true')
+    // Sections switch as a group: tokens has no profile form on screen.
     expect(screen.queryByLabelText(/display name/i)).not.toBeInTheDocument()
   })
 
   // The merged names knew where they wanted to go; resolving all three to
-  // "the account page" threw that away and landed every one on Profile.
+  // "the account page" threw that away and landed every one on Profile. The
+  // rail became grouped tabs, so the deep-link lands on the section's GROUP
+  // tab selected — the section itself renders inside it.
   it.each([
-    ['profile', /^profile$/i],
-    ['security', /^two-factor$/i],
+    ['profile', /^account$/i],
+    ['security', /^security$/i],
     ['tokens', /^api tokens$/i],
-    ['account', /^profile$/i],
-  ])('deep-links %s straight to its panel', async (section, expected) => {
+    ['account', /^account$/i],
+  ])('deep-links %s straight to its group tab', async (section, expected) => {
     const { unmount } = renderWithProviders(<SettingsPage initialSection={section} />)
 
     const rail = within(await screen.findByRole('navigation', { name: /account sections/i }))
-    expect(rail.getByRole('button', { name: expected })).toHaveAttribute('aria-current', 'page')
+    expect(rail.getByRole('tab', { name: expected })).toHaveAttribute('aria-selected', 'true')
     unmount()
   })
 

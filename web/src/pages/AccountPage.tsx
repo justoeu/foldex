@@ -1,8 +1,6 @@
-import { useState, type ReactNode } from 'react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Icon, I } from '../components/icons'
 import { useConfirm } from '../components/ConfirmDialog'
-import { AccountHero } from '../components/account/AccountHero'
 import { ProfileFields } from '../components/account/ProfileFields'
 import { AccessSection } from '../components/account/AccessSection'
 import { SessionsSection } from '../components/account/SessionsSection'
@@ -12,8 +10,10 @@ import { ApiTokensSection } from '../components/ApiTokensSection'
 import { forgetRememberedEmail } from '../components/auth/LoginScreen'
 import { useAuth, useCurrentUser } from '../auth/AuthProvider'
 import { http } from '../api/client'
+import { initialsOf } from '../lib/initials'
+import { hasSecondFactor, type AuthUser } from '../auth/types'
 
-/** The sub-sections of the account page, in the order the rail lists them. */
+/** The sub-sections of the account page, in the order a group lists them. */
 export const ACCOUNT_TABS = ['profile', 'access', 'security', 'tokens', 'sessions', 'activity'] as const
 export type AccountTab = (typeof ACCOUNT_TABS)[number]
 
@@ -21,44 +21,54 @@ export function isAccountTab(value: string | undefined): value is AccountTab {
   return value !== undefined && (ACCOUNT_TABS as readonly string[]).includes(value)
 }
 
-const TAB_ICON: Record<AccountTab, ReactNode> = {
-  profile: I.user,
-  access: I.key,
-  security: I.shield,
-  tokens: I.link,
-  sessions: I.users,
-  activity: I.clock,
+/**
+ * The "temas" navigation: four grouped tabs, two of which hold two sections
+ * stacked. Perfil+Acesso are one subject (who the account is / how it signs
+ * in), 2FA+Sessões another (how it stays safe); Tokens and Atividade stand
+ * alone. The deep-link tab an old bookmark carries still lands on the right
+ * group — the section list is derived, not re-routed.
+ */
+const GROUPS: ReadonlyArray<{ id: AccountGroup; tabs: readonly AccountTab[] }> = [
+  { id: 'conta', tabs: ['profile', 'access'] },
+  { id: 'seguranca', tabs: ['security', 'sessions'] },
+  { id: 'tokens', tabs: ['tokens'] },
+  { id: 'atividade', tabs: ['activity'] },
+]
+export type AccountGroup = 'conta' | 'seguranca' | 'tokens' | 'atividade'
+
+const GROUP_OF_TAB: Record<AccountTab, AccountGroup> = Object.fromEntries(
+  GROUPS.flatMap((g) => g.tabs.map((tab) => [tab, g.id])),
+) as Record<AccountTab, AccountGroup>
+
+const SECTION_TITLE: Record<AccountTab, { title: string; lede: string }> = {
+  profile: { title: 'account.section_perfil_title', lede: 'account.section_perfil_lede' },
+  access: { title: 'account.section_acesso_title', lede: 'account.section_acesso_lede' },
+  security: { title: 'account.section_2fa_title', lede: 'account.section_2fa_lede' },
+  sessions: { title: 'account.section_sessoes_title', lede: 'account.section_sessoes_lede' },
+  tokens: { title: 'account.section_tokens_title', lede: 'account.section_tokens_lede' },
+  activity: { title: 'account.section_atividade_title', lede: 'account.section_atividade_lede' },
 }
 
 /**
- * Everything the signed-in user manages about their own account.
+ * Everything the signed-in user manages about their own account (INV-146).
  *
- * It replaces four hub tiles — profile, sign-in methods, two-factor, API
- * tokens — that were four cards deep and each rendered almost nothing. The
- * sign-in card was the worst: its password form appears only when the account
- * HAS no password and its Google block only when the provider is configured,
- * so an ordinary account saw one line of status and no action at all.
- *
- * One section shows at a time, chosen from a rail. Stacking all five was the
- * first shape and it did not survive contact: the page ran to three screens of
- * scrolling in a 760px column, so the width was wasted AND nothing was findable
- * — the two failures at once. A rail costs one click and makes "where is X"
- * answerable by looking rather than scrolling, which is what the four tiles got
- * right and the stack gave up.
- *
- * The tabs are also what makes the merged section names mean something again:
- * `security` and `tokens` used to collapse into "the account page" and lose
- * which part the caller asked for.
+ * The redesign keeps the six sections and their wiring untouched; what changed
+ * is the shell — a grouped tab bar over stacked sections with their own
+ * headings, replacing the rail+panel split (the rail wasted a 220px column to
+ * save one scroll, and the panel hid the section's own name behind the rail
+ * item that selected it).
  */
 export function AccountPage({ initialTab }: Readonly<{ initialTab?: AccountTab }>) {
   const { t } = useTranslation()
   const user = useCurrentUser()
   const { session, signOut } = useAuth()
   const confirmAction = useConfirm()
-  const [tab, setTab] = useState<AccountTab>(initialTab ?? 'profile')
+  const [group, setGroup] = useState<AccountGroup>(
+    initialTab ? GROUP_OF_TAB[initialTab] : 'conta',
+  )
 
   // No provider configured means no row: a "Connect Google" button on an
-  // instance with no client would start a flow the server refuses.
+  // instance without a client would start a flow the server refuses.
   const googleEnabled = session.status !== 'loading' && session.features.google_oauth
 
   if (!user) return null
@@ -86,45 +96,106 @@ export function AccountPage({ initialTab }: Readonly<{ initialTab?: AccountTab }
     }
   }
 
+  const active = GROUPS.find((g) => g.id === group) ?? GROUPS[0]
+
   return (
-    <div className="fx-acct">
-      <AccountHero user={user} />
+    <div className="fx-account">
+      <AccountHead user={user} />
 
-      <div className="fx-acct-split">
-        <nav className="fx-acct-rail" aria-label={t('account.nav_aria')}>
-          {ACCOUNT_TABS.map((id) => (
-            <button
-              key={id}
-              type="button"
-              className={'fx-acct-railbtn' + (tab === id ? ' fx-acct-railbtn-active' : '')}
-              aria-current={tab === id ? 'page' : undefined}
-              onClick={() => setTab(id)}
-            >
-              <Icon d={TAB_ICON[id]} size={14} />
-              <span>{t(`account.group_${id}`)}</span>
-            </button>
-          ))}
-        </nav>
-
-        <div className="fx-acct-panel">
-          {/* A heading per panel, not just the rail item: the rail says where
-              you can go, and a screen reader arriving in the panel needs to be
-              told where it landed. */}
-          <h3 className="fx-acct-panel-title">{t(`account.group_${tab}`)}</h3>
-
-          {tab === 'profile' && <ProfileFields user={user} />}
-          {tab === 'access' && <AccessSection user={user} googleEnabled={googleEnabled} />}
-          {tab === 'security' && <TwoFactorSection />}
-          {tab === 'tokens' && <ApiTokensSection />}
-          {tab === 'activity' && <ActivitySection />}
-          {tab === 'sessions' && (
-            <SessionsSection
-              onSignOut={() => void signOut()}
-              onSignOutEverywhere={() => void signOutEverywhere()}
-            />
-          )}
+      <nav className="fx-acc2-tabs-nav" aria-label={t('account.nav_aria')}>
+        <div className="fx-acc2-tabs" role="tablist">
+          {GROUPS.map((g) => {
+            const on = g.id === group
+            return (
+              <button
+                key={g.id}
+                type="button"
+                role="tab"
+                aria-selected={on}
+                className="fx-acc2-tab"
+                onClick={() => setGroup(g.id)}
+              >
+                {t(`account.group2_${g.id}`)}
+              </button>
+            )
+          })}
         </div>
+      </nav>
+
+      <div className="fx-acc2-sections">
+        {active.tabs.map((tab) => (
+          <section key={tab} aria-labelledby={`acc-sec-${tab}`}>
+            {/* A heading per section, not just the tab: the tab says where you
+                can go; a screen reader arriving in the section needs to be told
+                where it landed. */}
+            <h2 id={`acc-sec-${tab}`} className="fx-acc2-section-title">
+              {t(SECTION_TITLE[tab].title)}
+            </h2>
+            <p className="fx-acc2-lede">{t(SECTION_TITLE[tab].lede)}</p>
+            <AccountSection tab={tab} user={user} googleEnabled={googleEnabled} onSignOut={() => void signOut()} onSignOutEverywhere={() => void signOutEverywhere()} />
+          </section>
+        ))}
       </div>
     </div>
+  )
+}
+
+function AccountSection({
+  tab,
+  user,
+  googleEnabled,
+  onSignOut,
+  onSignOutEverywhere,
+}: Readonly<{
+  tab: AccountTab
+  user: AuthUser
+  googleEnabled: boolean
+  onSignOut: () => void
+  onSignOutEverywhere: () => void
+}>) {
+  switch (tab) {
+    case 'profile':
+      return <ProfileFields user={user} />
+    case 'access':
+      return <AccessSection user={user} googleEnabled={googleEnabled} />
+    case 'security':
+      return <TwoFactorSection />
+    case 'tokens':
+      return <ApiTokensSection />
+    case 'activity':
+      return <ActivitySection />
+    case 'sessions':
+      return <SessionsSection onSignOut={onSignOut} onSignOutEverywhere={onSignOutEverywhere} />
+  }
+}
+
+/**
+ * Who is logged in, above the tabs. The chips the old hero carried (password
+ * on, 2FA on) moved to where they act: the access badge and the two-factor
+ * banner. Up here they were answers to questions the sections below ask
+ * better.
+ */
+function AccountHead({ user }: Readonly<{ user: AuthUser }>) {
+  const { t } = useTranslation()
+  return (
+    <header className="fx-acc2-head">
+      <span className="fx-acc2-avatar" aria-hidden="true">
+        {initialsOf(user.name, user.email)}
+      </span>
+      <div>
+        <h1 className="fx-acc2-name">{user.name || user.email}</h1>
+        <p className="fx-acc2-meta">
+          <span>{user.email}</span>
+          <span className="fx-acc2-dot">·</span>
+          <span>{t(`admin.role_${user.role}`)}</span>
+          {hasSecondFactor(user) && (
+            <>
+              <span className="fx-acc2-dot">·</span>
+              <span>{t('account.chip_2fa_on')}</span>
+            </>
+          )}
+        </p>
+      </div>
+    </header>
   )
 }

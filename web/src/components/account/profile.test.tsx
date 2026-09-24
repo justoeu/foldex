@@ -30,7 +30,9 @@ describe('account page — profile', () => {
     // the NAME FIELD'S HINT ("shown to administrators") — it never touched the
     // role. Asserted against the identity block itself now.
     expect(screen.getByRole('heading', { name: 'Test Admin' })).toBeInTheDocument()
-    expect(screen.getByText('admin@foldex.test')).toBeInTheDocument()
+    // The e-mail shows twice in the "conta" group (head + access row); the
+    // identity assertion belongs to the head.
+    expect(screen.getAllByText('admin@foldex.test').length).toBeGreaterThan(0)
     expect(screen.getByText('Admin')).toBeInTheDocument() // the role chip
 
     const field = screen.getByLabelText(/display name/i)
@@ -130,7 +132,7 @@ describe('account page — profile', () => {
     const post = vi.spyOn(http, 'post').mockResolvedValue({ status: 204 } as never)
     renderWithProviders(<AccountPage initialTab="sessions" />)
 
-    await userEvent.setup().click(screen.getByRole('button', { name: /^sign out$/i }))
+    await userEvent.setup().click(await screen.findByRole('button', { name: /^sign out$/i }))
 
     await waitFor(() => expect(post).toHaveBeenCalledWith('/api/auth/logout'))
     // AuthGate takes over on the anonymous session, so the page itself goes.
