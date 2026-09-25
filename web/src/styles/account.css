@@ -50,6 +50,21 @@
   font-family: 'Instrument Sans', var(--fx-ui);
   color: var(--acc-ink);
   display: flex; flex-direction: column; gap: 24px;
+  /* The design is a standalone page on a flat neutral canvas; inside the app
+     shell (Aurora gradient, glass chrome) the honest translation is a page
+     surface of its own — same padding rhythm as the mock (32/24/96 desktop,
+     20/16/80 narrow). */
+  background: #f6f6f9;
+  border-radius: 16px;
+  padding: 32px 24px 96px;
+}
+/* Screen-reader-only: the page's name. The visible head is the user's
+   identity (per the design); the page itself still needs to announce
+   "Minha conta" to assistive tech and to the document outline. */
+span.fx-acc2-sr {
+  position: absolute; width: 1px; height: 1px;
+  padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap; border: 0;
 }
 .fx-account a { color: var(--acc-primary); text-decoration: none; }
 .fx-account a:hover { color: var(--acc-primary-link); text-decoration: underline; }
@@ -78,7 +93,7 @@
   font-size: 13.5px; color: var(--acc-muted); margin-top: 2px;
 }
 .fx-acc2-meta .fx-acc2-dot { color: var(--acc-sep); }
-.fx-acc2-tabs-nav { margin: 0 -4px; }
+.fx-acc2-tabs-nav { }
 .fx-acc2-tabs {
   display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none;
   border-bottom: 1px solid var(--acc-border);
@@ -297,8 +312,9 @@ div.fx-acc2-notice-inline { margin-bottom: 16px; padding: 14px 20px; text-align:
 
 /* ── responsive (design's <760px narrow) ────────────────────────────── */
 @media (max-width: 759px) {
-  .fx-account { gap: 20px; }
+  .fx-account { gap: 20px; padding: 20px 16px 80px; border-radius: 12px; }
   div.fx-acc2-row, div.fx-acc2-logout-all { padding: 14px 16px; }
+  /* The surface already carries the page padding; rows keep their own. */
   div.fx-acc2-card-body, div.fx-acc2-card-foot, div.fx-acc2-card-head,
   div.fx-acc2-act-row, div.fx-acc2-day-head { padding-left: 16px; padding-right: 16px; }
   span.fx-acc2-act-title { flex-basis: 100%; white-space: normal; }
@@ -307,6 +323,7 @@ div.fx-acc2-notice-inline { margin-bottom: 16px; padding: 14px 20px; text-align:
 
 /* dark: the scoped palette re-tunes; layout rules above never repeat. */
 .fx-dark .fx-account {
+  background: #12101f;
   --acc-ink: #f0eefc;
   --acc-ink-2: #d8d4f0;
   --acc-muted: #a49fc4;

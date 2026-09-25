@@ -231,18 +231,24 @@ export function SettingsPage({ onEditFolder, onNavigate, initialSection }: Props
     // The account page carries a rail beside its panel and wants the room;
     // everything else here is a form and stays in a readable column.
     const wide = ADMIN_SECTIONS.has(effectiveSection) || effectiveSection === 'account'
+    // The account page carries its own head (avatar, name, e-mail) per its
+    // design; a kicker+title above it would stack two headers and push the
+    // tabs off the fold. Every other section keeps the standard pagehead.
+    const isAccount = effectiveSection === 'account'
     return (
       <div className={'fx-hub-page' + (wide ? '' : ' fx-hub-page-narrow')}>
         <button className="fx-hub-back" onClick={() => setSection('overview')}>
           <Icon d={I.chevronLeft} size={13} /> {t('settings.hub_back')}
         </button>
-        <div className="fx-pagehead" style={{ margin: '14px 0 18px' }}>
-          <div>
-            <div className="fx-pagehead-kicker">{t(SECTION_HEAD[effectiveSection].kicker)}</div>
-            <h1 className="fx-pagehead-h">{t(SECTION_HEAD[effectiveSection].title)}</h1>
+        {!isAccount && (
+          <div className="fx-pagehead" style={{ margin: '14px 0 18px' }}>
+            <div>
+              <div className="fx-pagehead-kicker">{t(SECTION_HEAD[effectiveSection].kicker)}</div>
+              <h1 className="fx-pagehead-h">{t(SECTION_HEAD[effectiveSection].title)}</h1>
+            </div>
           </div>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        )}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: isAccount ? 20 : 16 }}>
           {renderHubSection(effectiveSection, isAdmin, { accountTab, onEditFolder })}
         </div>
       </div>

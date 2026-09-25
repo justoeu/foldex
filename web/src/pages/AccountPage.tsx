@@ -121,6 +121,9 @@ export function AccountPage({ initialTab }: Readonly<{ initialTab?: AccountTab }
 
   return (
     <div className="fx-account">
+      {/* The visible head is the identity block; the page name itself stays
+          in the outline for screen readers and window titles. */}
+      <h1 className="fx-acc2-sr">{t('account.page_title')}</h1>
       <AccountHead user={user} />
 
       <nav className="fx-acc2-tabs-nav" aria-label={t('account.nav_aria')}>
@@ -206,7 +209,7 @@ function AccountHead({ user }: Readonly<{ user: AuthUser }>) {
         {initialsOf(user.name, user.email)}
       </span>
       <div>
-        <h1 className="fx-acc2-name">{user.name || user.email}</h1>
+        <h2 className="fx-acc2-name">{user.name || user.email}</h2>
         <p className="fx-acc2-meta">
           <span>{user.email}</span>
           <span className="fx-acc2-dot">·</span>
