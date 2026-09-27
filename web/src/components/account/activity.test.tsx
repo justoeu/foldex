@@ -72,7 +72,7 @@ describe('account page — my activity', () => {
   // ACCUMULATE. The first version of this test could not fail — the mock
   // filters `id < before`, so page two came back empty and the assertion
   // re-checked a row that was already on screen.
-  it('appends the next page to the list instead of replacing it', async () => {
+  it('replaces the list with the next page instead of appending it', async () => {
     // A full page, so the feed reports another one to fetch.
     state.activity = Array.from({ length: 50 }, (_, i) => row(100 - i))
     const get = vi.spyOn(http, 'get')
@@ -83,25 +83,24 @@ describe('account page — my activity', () => {
     // The next page comes from BELOW the cursor, which is what the mock's
     // `id < before` filter models.
     state.activity = [...state.activity, row(50), row(49)]
-    await userEvent.setup().click(screen.getByRole('button', { name: /load older/i }))
+    await userEvent.setup().click(screen.getByRole('button', { name: /^next$/i }))
 
     await waitFor(() =>
-      expect(get).toHaveBeenCalledWith('/api/activity', { params: { before: 51 } }),
+      expect(get).toHaveBeenCalledWith('/api/activity', { params: { before: 51, limit: 50 } }),
     )
-    // Both pages on screen at once — the assertion the old test could not make.
-    await waitFor(() => expect(screen.getAllByTestId('fx-activity-row')).toHaveLength(52))
-    expect(screen.getByText('Bookmark 100')).toBeInTheDocument()
+    await waitFor(() => expect(screen.getAllByTestId('fx-activity-row')).toHaveLength(2))
+    expect(screen.queryByText('Bookmark 100')).not.toBeInTheDocument()
     expect(screen.getByText('Bookmark 50')).toBeInTheDocument()
   })
 
   // A short page is the end of the feed: asking again would return the same
   // nothing, and a button that does nothing reads as a bug.
-  it('hides the pager once a short page arrives', async () => {
+  it('disables next once a short page arrives', async () => {
     state.activity = [row(3), row(2)]
     await openActivity()
     await screen.findByText('Bookmark 3')
 
-    expect(screen.queryByRole('button', { name: /load older/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^next$/i })).toBeDisabled()
   })
 
   it('reports a failure rather than rendering an empty list', async () => {
@@ -156,6 +155,21 @@ describe('the activity filters combined', () => {
     await user.type(screen.getByLabelText(/search activity/i), 'alpha')
     expect(screen.getAllByTestId('fx-activity-row')).toHaveLength(1)
     expect(screen.getByText(/alpha link/i)).toBeInTheDocument()
+  })
+
+  it('keeps days older than three collapsed until opened', async () => {
+    const old = new Date()
+    old.setDate(old.getDate() - 10)
+    state.activity = [
+      row(2, { subject: 'Today link', created_at: new Date().toISOString() }),
+      row(1, { subject: 'Old link', created_at: old.toISOString() }),
+    ]
+    await openActivity()
+    expect(await screen.findByText('Today link')).toBeInTheDocument()
+    expect(screen.queryByText('Old link')).not.toBeInTheDocument()
+
+    await userEvent.setup().click(screen.getByRole('button', { expanded: false }))
+    expect(screen.getByText('Old link')).toBeInTheDocument()
   })
 
   it('distinguishes a filtered miss from an empty account', async () => {

@@ -355,8 +355,10 @@ export async function unblockIP(ip: string): Promise<void> {
  */
 export const activityQueryKey = ['activity'] as const
 
-export async function fetchOwnActivity(before?: number): Promise<AuditEntry[]> {
-  const params = before ? { before } : {}
+export async function fetchOwnActivity(before?: number, limit?: number): Promise<AuditEntry[]> {
+  const params: { before?: number; limit?: number } = {}
+  if (before) params.before = before
+  if (limit) params.limit = limit
   const { data } = await http.get<{ entries: AuditEntry[] }>('/api/activity', { params })
   return data.entries
 }

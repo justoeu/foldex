@@ -139,8 +139,8 @@ type HubSectionProps = Readonly<{
 
 const PERSONAL_SECTION: Partial<Record<CanonicalSection, (p: HubSectionProps) => ReactNode>> = {
   account: (p) => <AccountPage initialTab={p.accountTab} />,
-  master: () => <MasterPasswordSection />,
-  locked: (p) => <LockedFoldersSection onEditFolder={p.onEditFolder} />,
+  master: () => <FolderProtectionSection tab="master" />,
+  locked: (p) => <FolderProtectionSection tab="locked" onEditFolder={p.onEditFolder} />,
 }
 
 function renderHubSection(
@@ -226,35 +226,39 @@ export function SettingsPage({ onEditFolder, onNavigate, initialSection }: Props
   const effectiveSection = effective.section
 
   if (effectiveSection !== 'overview') {
-    // Administration keeps the full container (tables, matrices). Account does
-    // too: the surface is the page. Everything else is a form and stays narrow.
-    const wide = ADMIN_SECTIONS.has(effectiveSection) || effectiveSection === 'account'
     // The account page carries its own head (avatar, name, e-mail) per its
     // design; a kicker+title above it would stack two headers and push the
-    // tabs off the fold. Every other section keeps the standard pagehead.
+    // tabs off the fold. Every other section keeps the standard pagehead,
+    // inside the same full-width card the account page uses.
     const isAccount = effectiveSection === 'account'
+    const head = effectiveSection === 'master' || effectiveSection === 'locked'
+      ? { kicker: 'settings.sec_locked_kicker', title: 'settings.protection_title' }
+      : SECTION_HEAD[effectiveSection]
     return (
-      <div className={'fx-hub-page' + (wide ? '' : ' fx-hub-page-narrow') + (isAccount ? ' fx-hub-page-account' : '')}>
+      <div className="fx-hub-page fx-hub-page-account">
         <button className="fx-hub-back" onClick={() => setSection('overview')}>
           <Icon d={I.chevronLeft} size={13} /> {t('settings.hub_back')}
         </button>
-        {!isAccount && (
-          <div className="fx-pagehead" style={{ margin: '14px 0 18px' }}>
-            <div>
-              <div className="fx-pagehead-kicker">{t(SECTION_HEAD[effectiveSection].kicker)}</div>
-              <h1 className="fx-pagehead-h">{t(SECTION_HEAD[effectiveSection].title)}</h1>
+        {isAccount ? (
+          renderHubSection(effectiveSection, isAdmin, { accountTab, onEditFolder })
+        ) : (
+          <div className="fx-account">
+            <div className="fx-pagehead">
+              <div>
+                <div className="fx-pagehead-kicker">{t(head.kicker)}</div>
+                <h1 className="fx-pagehead-h">{t(head.title)}</h1>
+              </div>
             </div>
+            {renderHubSection(effectiveSection, isAdmin, { accountTab, onEditFolder })}
           </div>
         )}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: isAccount ? 20 : 16 }}>
-          {renderHubSection(effectiveSection, isAdmin, { accountTab, onEditFolder })}
-        </div>
       </div>
     )
   }
 
   return (
-    <div className="fx-hub-page">
+    <div className="fx-hub-page fx-hub-page-account">
+      <div className="fx-account">
       <div className="fx-hub-head" style={{ marginBottom: 22 }}>
         <div>
           <div className="fx-pagehead-kicker">{t('settings.page_kicker')}</div>
@@ -323,11 +327,6 @@ export function SettingsPage({ onEditFolder, onNavigate, initialSection }: Props
                 onClick={() => setSection('account')}
               />
               <HubCard
-                icon={I.lock} tone="fx-tone-amber"
-                title={t('settings.tile_master_title')} desc={t('settings.tile_master_desc')}
-                action={t('settings.tile_master_action')} onClick={() => setSection('master')}
-              />
-              <HubCard
                 icon={I.folder} tone="fx-tone-accent"
                 title={t('settings.tile_locked_title')} desc={t('settings.tile_locked_desc')}
                 action={t('settings.tile_locked_action')} onClick={() => setSection('locked')}
@@ -358,6 +357,7 @@ export function SettingsPage({ onEditFolder, onNavigate, initialSection }: Props
           />
         </Suspense>
       )}
+      </div>
     </div>
   )
 }
@@ -411,6 +411,39 @@ function IdentityHero({ onOpenSecurity }: Readonly<{ onOpenSecurity: () => void 
   )
 }
 
+
+function FolderProtectionSection({
+  tab,
+  onEditFolder,
+}: Readonly<{ tab: 'locked' | 'master'; onEditFolder?: (folderId: number) => void }>) {
+  const { t } = useTranslation()
+  const [current, setCurrent] = useState(tab)
+  const tabs = [
+    { id: 'locked' as const, label: t('settings.protection_tab_folders') },
+    { id: 'master' as const, label: t('settings.protection_tab_master') },
+  ]
+  return (
+    <div className="fx-acc2-sections">
+      <div className="fx-acc2-tabs" role="tablist" aria-label={t('settings.protection_tabs_aria')}>
+        {tabs.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            role="tab"
+            className="fx-acc2-tab"
+            aria-selected={current === item.id}
+            onClick={() => setCurrent(item.id)}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+      {current === 'locked'
+        ? <LockedFoldersSection onEditFolder={onEditFolder} />
+        : <MasterPasswordSection />}
+    </div>
+  )
+}
 
 function MasterPasswordSection() {
   const { t } = useTranslation()

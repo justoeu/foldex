@@ -53,16 +53,14 @@ const adminRow: AuthUser = {
 /** Renders the hub and clicks into a tile, so section tests start where the
  *  user now does: one click deep inside the consolidated settings hub. */
 async function renderAtSection(section: 'master' | 'locked', onEditFolder?: (folderId: number) => void) {
-  renderWithProviders(<SettingsPage onEditFolder={onEditFolder} />)
-  const tile = section === 'master' ? /^master password/i : /^locked folders/i
-  await userEvent.setup().click(await screen.findByRole('button', { name: tile }))
+  renderWithProviders(<SettingsPage initialSection={section} onEditFolder={onEditFolder} />)
 }
 
 describe('SettingsPage — hub', () => {
   it('shows the personal tiles for a normal user and hides the administration scope (RBAC)', async () => {
     renderWithProviders(<SettingsPage />, { session: userSession })
     expect(await screen.findByRole('button', { name: /open account/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /^master password/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^master password/i })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: /^locked folders/i })).toBeInTheDocument()
     // No scope segment and no admin tile: /api/admin 404s for this session,
     // so the hub must not promise a surface the server denies.
@@ -362,6 +360,13 @@ describe('SettingsPage — master password', () => {
 })
 
 describe('SettingsPage — locked folders reset', () => {
+  it('keeps the master password on a tab beside the locked folders', async () => {
+    await renderAtSection('locked')
+    expect(screen.getByRole('tab', { name: /locked folders/i })).toHaveAttribute('aria-selected', 'true')
+    await userEvent.setup().click(screen.getByRole('tab', { name: /master password/i }))
+    expect(await screen.findByText(/no master password configured/i)).toBeInTheDocument()
+  })
+
   it('lists locked folders and resets one with the master password', async () => {
     state.masterPassword = 'master-pass'
     lockedFolder(7, 'Vault')

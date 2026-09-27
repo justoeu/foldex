@@ -361,10 +361,24 @@ button.fx-acc2-seg-btn[aria-selected="true"] {
 }
 div.fx-acc2-days { display: flex; flex-direction: column; gap: 16px; }
 div.fx-acc2-day { background: #fff; border: 1px solid var(--acc-border); border-radius: 12px; overflow: hidden; }
-div.fx-acc2-day-head {
+div.fx-acc2-day-head,
+button.fx-acc2-day-head {
+  width: 100%;
   padding: 10px 20px; font-size: 13px; font-weight: 600; color: var(--acc-purple-ink);
   background: var(--acc-bg-soft); border-bottom: 1px solid var(--acc-border);
-  display: flex; justify-content: space-between;
+  display: flex; justify-content: space-between; align-items: center;
+  text-align: left; cursor: pointer;
+}
+button.fx-acc2-day-head[aria-expanded="false"] { border-bottom: 0; }
+div.fx-acc2-pager {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  margin-top: 16px;
+}
+div.fx-acc2-pager-nav { display: flex; align-items: center; gap: 8px; }
+span.fx-acc2-pager-page { font-size: 13.5px; color: var(--acc-muted); min-width: 5.5rem; text-align: center; }
+label.fx-acc2-pager-size {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 13.5px; color: var(--acc-muted);
 }
 span.fx-acc2-day-count { color: var(--acc-faint); font-weight: 500; }
 div.fx-acc2-act-row {
@@ -418,7 +432,7 @@ div.fx-acc2-notice-inline { margin-bottom: 16px; padding: 14px 20px; text-align:
   div.fx-acc2-row, div.fx-acc2-logout-all { padding: 14px 16px; }
   /* The surface already carries the page padding; rows keep their own. */
   div.fx-acc2-card-body, div.fx-acc2-card-foot, div.fx-acc2-card-head,
-  div.fx-acc2-act-row, div.fx-acc2-day-head { padding-left: 16px; padding-right: 16px; }
+  div.fx-acc2-act-row, div.fx-acc2-day-head, button.fx-acc2-day-head { padding-left: 16px; padding-right: 16px; }
   span.fx-acc2-act-title { flex-basis: 100%; white-space: normal; }
   span.fx-acc2-act-ip { display: none; }
 }

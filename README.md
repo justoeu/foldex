@@ -35,7 +35,8 @@ HTTPS on `:9444` uses mkcert locally — see [`docs/ARCHITECTURE.md`](docs/ARCHI
 
 - Links + notes in one grid (tags, folders, pin, search)
 - OG / favicon / screenshot previews
-- Per-folder passwords and a master recovery password
+- Per-folder passwords and a master recovery password, on one screen with separate tabs
+- Account activity is paged (25, 50 or 100). The last three days start open; older days stay collapsed
 - Import/export: Netscape HTML, JSON, full ZIP (DB + images)
 - MV3 extension + palette (`⌥K`)
 - Multi-user (sessions, 2FA, Google, RBAC) — on by default

@@ -1,12 +1,30 @@
 import { useMemo, useState } from 'react'
 import { formatLocalYMD } from '../../lib/time'
-import { useInfiniteQuery } from '@tanstack/react-query'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { activityQueryKey, fetchOwnActivity, type AuditEntry } from '../../api/admin'
 import { actionLabel } from '../../lib/auditLabels'
 
-/** One page of the feed. The server clamps this too. */
-const PAGE_SIZE = 50
+/** Page sizes the account feed offers. 50 is the default the server already uses. */
+const PAGE_SIZES = [25, 50, 100] as const
+type PageSize = (typeof PAGE_SIZES)[number]
+const PAGE_SIZE_KEY = 'foldex.activity.pageSize'
+
+/** Days at the top of the feed start open. Older days stay collapsed. */
+const OPEN_DAYS = 3
+
+/** The chart reads a wider slice than one list page, still one request. */
+const CHART_SAMPLE = 200
+
+function readPageSize(): PageSize {
+  try {
+    const n = Number(localStorage.getItem(PAGE_SIZE_KEY))
+    if (n === 25 || n === 50 || n === 100) return n
+  } catch {
+    // Private mode: the selector still works, it just does not stick.
+  }
+  return 50
+}
 
 /** The chart window: two weeks, ending today. Same span the design mock shows. */
 const CHART_DAYS = 14
@@ -37,6 +55,15 @@ function dayKey(iso: string): string {
   return formatLocalYMD(new Date(iso))
 }
 
+/** True when `key` (YYYY-MM-DD) is today or one of the two days before it. */
+function dayIsRecent(key: string): boolean {
+  const day = new Date(`${key}T12:00:00`)
+  const today = new Date()
+  today.setHours(12, 0, 0, 0)
+  const diff = Math.round((today.getTime() - day.getTime()) / 86_400_000)
+  return diff >= 0 && diff < OPEN_DAYS
+}
+
 /**
  * The account's own activity — the other half of ADR-46's read split.
  *
@@ -47,35 +74,34 @@ function dayKey(iso: string): string {
  * happens to render it.
  *
  * The redesign adds the overview the raw feed lacked: a two-week bar chart,
- * a subject search and kind filters — all computed over the pages already
- * loaded, client-side, because the feed is the account's own and its size
- * bounds the work. The infinite scroll stays: the chart summarizes what was
- * loaded, it does not claim the whole history.
+ * a subject search and kind filters. The chart reads one wider sample. The
+ * list is one page at a time — the keyset cursor is the previous page's last
+ * id, so next and previous do not accumulate rows on screen.
  */
 export function ActivitySection() {
   const { t } = useTranslation()
   const [query, setQuery] = useState('')
   const [kind, setKind] = useState<Kind>('all')
+  const [pageSize, setPageSize] = useState<PageSize>(readPageSize)
+  // Index 0 is the first page (no cursor). Later entries are the `before` id
+  // that opens that page. Going back reuses the cursor instead of refetching
+  // a guess.
+  const [cursors, setCursors] = useState<Array<number | undefined>>([undefined])
+  const [page, setPage] = useState(0)
+  const cursor = cursors[page]
 
-  // useInfiniteQuery rather than a cursor in state plus an accumulating array:
-  // the accumulation, the deduplication and "is there another page" are exactly
-  // what it does, and the hand-rolled version had to append from inside the
-  // fetcher — a side effect in a function React Query is free to re-run on
-  // focus, which is why it needed a dedupe set to stay correct.
-  const feed = useInfiniteQuery({
-    queryKey: activityQueryKey,
-    queryFn: ({ pageParam }) => fetchOwnActivity(pageParam),
-    initialPageParam: undefined as number | undefined,
-    // The keyset cursor is the last id on the page. A short page is the end of
-    // the feed — asking again would return the same nothing.
-    getNextPageParam: (last: AuditEntry[]) =>
-      last.length < PAGE_SIZE ? undefined : last.at(-1)?.id,
+  const chartFeed = useQuery({
+    queryKey: [...activityQueryKey, 'chart'],
+    queryFn: () => fetchOwnActivity(undefined, CHART_SAMPLE),
+  })
+  const feed = useQuery({
+    queryKey: [...activityQueryKey, 'page', pageSize, cursor ?? 0],
+    queryFn: () => fetchOwnActivity(cursor, pageSize),
+    placeholderData: keepPreviousData,
   })
 
-  // Memoized: pages.flat() would allocate a fresh array per render and defeat
-  // the chart/groups memos below — every keystroke in the search box would
-  // re-bucket and re-format the whole feed.
-  const entries = useMemo(() => feed.data?.pages.flat() ?? [], [feed.data])
+  const entries = feed.data ?? []
+  const chartEntries = chartFeed.data ?? []
 
   // Chart first: counts per day over the window, computed where the bars are
   // drawn rather than kept in state — a memo over the loaded pages, so a
@@ -90,12 +116,12 @@ export function ActivitySection() {
       days.push({ key: formatLocalYMD(d), label: fmtDay.format(d), count: 0 })
     }
     const byKey = new Map(days.map((d) => [d.key, d]))
-    for (const e of entries) {
+    for (const e of chartEntries) {
       const bucket = byKey.get(dayKey(e.created_at))
       if (bucket) bucket.count++
     }
     return days
-  }, [entries, t])
+  }, [chartEntries])
 
   const q = query.trim().toLowerCase()
   const filtered = useMemo(
@@ -125,6 +151,8 @@ export function ActivitySection() {
     return [...map.entries()]
       .sort((a, b) => (a[0] < b[0] ? 1 : -1))
       .map(([key, items]) => ({
+        key,
+        recent: dayIsRecent(key),
         label: fmtDay.format(new Date(key + 'T12:00:00')),
         items: items.map((e) => ({
           id: e.id,
@@ -138,9 +166,38 @@ export function ActivitySection() {
   }, [filtered, t])
 
   const maxCount = Math.max(...chart.map((c) => c.count), 1)
+  const hasNext = entries.length === pageSize
+  const hasPrev = page > 0
+
+  function goNext() {
+    const last = entries.at(-1)?.id
+    if (!last || !hasNext) return
+    setCursors((prev) => {
+      const next = prev.slice(0, page + 1)
+      next.push(last)
+      return next
+    })
+    setPage((n) => n + 1)
+  }
+
+  function goPrev() {
+    if (!hasPrev) return
+    setPage((n) => n - 1)
+  }
+
+  function changePageSize(next: PageSize) {
+    setPageSize(next)
+    setCursors([undefined])
+    setPage(0)
+    try {
+      localStorage.setItem(PAGE_SIZE_KEY, String(next))
+    } catch {
+      // The new size still applies to this visit.
+    }
+  }
 
   // The two empty states mean different things and must not read alike: an
-  // account with no history vs. filters that match nothing of what loaded.
+  // account with no history vs. filters that match nothing on this page.
   let emptyState = ''
   if (entries.length === 0) emptyState = t('admin.activity_empty')
   else if (groups.length === 0) emptyState = t('account.activity_no_results')
@@ -156,7 +213,7 @@ export function ActivitySection() {
             <div className="fx-acc2-chart-head">
               <span>{t('account.activity_window', { count: CHART_DAYS })}</span>
               <span className="fx-acc2-chart-total">
-                {t('account.activity_total_loaded', { count: entries.length })}
+                {t('account.activity_total_loaded', { count: chartEntries.length })}
               </span>
             </div>
             <div className="fx-acc2-chart-bars" role="img" aria-label={t('account.activity_chart_aria')}>
@@ -207,44 +264,86 @@ export function ActivitySection() {
 
           <div className="fx-acc2-days">
             {groups.map((day) => (
-              <div className="fx-acc2-day" key={day.label}>
-                <div className="fx-acc2-day-head">
-                  <span>{day.label}</span>
-                  <span className="fx-acc2-day-count">
-                    {t('account.activity_day_count', { count: day.items.length })}
-                  </span>
-                </div>
-                {day.items.map((a) => (
-                  <div className="fx-acc2-act-row" key={a.id} data-testid="fx-activity-row">
-                    <span className="fx-acc2-act-time">{a.time}</span>
-                    <span className="fx-acc2-act-kind">
-                      <span className={'fx-acc2-act-dot ' + a.dot} aria-hidden="true" />
-                      {a.label}
-                    </span>
-                    {/* Rendered as TEXT. The subject is a title the user typed, and
-                        the one thing that must never happen to it is being parsed as
-                        markup — note bodies have a sanitizer for that reason, and a
-                        label has no business carrying any. */}
-                    <span className="fx-acc2-act-title" title={a.title}>{a.title}</span>
-                    <span className="fx-acc2-act-ip">{a.ip}</span>
-                  </div>
-                ))}
-              </div>
+              <DayGroup key={day.key} day={day} />
             ))}
           </div>
 
-          {feed.hasNextPage && (
-            <button
-              type="button"
-              className="fx-acc2-btn-outline fx-acc2-mt16"
-              disabled={feed.isFetchingNextPage}
-              onClick={() => void feed.fetchNextPage()}
-            >
-              {t('admin.activity_more')}
-            </button>
-          )}
+          <div className="fx-acc2-pager">
+            <div className="fx-acc2-pager-nav">
+              <button
+                type="button"
+                className="fx-acc2-btn-outline"
+                disabled={!hasPrev || feed.isFetching}
+                onClick={goPrev}
+              >
+                {t('account.activity_prev')}
+              </button>
+              <span className="fx-acc2-pager-page">{t('account.activity_page', { page: page + 1 })}</span>
+              <button
+                type="button"
+                className="fx-acc2-btn-outline"
+                disabled={!hasNext || feed.isFetching}
+                onClick={goNext}
+              >
+                {t('account.activity_next')}
+              </button>
+            </div>
+            <label className="fx-acc2-pager-size">
+              <span>{t('account.activity_page_size')}</span>
+              <select
+                className="fx-acc2-select"
+                aria-label={t('account.activity_page_size_aria')}
+                value={pageSize}
+                onChange={(e) => changePageSize(Number(e.target.value) as PageSize)}
+              >
+                {PAGE_SIZES.map((n) => (
+                  <option key={n} value={n}>{n}</option>
+                ))}
+              </select>
+            </label>
+          </div>
         </>
       )}
+    </div>
+  )
+}
+
+type DayGroupModel = {
+  key: string
+  recent: boolean
+  label: string
+  items: Array<{ id: number; time: string; label: string; dot: string; title: string; ip: string }>
+}
+
+function DayGroup({ day }: Readonly<{ day: DayGroupModel }>) {
+  const { t } = useTranslation()
+  // Recent days start open. The button owns the toggle after that, so a
+  // re-render from the search box does not snap an older day back shut.
+  const [open, setOpen] = useState(day.recent)
+  return (
+    <div className="fx-acc2-day">
+      <button
+        type="button"
+        className="fx-acc2-day-head"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span>{day.label}</span>
+        <span className="fx-acc2-day-count">
+          {t('account.activity_day_count', { count: day.items.length })}
+        </span>
+      </button>
+      {open && day.items.map((a) => (
+        <div className="fx-acc2-act-row" key={a.id} data-testid="fx-activity-row">
+          <span className="fx-acc2-act-time">{a.time}</span>
+          <span className="fx-acc2-act-kind">
+            <span className={'fx-acc2-act-dot ' + a.dot} aria-hidden="true" />
+            {a.label}
+          </span>
+          <span className="fx-acc2-act-title" title={a.title}>{a.title}</span>
+          <span className="fx-acc2-act-ip">{a.ip}</span>
+        </div>
+      ))}
     </div>
   )
 }
