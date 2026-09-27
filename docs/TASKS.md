@@ -1296,3 +1296,9 @@ configuração; a regra tem que valer sozinha*.
 - Addon Chrome: projeto standalone `foldex-addon/` (irmão do repo) — popup 2 painéis, captura visível+full-page scroll/stitch incremental (1 canvas + 1 tile por vez, caps 40 tiles/2^28px + degrade), pasta/tag pickers, nota, ⌘⇧S, sync alarm horário com lifecycle, i18n en/pt/es, 75 testes node.
 - Embed: `internal/addon` (go:embed, 503 addon_not_built), download admin-only GET+HEAD, import com lockstep gate, CI freshness gate, release.sh re-importa no bump + rollback completo (unstage→checkout→clean).
 - mmh score 10/10; sweep 5 agentes: blockers/HIGH corrigidos (fixtures case 6, rollback staging, build sem irmão, ~300MB→bounded, Built() shape-check); re-run verde.
+
+## 2026-09-27 — Carga k6 manual
+
+- `load/k6/` cobre fumaça, sessão, leitura da biblioteca, escrita com limpeza, stats, atividade, settings, admin, redirect e um export único. Perfis `smoke`, `read`, `write` e `stress` (este só com `K6_I_MEAN_IT=1`).
+- Não entra no CI. `make load-k6 FLOW=…`. A conta de carga não pode ter segundo fator.
+- Índices da listagem e de `click_log` já estavam nas migrações 000017 e 000018. A suíte não abre migração sem um `EXPLAIN` que mostre varredura.

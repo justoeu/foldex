@@ -31,6 +31,8 @@ open https://localhost:9444
 
 HTTPS em `:9444` usa mkcert no dev — ver [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Pin de release: `FOLDEX_VERSION` no `.env`. Build local: `make up-build`.
 
+A carga é manual e fica fora do CI. [`load/k6/README.md`](load/k6/README.md) descreve cada fluxo e o comando (`make load-k6 FLOW=smoke`).
+
 ## O que vem
 
 - Links e notas no mesmo grid (tags, pastas, pin, busca)
