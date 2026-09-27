@@ -58,14 +58,6 @@
   border-radius: 16px;
   padding: 32px 24px 96px;
 }
-/* Screen-reader-only: the page's name. The visible head is the user's
-   identity (per the design); the page itself still needs to announce
-   "Minha conta" to assistive tech and to the document outline. */
-span.fx-acc2-sr {
-  position: absolute; width: 1px; height: 1px;
-  padding: 0; margin: -1px; overflow: hidden;
-  clip: rect(0 0 0 0); white-space: nowrap; border: 0;
-}
 .fx-account a { color: var(--acc-primary); text-decoration: none; }
 .fx-account a:hover { color: var(--acc-primary-link); text-decoration: underline; }
 .fx-account input, .fx-account select, .fx-account button { font-family: inherit; }
@@ -93,7 +85,6 @@ span.fx-acc2-sr {
   font-size: 13.5px; color: var(--acc-muted); margin-top: 2px;
 }
 .fx-acc2-meta .fx-acc2-dot { color: var(--acc-sep); }
-.fx-acc2-tabs-nav { }
 .fx-acc2-tabs {
   display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none;
   border-bottom: 1px solid var(--acc-border);

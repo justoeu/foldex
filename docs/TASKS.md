@@ -79,6 +79,7 @@ Lista faseada de tasks `T1..T30`. Cada fase desbloqueia a próxima — segue em 
 
 | Data       | Task   | Hash | Notas |
 |------------|--------|------|-------|
+| 2026-09-27 | **Sonar QG: regra CSS vazia na conta** | — | O push da `main` recusou o Quality Gate. A página de conta tinha `.fx-acc2-tabs-nav {}` e um bloco `span.fx-acc2-sr` que não casava com o `h1`. O título passa a usar `.fx-visually-hidden` e a classe vazia sai. |
 | 2026-09-15 | **Sonar: go:S3776 + ternários aninhados** | — | Extração de helpers nas 63 funções de produção com gocognit > 15 (`backend/internal`). Flatten de ternários aninhados em `web/src` (S3358). Sem `<dialog>` nativo, sem NOSONAR, sem lib nova. Pack MMH em `feature/sonar-s3776-ternaries`. |
 | 2026-09-15 | **Sonar QG: S7750 findLast** | — | Merge do #132 deixou `new_violations=1`: `filter(…).at(-1)` em `artifactFilename`. Volta `findLast` e `lib` ganha `ES2023.Array` para o typecheck tipar o método. |
 | 2026-09-15 | **Sonar: Reliability + Maintainability mecânico** | — | Reliability de produção (replaceAll, codePointAt). Maintainability: imports, optional chain, `.at()`, Set, throw, Readonly restante, CSS duplicado, output no lugar de role=status, branch OAuth duplicada. Sem `<dialog>` nativo nem contraste CSS. |

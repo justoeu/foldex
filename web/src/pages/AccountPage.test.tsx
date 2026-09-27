@@ -18,7 +18,10 @@ describe('account page — grouped tabs ("temas")', () => {
   // sections under it are the two halves of that subject.
   it('stacks Perfil and Acesso under the Conta tab', async () => {
     renderWithProviders(<AccountPage />)
-    expect(await screen.findByRole('region', { name: /^profile$/i })).toBeInTheDocument()
+    // The page name is the h1; the visible head is the person's name, an h2.
+    // fx-visually-hidden keeps the h1 in the outline without painting it.
+    expect(await screen.findByRole('heading', { level: 1, name: /my account/i })).toHaveClass('fx-visually-hidden')
+    expect(screen.getByRole('region', { name: /^profile$/i })).toBeInTheDocument()
     expect(screen.getByRole('region', { name: /^access$/i })).toBeInTheDocument()
     // The other groups' sections are not rendered.
     expect(screen.queryByRole('region', { name: /^two-factor$/i })).not.toBeInTheDocument()
