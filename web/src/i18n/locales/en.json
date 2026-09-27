@@ -709,6 +709,8 @@
     "locked_desc": "Reset a folder's password with the master password if you have forgotten it, then set a new one.",
     "locked_empty": "No password-protected folders.",
     "reset_action": "Reset password",
+    "reset_modal_title": "Reset the password for {{name}}",
+    "remove_modal_title": "Remove the password for {{name}}",
     "reset_master_placeholder": "Master password",
     "reset_confirm": "Reset",
     "reset_done": "Password cleared",

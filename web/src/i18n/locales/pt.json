@@ -709,6 +709,8 @@
     "locked_desc": "Redefina a senha de uma pasta com a senha master caso a tenha esquecido, e depois defina uma nova.",
     "locked_empty": "Nenhuma pasta protegida por senha.",
     "reset_action": "Redefinir senha",
+    "reset_modal_title": "Redefinir a senha de {{name}}",
+    "remove_modal_title": "Remover a senha de {{name}}",
     "reset_master_placeholder": "Senha master",
     "reset_confirm": "Redefinir",
     "reset_done": "Senha removida",

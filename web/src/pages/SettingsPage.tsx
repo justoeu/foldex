@@ -1,4 +1,4 @@
-import { useState, lazy, Suspense, type ComponentType, type ReactNode } from 'react'
+import { useCallback, useRef, useState, lazy, Suspense, type ComponentType, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Icon, I } from '../components/icons'
 import { HubCard, HubShortcut, HubRule } from '../components/HubCard'
@@ -17,6 +17,8 @@ import { apiErrorCode as errCode } from '../lib/apiError'
 import { validateMasterForm, validateMasterRemove } from '../lib/masterPasswordForm'
 import type { AppView } from '../AppWorkspace'
 import { PasswordInput } from '../components/PasswordInput'
+import { useEscape } from '../hooks/useEscape'
+import { useFocusTrap } from '../hooks/useFocusTrap'
 
 // Lazy: non-admins never download the administration code at all — the
 // settings chunk they fetch carries no /api/admin surface or its strings.
@@ -782,13 +784,18 @@ function LockedFolderRow({
   const { t } = useTranslation()
   const reset = useResetFolderPassword()
   const { data: masterStatus } = useMasterPasswordStatus()
-  // null = collapsed; otherwise which action the master-password prompt serves.
   const [mode, setMode] = useState<FolderPwMode | null>(null)
   const [master, setMaster] = useState('')
   const [error, setError] = useState<string | null>(null)
 
+  const close = useCallback(() => {
+    setMode(null)
+    setMaster('')
+    setError(null)
+  }, [])
+
   const openFor = (m: FolderPwMode) => {
-    setMode((cur) => (cur === m ? null : m))
+    setMode(m)
     setMaster('')
     setError(null)
   }
@@ -827,63 +834,131 @@ function LockedFolderRow({
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <span style={{ width: 12, height: 12, borderRadius: 4, background: color, flex: '0 0 auto' }} />
         <span style={{ fontSize: 13, fontWeight: 600, flex: 1 }}>{name}</span>
-        <button className="fx-pillbtn" onClick={() => openFor('reset')}>
+        <button type="button" className="fx-acc2-btn" onClick={() => openFor('reset')}>
           {t('settings.reset_action')}
         </button>
-        <button className="fx-pillbtn fx-pillbtn-danger" onClick={() => openFor('remove')}>
+        <button type="button" className="fx-acc2-btn-solid-danger" onClick={() => openFor('remove')}>
           {t('settings.remove_action')}
         </button>
       </div>
 
       {mode && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <div style={{ fontSize: 12, color: 'var(--fx-ink-3)' }}>
-            {mode === 'remove' ? t('settings.remove_explain') : t('settings.reset_explain')}
-          </div>
-          {masterStatus?.hint && (
-            <div className="fx-field-hint" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <Icon d={I.info} size={12} /> {t('settings.reset_master_hint', { hint: masterStatus.hint })}
-            </div>
-          )}
-          <div className="fx-input">
-            <PasswordInput
-              autoFocus
-              autoComplete="off"
-              value={master}
-              onChange={(e) => {
-                setMaster(e.target.value)
-                setError(null)
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault()
-                  void submit()
-                }
-              }}
-              placeholder={t('settings.reset_master_placeholder')}
-              aria-label={t('settings.reset_master_placeholder')}
-            />
-          </div>
-          {error && (
-            <div style={{ fontSize: 11, color: 'var(--fx-danger)', display: 'flex', alignItems: 'center', gap: 4 }}>
-              <Icon d={I.alert} size={12} /> {error}
-            </div>
-          )}
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button className="fx-confirm-btn" onClick={() => setMode(null)}>
-              {t('common.cancel')}
-            </button>
-            <button
-              className="fx-confirm-btn fx-confirm-btn-danger"
-              onClick={submit}
-              disabled={!master || reset.isPending}
-            >
-              <Icon d={mode === 'remove' ? I.trash : I.refresh} size={13} stroke={2} />{' '}
-              {mode === 'remove' ? t('settings.remove_confirm') : t('settings.reset_confirm')}
-            </button>
-          </div>
-        </div>
+        <FolderPasswordDialog
+          mode={mode}
+          name={name}
+          master={master}
+          error={error}
+          hint={masterStatus?.hint ?? undefined}
+          pending={reset.isPending}
+          onMaster={(value) => {
+            setMaster(value)
+            setError(null)
+          }}
+          onClose={close}
+          onSubmit={() => void submit()}
+        />
       )}
     </li>
+  )
+}
+
+function FolderPasswordDialog({
+  mode,
+  name,
+  master,
+  error,
+  hint,
+  pending,
+  onMaster,
+  onClose,
+  onSubmit,
+}: Readonly<{
+  mode: FolderPwMode
+  name: string
+  master: string
+  error: string | null
+  hint?: string
+  pending: boolean
+  onMaster: (value: string) => void
+  onClose: () => void
+  onSubmit: () => void
+}>) {
+  const { t } = useTranslation()
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useEscape(onClose, true)
+  useFocusTrap(dialogRef, true)
+  const remove = mode === 'remove'
+  const title = remove
+    ? t('settings.remove_modal_title', { name })
+    : t('settings.reset_modal_title', { name })
+  return (
+    <div
+      ref={dialogRef}
+      className="fx-overlay fx-overlay-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+    >
+      <div className="fx-modal" style={{ maxWidth: 440 }}>
+        <header className="fx-modal-head">
+          <div>
+            <div className="fx-modal-kicker">{t('settings.locked_title')}</div>
+            <h2 className="fx-modal-title">{title}</h2>
+          </div>
+          <button type="button" className="fx-confirm-x" onClick={onClose} aria-label={t('common.close')}>
+            <Icon d={I.x} size={14} />
+          </button>
+        </header>
+        <div className="fx-modal-body" style={{ gridTemplateColumns: '1fr' }}>
+          <div className="fx-modal-col">
+            <p className="fx-confirm-msg" style={{ color: 'var(--fx-ink-3)', margin: 0 }}>
+              {remove ? t('settings.remove_explain') : t('settings.reset_explain')}
+            </p>
+            {hint && (
+              <div className="fx-field-hint" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <Icon d={I.info} size={12} /> {t('settings.reset_master_hint', { hint })}
+              </div>
+            )}
+            <label className="fx-field">
+              <span className="fx-field-label">{t('settings.reset_master_placeholder')}</span>
+              <div className="fx-input">
+                <PasswordInput
+                  autoFocus
+                  autoComplete="off"
+                  value={master}
+                  onChange={(e) => onMaster(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      onSubmit()
+                    }
+                  }}
+                  placeholder={t('settings.reset_master_placeholder')}
+                  aria-label={t('settings.reset_master_placeholder')}
+                />
+              </div>
+            </label>
+            {error && (
+              <div style={{ fontSize: 12, color: 'var(--fx-danger)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                <Icon d={I.alert} size={12} /> {error}
+              </div>
+            )}
+          </div>
+        </div>
+        <footer className="fx-modal-foot">
+          <button type="button" className="fx-confirm-btn" onClick={onClose}>
+            {t('common.cancel')}
+          </button>
+          <button
+            type="button"
+            className={remove ? 'fx-acc2-btn-solid-danger' : 'fx-acc2-btn'}
+            onClick={onSubmit}
+            disabled={!master || pending}
+          >
+            {remove ? t('settings.remove_confirm') : t('settings.reset_confirm')}
+          </button>
+        </footer>
+      </div>
+    </div>
   )
 }

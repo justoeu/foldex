@@ -709,6 +709,8 @@
     "locked_desc": "Restablece la contraseña de una carpeta con la contraseña maestra si la olvidaste y luego define una nueva.",
     "locked_empty": "No hay carpetas protegidas con contraseña.",
     "reset_action": "Restablecer contraseña",
+    "reset_modal_title": "Restablecer la contraseña de {{name}}",
+    "remove_modal_title": "Quitar la contraseña de {{name}}",
     "reset_master_placeholder": "Contraseña maestra",
     "reset_confirm": "Restablecer",
     "reset_done": "Contraseña eliminada",

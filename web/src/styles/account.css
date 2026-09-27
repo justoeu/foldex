@@ -198,7 +198,8 @@ button.fx-acc2-btn-solid-danger {
   background: var(--acc-danger-solid); color: #fff; font-size: 14px;
   font-weight: 500; cursor: pointer;
 }
-button.fx-acc2-btn-solid-danger:hover { background: var(--acc-danger-solid-hover); }
+button.fx-acc2-btn-solid-danger:hover:not(:disabled) { background: var(--acc-danger-solid-hover); }
+button.fx-acc2-btn-solid-danger:disabled { opacity: 0.45; cursor: default; }
 span.fx-acc2-dirty { margin-right: auto; font-size: 13px; color: var(--acc-warn-ink); }
 
 /* ── 2FA banner ─────────────────────────────────────────────────────── */
