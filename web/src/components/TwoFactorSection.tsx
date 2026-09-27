@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
 import { OtpInput, OTP_LENGTH } from './auth/OtpInput'
@@ -5,13 +6,7 @@ import { RecoveryCodes } from './auth/RecoveryCodes'
 import { useTwoFactorController } from '../hooks/useTwoFactorController'
 import { PasswordInput } from './PasswordInput'
 import { MailCodeHint } from './account/MailCodeButton'
-import {
-  Notice,
-  SectionBadge,
-  SectionBlock,
-  SectionCard,
-  SectionRow,
-} from './account/SectionCard'
+import { Notice } from './account/SectionCard'
 import {
   LOW_RECOVERY_CODES,
   methodActionDisabled,
@@ -42,59 +37,65 @@ export function TwoFactorSection() {
 
 function TwoFactorOverview({ controller }: Readonly<{ controller: Controller }>) {
   const { t } = useTranslation()
+  const on = controller.enabled
   return (
-    <SectionCard
-      icon={I.shield}
-      title={controller.enabled ? t('twofa.status_on') : t('twofa.status_off')}
-      subtitle={t('twofa.section_desc')}
-      badge={
-        <SectionBadge tone={controller.enabled ? 'on' : 'off'}>
-          {controller.enabled ? t('twofa.badge_on') : t('twofa.badge_off')}
-        </SectionBadge>
-      }
-    >
+    <div className="fx-acc2-2fa">
       {controller.error && <Notice tone="bad">{controller.error}</Notice>}
+      <div className={on ? 'fx-acc2-banner-ok' : 'fx-acc2-banner-off'}>
+        <span className={on ? 'fx-acc2-method-icon fx-acc2-method-icon-on' : 'fx-acc2-method-icon'} aria-hidden="true">
+          <Icon d={I.shield} size={16} />
+        </span>
+        <div className="fx-acc2-banner-title">{on ? t('twofa.status_on') : t('twofa.status_off')}</div>
+        <span className={on ? 'fx-acc2-pill fx-acc2-pill-ok' : 'fx-acc2-pill'}>
+          {on ? t('twofa.badge_on') : t('twofa.badge_off')}
+        </span>
+      </div>
       {/*
-        The proof comes BEFORE the actions it unlocks. Every button below is
-        disabled until these two fields are filled, and with the fields
-        underneath them the screen read as four broken controls and a form with
-        no stated purpose — which is exactly how it was reported.
+        The proof comes BEFORE the actions it unlocks in the DOM. Every button
+        is disabled until these fields are filled; with the form underneath,
+        the screen read as broken controls and a form with no stated purpose.
+        On a wide window the form keeps the first column and the list the rest,
+        in that same order. A swapped column put the keyboard in the form on
+        the right before the list on the left.
       */}
-      <ProofPanel controller={controller} />
-      <MethodList controller={controller} />
-    </SectionCard>
+      <div className="fx-acc2-2fa-grid">
+        <ProofPanel controller={controller} />
+        <MethodList controller={controller} />
+      </div>
+    </div>
   )
 }
 
 function ProofPanel({ controller }: Readonly<{ controller: Controller }>) {
   const { t } = useTranslation()
   return (
-    <div className="fx-2fa-proof">
-      <div className="fx-2fa-proof-head">
-        <Icon d={I.lock} size={13} />
-        <span className="fx-sec-block-label">{t('twofa.proof_label')}</span>
-      </div>
-      <p className="fx-2fa-proof-hint">
-        {controller.enabled ? t('twofa.proof_hint') : t('twofa.proof_hint_password')}
-      </p>
-      <label className="fx-field">
-        <span className="fx-field-label">{t('twofa.current_password')}</span>
-        <PasswordInput
-          className="fx-input"
-          autoComplete="current-password"
-          value={controller.password}
-          onChange={(event) => controller.setPassword(event.target.value)}
-        />
-      </label>
-      {controller.enabled && (
-        <label className="fx-field">
-          <span className="fx-field-label">{t('twofa.current_code')}</span>
-          <div className="fx-authfield fx-2fa-otp">
-            <OtpInput value={controller.code} onChange={controller.setCode} disabled={controller.busy} />
-          </div>
-          <ProofHint controller={controller} />
+    <div className="fx-acc2-card fx-acc2-2fa-proof">
+      <div className="fx-acc2-card-body">
+        <div>
+          <div className="fx-acc2-panel-title">{t('twofa.proof_label')}</div>
+          <span className="fx-acc2-field-hint">
+            {controller.enabled ? t('twofa.proof_hint') : t('twofa.proof_hint_password')}
+          </span>
+        </div>
+        <label className="fx-acc2-field">
+          <span className="fx-acc2-field-label">{t('twofa.current_password')}</span>
+          <PasswordInput
+            className="fx-acc2-input"
+            autoComplete="current-password"
+            value={controller.password}
+            onChange={(event) => controller.setPassword(event.target.value)}
+          />
         </label>
-      )}
+        {controller.enabled && (
+          <label className="fx-acc2-field">
+            <span className="fx-acc2-field-label">{t('twofa.current_code')}</span>
+            <div className="fx-authfield fx-2fa-otp">
+              <OtpInput value={controller.code} onChange={controller.setCode} disabled={controller.busy} />
+            </div>
+            <ProofHint controller={controller} />
+          </label>
+        )}
+      </div>
     </div>
   )
 }
@@ -127,13 +128,14 @@ function MethodList({ controller }: Readonly<{ controller: Controller }>) {
     twoFactorEnabled: controller.enabled,
   })
   return (
-    <SectionBlock label={t('twofa.methods_label')}>
-      <div className="fx-sec-rows">
-        {methods.map((method) => (
-          <MethodRow key={method.id} method={method} controller={controller} />
-        ))}
+    <div className="fx-acc2-card fx-acc2-2fa-methods">
+      <div className="fx-acc2-card-head">
+        <span>{t('twofa.methods_label')}</span>
       </div>
-    </SectionBlock>
+      {methods.map((method) => (
+        <MethodRow key={method.id} method={method} controller={controller} />
+      ))}
+    </div>
   )
 }
 
@@ -155,18 +157,17 @@ function MethodRow({
 function RecoveryRow({ controller }: Readonly<{ controller: Controller }>) {
   const { t } = useTranslation()
   const low = controller.remaining < LOW_RECOVERY_CODES
+  const name = t('twofa.remaining', { count: controller.remaining })
   return (
-    <SectionRow
+    <MethodLine
       icon={I.key}
-      /* Two encodings, deliberately: the count is easy to read past, and
-         running out of recovery codes is only discovered when they are
-         already needed. */
       tone={low ? 'warn' : undefined}
-      name={t('twofa.remaining', { count: controller.remaining })}
+      name={name}
       hint={low ? t('twofa.recovery_low') : t('twofa.recovery_hint')}
       action={
         <button
-          className="fx-btn"
+          type="button"
+          className="fx-acc2-btn-outline"
           disabled={methodActionDisabled('regenerate', controller.password, controller.code, controller.busy)}
           onClick={() => void controller.regenerate()}
         >
@@ -175,6 +176,53 @@ function RecoveryRow({ controller }: Readonly<{ controller: Controller }>) {
       }
     />
   )
+}
+
+function methodIconClass(tone: 'on' | 'warn' | undefined): string {
+  if (tone === 'on') return 'fx-acc2-method-icon fx-acc2-method-icon-on'
+  if (tone === 'warn') return 'fx-acc2-method-icon fx-acc2-method-icon-warn'
+  return 'fx-acc2-method-icon'
+}
+
+function FactorAction({
+  kind,
+  totp,
+  disabled,
+  method,
+  controller,
+}: Readonly<{
+  kind: ReturnType<typeof methodKind>
+  totp: boolean
+  disabled: boolean
+  method: FactorMethod
+  controller: Controller
+}>) {
+  const { t } = useTranslation()
+  if (kind === 'enable') {
+    return (
+      <button
+        type="button"
+        className={totp ? 'fx-acc2-btn' : 'fx-acc2-btn-outline'}
+        disabled={disabled}
+        onClick={() => void controller.begin(method)}
+      >
+        {t(totp ? 'twofa.enable_app' : 'twofa.enable_email')}
+      </button>
+    )
+  }
+  if (kind === 'disable') {
+    return (
+      <button
+        type="button"
+        className="fx-acc2-btn-danger"
+        disabled={disabled}
+        onClick={() => void controller.turnOff(method)}
+      >
+        {t(totp ? 'twofa.disable' : 'twofa.disable_email')}
+      </button>
+    )
+  }
+  return null
 }
 
 function FactorRow({
@@ -189,64 +237,84 @@ function FactorRow({
   const { t } = useTranslation()
   const totp = method.id === 'totp'
   const disabled = methodActionDisabled(kind, controller.password, controller.code, controller.busy)
+  const name = t(totp ? 'twofa.method_app' : 'twofa.method_email')
+  let action: ReactNode
+  if (kind === 'enable' || kind === 'disable') {
+    action = (
+      <FactorAction
+        kind={kind}
+        totp={totp}
+        disabled={disabled}
+        method={method.id as FactorMethod}
+        controller={controller}
+      />
+    )
+  }
   return (
-    <SectionRow
+    <MethodLine
       icon={totp ? I.key : I.mail}
-      name={t(totp ? 'twofa.method_app' : 'twofa.method_email')}
-      hint={t(totp ? 'twofa.method_app_hint' : 'twofa.method_email_hint')}
       tone={method.enabled ? 'on' : undefined}
-      state={{
-        label: method.enabled ? t('twofa.state_active') : t('twofa.state_off'),
-        on: method.enabled,
-      }}
+      name={name}
+      hint={t(totp ? 'twofa.method_app_hint' : 'twofa.method_email_hint')}
+      state={method.enabled ? t('twofa.state_active') : t('twofa.state_off')}
+      stateOn={method.enabled}
       /*
-        The lock is shown against the METHOD it applies to, and only when
-        that method is on. A note at the foot of the card explained nothing
-        about which of the two buttons was missing, and a missing button
-        with no explanation beside it reads as a broken screen.
-
-        The enrolled half is load-bearing here: `can_disable_*` is also false
-        for a method nobody enrolled, so a lock keyed on it alone would claim
-        every unused method is protected. methodKind already folds that in.
-
-        One reason, not a ternary. The server refuses a removal in exactly
-        one case — `mayRemoveFactor` returns false only under
-        `require2FAForAdmins && role.IsAdmin()`, which is what `required`
-        already reports — so a second arm could never render, and the copy
-        it would have carried ("this is your only method") asserts a
-        last-factor guard that does not exist: an ordinary user may remove
-        their last one freely.
+        The lock sits on the METHOD it blocks, and only when that method is
+        on. A note at the foot of the card could not say which button was
+        missing. `can_disable_*` is also false for a method nobody enrolled,
+        so the lock is keyed on methodKind, which already requires it to be on.
+        The server refuses removal in exactly one case — admins, when the
+        instance requires a second factor — so there is no second reason.
       */
       lock={kind === 'lock' ? t('twofa.required_note') : undefined}
-      /*
-        An instance whose mail driver prints to stdout refuses this
-        enrollment, so the row says so instead of offering a button the
-        backend would always reject.
-      */
       note={kind === 'unavailable' ? t('twofa.email_unavailable') : undefined}
-      action={
-        <>
-          {kind === 'enable' && (
-            <button
-              className={totp ? 'fx-btn fx-btn-primary' : 'fx-btn'}
-              disabled={disabled}
-              onClick={() => void controller.begin(method.id as FactorMethod)}
-            >
-              {t(totp ? 'twofa.enable_app' : 'twofa.enable_email')}
-            </button>
-          )}
-          {kind === 'disable' && (
-            <button
-              className="fx-btn fx-btn-danger"
-              disabled={disabled}
-              onClick={() => void controller.turnOff(method.id as FactorMethod)}
-            >
-              {t(totp ? 'twofa.disable' : 'twofa.disable_email')}
-            </button>
-          )}
-        </>
-      }
+      action={action}
     />
+  )
+}
+
+function MethodLine({
+  icon,
+  tone,
+  name,
+  hint,
+  state,
+  stateOn,
+  lock,
+  note,
+  action,
+}: Readonly<{
+  icon: ReactNode
+  tone?: 'on' | 'warn'
+  name: string
+  hint: string
+  state?: string
+  stateOn?: boolean
+  lock?: string
+  note?: string
+  action?: ReactNode
+}>) {
+  const iconClass = methodIconClass(tone)
+  return (
+    <div className="fx-acc2-row" role="group" aria-label={name}>
+      <span className={iconClass} aria-hidden="true">
+        <Icon d={icon} size={15} />
+      </span>
+      <div className="fx-acc2-row-main">
+        <div className="fx-acc2-row-title">{name}</div>
+        <div className="fx-acc2-row-sub">{hint}</div>
+        {lock && (
+          <span className="fx-acc2-method-lock">
+            <Icon d={I.lock} size={11} /> {lock}
+          </span>
+        )}
+        {note && <span className="fx-acc2-method-note">{note}</span>}
+      </div>
+      {state && (
+        <span className={stateOn ? 'fx-acc2-pill fx-acc2-pill-ok' : 'fx-acc2-pill'}>{state}</span>
+      )}
+      {action && <div className="fx-acc2-row-actions">{action}</div>}
+    </div>
   )
 }
 
@@ -257,58 +325,67 @@ function EnrollmentPanel({ controller }: Readonly<{ controller: Controller }>) {
   const enrollment = controller.enrollment
   if (!enrollment) return null
   return (
-    <SectionCard
-      icon={I.shield}
-      title={t('twofa.enroll_title')}
-      subtitle={
-        enrollment.method === 'totp'
-          ? t('twofa.enroll_subtitle')
-          : t('twofa.enroll_email_subtitle', { account: enrollment.email.account })
-      }
-    >
-      {controller.error && <Notice tone="bad">{controller.error}</Notice>}
-      {enrollment.method === 'totp' && (
-        <div className="fx-2fa-enroll">
-          <div className="fx-authfield">
-            <div className="fx-auth-qr">
-              <img src={enrollment.totp.qr_url} alt={t('twofa.qr_alt')} width={240} height={240} />
+    <div className="fx-acc2-card fx-acc2-2fa-panel">
+      <div className="fx-acc2-card-body">
+        <div>
+          <div className="fx-acc2-panel-title">{t('twofa.enroll_title')}</div>
+          <span className="fx-acc2-field-hint">
+            {enrollment.method === 'totp'
+              ? t('twofa.enroll_subtitle')
+              : t('twofa.enroll_email_subtitle', { account: enrollment.email.account })}
+          </span>
+        </div>
+        {controller.error && <Notice tone="bad">{controller.error}</Notice>}
+        {enrollment.method === 'totp' && (
+          <div className="fx-2fa-enroll">
+            <div className="fx-authfield">
+              <div className="fx-auth-qr">
+                <img src={enrollment.totp.qr_url} alt={t('twofa.qr_alt')} width={240} height={240} />
+              </div>
+            </div>
+            <div className="fx-2fa-key">
+              <span className="fx-acc2-field-label">{t('twofa.setup_key')}</span>
+              <code className="fx-2fa-key-value" translate="no">{enrollment.totp.secret}</code>
             </div>
           </div>
-          <div className="fx-2fa-key">
-            <span className="fx-sec-block-label">{t('twofa.setup_key')}</span>
-            <code className="fx-2fa-key-value" translate="no">{enrollment.totp.secret}</code>
+        )}
+        <label className="fx-acc2-field">
+          <span className="fx-acc2-field-label">{t('twofa.current_code')}</span>
+          <div className="fx-authfield fx-2fa-otp">
+            <OtpInput value={controller.code} onChange={controller.setCode} disabled={controller.busy} />
           </div>
+        </label>
+        <div className="fx-acc2-row-actions">
+          <button
+            type="button"
+            className="fx-acc2-btn"
+            disabled={controller.busy || controller.code.length < OTP_LENGTH}
+            onClick={() => void controller.confirm()}
+          >
+            {t('twofa.confirm')}
+          </button>
+          <button type="button" className="fx-acc2-btn-outline" disabled={controller.busy} onClick={controller.reset}>
+            {t('common.cancel')}
+          </button>
         </div>
-      )}
-      <label className="fx-field">
-        <span className="fx-field-label">{t('twofa.current_code')}</span>
-        <div className="fx-authfield fx-2fa-otp">
-          <OtpInput value={controller.code} onChange={controller.setCode} disabled={controller.busy} />
-        </div>
-      </label>
-      <div className="fx-sec-actions">
-        <button
-          className="fx-btn fx-btn-primary"
-          disabled={controller.busy || controller.code.length < OTP_LENGTH}
-          onClick={() => void controller.confirm()}
-        >
-          {t('twofa.confirm')}
-        </button>
-        <button className="fx-btn" disabled={controller.busy} onClick={controller.reset}>
-          {t('common.cancel')}
-        </button>
       </div>
-    </SectionCard>
+    </div>
   )
 }
 
 function RecoveryCodesPanel({ controller }: Readonly<{ controller: Controller }>) {
   const { t } = useTranslation()
   return (
-    <SectionCard icon={I.key} title={t('twofa.codes_title')} subtitle={t('twofa.codes_subtitle')}>
-      <div className="fx-authfield">
-        <RecoveryCodes codes={controller.codes ?? []} onDone={controller.dismissCodes} />
+    <div className="fx-acc2-card fx-acc2-2fa-panel">
+      <div className="fx-acc2-card-body">
+        <div>
+          <div className="fx-acc2-panel-title">{t('twofa.codes_title')}</div>
+          <span className="fx-acc2-field-hint">{t('twofa.codes_subtitle')}</span>
+        </div>
+        <div className="fx-authfield">
+          <RecoveryCodes codes={controller.codes ?? []} onDone={controller.dismissCodes} />
+        </div>
       </div>
-    </SectionCard>
+    </div>
   )
 }

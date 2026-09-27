@@ -2738,6 +2738,11 @@ button.fx-import-dropzone.fx-backup-dropzone-drag {
 .fx-hub-page { width: 100%; max-width: 1240px; margin: 0 auto; padding: 4px 2px 40px; }
 /* The detail sections are forms, and a form line 1240px wide is unreadable. */
 .fx-hub-page-narrow { max-width: 760px; }
+/* The account surface is the page. The hub's 1240px cap left it floating in
+   the middle of a wide window, and with no pagehead the back control sat on
+   the card. */
+.fx-hub-page-account { max-width: none; }
+.fx-hub-page-account > .fx-hub-back { margin-bottom: 28px; }
 /* Vertical rhythm between the hub's sections, shared by both scopes. */
 .fx-hub-stack { display: flex; flex-direction: column; gap: 34px; }
 
@@ -3849,19 +3854,9 @@ button.fx-drawer-backdrop {
 
 /* ── two-factor specifics ───────────────────────────────────────────── */
 
-/* Proof sits above the actions it unlocks, inside its own frame so it reads as
-   a precondition rather than as one more field on a long form. */
-.fx-2fa-proof {
-  display: flex; flex-direction: column; gap: 10px;
-  padding: 14px;
-  border: 1px solid var(--fx-border);
-  border-radius: 12px;
-  background: var(--fx-bg-tint);
-}
-.fx-2fa-proof-head { display: flex; align-items: center; gap: 6px; color: var(--fx-ink-4); }
-.fx-2fa-proof-hint { margin: 0; font-size: 12px; line-height: 1.5; color: var(--fx-ink-3); }
-/* `.fx-authfield` brings the OTP cell styling with no overlay attached; this
-   only stops six cells from spreading across a settings-width row. */
+/* Auth CSS loads later and sets the OTP row to space-between with cells at
+   width 100%. The account page overrides that; this only groups them when
+   that override is absent. */
 .fx-2fa-otp .fx-auth-otp { justify-content: flex-start; }
 
 .fx-2fa-enroll { display: flex; flex-direction: column; gap: 12px; align-items: center; }

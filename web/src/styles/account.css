@@ -58,6 +58,11 @@
   border-radius: 16px;
   padding: 32px 24px 96px;
 }
+/* Column flex items default to min-width: auto, which is the row's
+   min-content. On a phone that keeps the badge from wrapping and paints
+   it past the screen edge. */
+.fx-account > *,
+.fx-acc2-sections > section { min-width: 0; }
 .fx-account a { color: var(--acc-primary); text-decoration: none; }
 .fx-account a:hover { color: var(--acc-primary-link); text-decoration: underline; }
 .fx-account input, .fx-account select, .fx-account button { font-family: inherit; }
@@ -181,13 +186,13 @@ button.fx-acc2-btn-outline {
   border-radius: 8px; background: #fff; font-size: 13.5px;
   cursor: pointer; color: var(--acc-ink); font-weight: 500;
 }
-button.fx-acc2-btn-outline:hover { background: #f3f2f8; }
+button.fx-acc2-btn-outline:hover:not(:disabled) { background: #f3f2f8; }
 button.fx-acc2-btn-danger {
   height: 34px; padding: 0 14px; border: 1px solid var(--acc-danger-border);
   border-radius: 8px; background: #fff; font-size: 13.5px;
   cursor: pointer; color: var(--acc-danger); font-weight: 500;
 }
-button.fx-acc2-btn-danger:hover { background: var(--acc-danger-soft); }
+button.fx-acc2-btn-danger:hover:not(:disabled) { background: var(--acc-danger-soft); }
 button.fx-acc2-btn-solid-danger {
   height: 38px; padding: 0 16px; border: 0; border-radius: 8px;
   background: var(--acc-danger-solid); color: #fff; font-size: 14px;
@@ -203,8 +208,94 @@ div.fx-acc2-banner-ok {
   gap: 14px; margin-bottom: 16px;
 }
 span.fx-acc2-banner-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--acc-ok); flex: none; }
-div.fx-acc2-banner-title { font-weight: 600; font-size: 14.5px; color: var(--acc-ok-banner-ink); }
+div.fx-acc2-banner-title {
+  flex: 1 1 auto; min-width: 0;
+  font-weight: 600; font-size: 14.5px; color: var(--acc-ok-banner-ink);
+}
 div.fx-acc2-banner-sub { font-size: 13.5px; color: var(--acc-ok-banner-ink-2); margin-top: 2px; }
+div.fx-acc2-banner-off {
+  background: #fff; border: 1px solid var(--acc-border);
+  border-radius: 12px; padding: 16px 20px; display: flex; align-items: center;
+  gap: 14px;
+}
+div.fx-acc2-banner-off div.fx-acc2-banner-title { color: var(--acc-ink); }
+div.fx-acc2-banner-ok > span.fx-acc2-pill,
+div.fx-acc2-banner-off > span.fx-acc2-pill { margin-left: auto; flex: none; }
+
+/* ── two-factor: proof beside the method list ──────────────────────── */
+div.fx-acc2-2fa {
+  display: flex; flex-direction: column; gap: 16px;
+  container-type: inline-size; container-name: acc2fa;
+}
+div.fx-acc2-2fa > div.fx-acc2-banner-ok,
+div.fx-acc2-2fa > div.fx-acc2-banner-off { margin-bottom: 0; }
+/* One column until THIS surface, not the viewport, can hold a 400px proof
+   and a method row that still fits its button. The sidebar eats 252px, so a
+   viewport breakpoint turns the list into a 150px track. Source order is the
+   column order: the proof is first in the DOM and first on the row. */
+div.fx-acc2-2fa-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px; align-items: start;
+}
+/* Grid items default to min-width: auto. These two cards are the tracks. */
+div.fx-acc2-2fa-proof,
+div.fx-acc2-2fa-methods { min-width: 0; }
+@container acc2fa (min-width: 1080px) {
+  div.fx-acc2-2fa-grid { grid-template-columns: minmax(300px, 400px) minmax(0, 1fr); }
+}
+div.fx-acc2-panel-title {
+  font-family: var(--fx-display); font-size: 16.5px; font-weight: 600;
+  letter-spacing: -0.01em;
+}
+div.fx-acc2-panel-title + span.fx-acc2-field-hint { display: block; margin-top: 4px; }
+div.fx-acc2-2fa-panel { max-width: 560px; }
+div.fx-acc2-row-actions { display: flex; gap: 8px; flex: none; flex-wrap: wrap; justify-content: flex-end; }
+span.fx-acc2-method-icon {
+  width: 34px; height: 34px; border-radius: 10px; flex: none;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--acc-primary-soft); color: var(--acc-primary);
+}
+span.fx-acc2-method-icon-on { background: var(--acc-ok-soft); color: var(--acc-ok-deep); }
+span.fx-acc2-method-icon-warn { background: #fdf3e4; color: var(--acc-warn-ink); }
+span.fx-acc2-method-lock {
+  display: inline-flex; align-items: center; gap: 5px;
+  margin-top: 8px; padding: 3px 8px; border-radius: 7px;
+  background: #fdf3e4; color: var(--acc-warn-ink);
+  font-size: 12.5px; font-weight: 600;
+}
+span.fx-acc2-method-note { display: block; margin-top: 6px; font-size: 12.5px; color: var(--acc-muted); }
+/* The auth OTP is width:100% and space-between, which on this page spreads
+   six boxes across the whole card. Here they stay a fixed row. */
+.fx-account .fx-2fa-otp .fx-auth-otp { justify-content: flex-start; flex-wrap: nowrap; gap: 8px; }
+.fx-account .fx-2fa-otp .fx-auth-otp-cell {
+  width: 46px; flex: 0 0 46px; min-height: 52px;
+  background: #fff; border-color: var(--acc-border-input);
+  border-radius: 8px; color: var(--acc-ink);
+}
+@media (max-width: 759px) {
+  .fx-account .fx-2fa-otp .fx-auth-otp { gap: 6px; }
+  .fx-account .fx-2fa-otp .fx-auth-otp-cell {
+    width: auto; flex: 1 1 0; min-width: 0; max-width: 46px;
+  }
+}
+.fx-account div.fx-2fa-key {
+  width: 100%; align-items: flex-start;
+  background: var(--acc-bg-soft); border: 1px dashed var(--acc-border-input);
+  border-radius: 10px;
+}
+.fx-account code.fx-2fa-key-value {
+  color: var(--acc-ink); text-align: left;
+  background: transparent; padding: 0; border-radius: 0; font-size: 14px;
+}
+.fx-account div.fx-acc2-row-actions button.fx-acc2-btn,
+.fx-account div.fx-acc2-row-actions button.fx-acc2-btn-outline,
+.fx-account div.fx-acc2-row-actions button.fx-acc2-btn-danger {
+  height: auto; min-height: 34px; padding: 6px 14px;
+  white-space: normal; text-align: center;
+}
+button.fx-acc2-btn-outline:disabled,
+button.fx-acc2-btn-danger:disabled { opacity: 0.45; cursor: default; }
 
 /* ── tokens one-time card ───────────────────────────────────────────── */
 div.fx-acc2-token-new {
@@ -220,9 +311,16 @@ code.fx-acc2-token-value {
   padding: 9px 12px; font-family: var(--fx-mono); font-size: 13px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-form.fx-acc2-token-form { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
-input.fx-acc2-token-name { flex: 1 1 240px; min-width: 0; height: 38px; }
-button.fx-acc2-token-create { height: 38px; }
+form.fx-acc2-token-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "field button" "hint hint";
+  gap: 8px; align-items: end;
+}
+label.fx-acc2-token-field { grid-area: field; min-width: 0; }
+button.fx-acc2-btn.fx-acc2-token-create { grid-area: button; height: 40px; }
+form.fx-acc2-token-form > span.fx-acc2-field-hint { grid-area: hint; }
+input.fx-acc2-token-name { height: 40px; }
 
 /* ── sessions ───────────────────────────────────────────────────────── */
 div.fx-acc2-logout-all {
@@ -304,6 +402,19 @@ div.fx-acc2-notice-inline { margin-bottom: 16px; padding: 14px 20px; text-align:
 /* ── responsive (design's <760px narrow) ────────────────────────────── */
 @media (max-width: 759px) {
   .fx-account { gap: 20px; padding: 20px 16px 80px; border-radius: 12px; }
+  form.fx-acc2-token-form {
+    grid-template-columns: 1fr;
+    grid-template-areas: "field" "hint" "button";
+  }
+  button.fx-acc2-btn.fx-acc2-token-create { width: 100%; }
+  /* A 100%-wide row action (the ≤560px rule) is resolved against a
+     shrink-to-fit card and pushes the badge past the viewport. */
+  .fx-account .fx-card,
+  .fx-account .fx-sec-head,
+  .fx-account .fx-sec-row { max-width: 100%; min-width: 0; }
+  .fx-account .fx-sec-head { flex-wrap: wrap; }
+  .fx-account .fx-sec-row-action { width: auto; max-width: 100%; }
+  .fx-account .fx-sec-row-action button.fx-btn { width: auto; max-width: 100%; }
   div.fx-acc2-row, div.fx-acc2-logout-all { padding: 14px 16px; }
   /* The surface already carries the page padding; rows keep their own. */
   div.fx-acc2-card-body, div.fx-acc2-card-foot, div.fx-acc2-card-head,
@@ -378,6 +489,10 @@ div.fx-acc2-notice-inline { margin-bottom: 16px; padding: 14px 20px; text-align:
   backdrop-filter: none;
 }
 .fx-account .fx-sec-body { padding: 24px; gap: 18px; }
+@media (max-width: 759px) {
+  /* After the 24px rule: same specificity, so this only wins by coming later. */
+  .fx-account .fx-sec-body { padding: 16px; }
+}
 .fx-account .fx-sec-head { padding: 0; border: 0; gap: 12px; }
 .fx-account .fx-sec-head-icon {
   width: 34px; height: 34px; border-radius: 10px; flex: none;
@@ -387,7 +502,16 @@ div.fx-acc2-notice-inline { margin-bottom: 16px; padding: 14px 20px; text-align:
 .fx-account .fx-sec-title { font-family: var(--fx-display); font-size: 16.5px; font-weight: 600; letter-spacing: -0.01em; }
 .fx-account .fx-sec-sub { font-size: 13.5px; color: var(--acc-muted); }
 .fx-account .fx-sec-rows { gap: 0; }
-.fx-account .fx-sec-row { padding: 18px 0; border-bottom: 1px solid var(--acc-border-row); }
+/* Flat dividers, not the boxed rows the glass panels use. A tone
+   (`-on` / `-warn`) otherwise keeps that box — green, rounded, and
+   short of the card edge — so the password row looked dropped in. */
+.fx-account .fx-sec-row {
+  padding: 18px 0;
+  border: 0;
+  border-bottom: 1px solid var(--acc-border-row);
+  border-radius: 0;
+  background: transparent;
+}
 .fx-account .fx-sec-row:last-child { border-bottom: 0; }
 .fx-account .fx-sec-badge { border-radius: 999px; padding: 3px 9px; font-size: 12.5px; }
 .fx-account .fx-sec-badge-on { background: var(--acc-ok-soft); color: var(--acc-ok-deep); }
@@ -422,3 +546,8 @@ button.fx-account .fx-btn, .fx-account button.fx-btn {
 }
 .fx-dark .fx-account .fx-card { background: #221e3e; }
 .fx-dark .fx-account .fx-input { background: #2a2549; color: var(--acc-ink); }
+.fx-dark .fx-account div.fx-acc2-banner-off { background: #221e3e; }
+.fx-dark .fx-account span.fx-acc2-method-icon-warn,
+.fx-dark .fx-account span.fx-acc2-method-lock { background: #3a2e18; }
+.fx-dark .fx-account .fx-2fa-otp .fx-auth-otp-cell { background: #2a2549; color: var(--acc-ink); }
+.fx-dark .fx-account div.fx-2fa-key { background: #2a2549; }

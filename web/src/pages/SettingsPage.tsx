@@ -226,17 +226,15 @@ export function SettingsPage({ onEditFolder, onNavigate, initialSection }: Props
   const effectiveSection = effective.section
 
   if (effectiveSection !== 'overview') {
-    // The administration sections carry tables and matrices and get the full
-    // container; everything else is a form, and stays in a readable column.
-    // The account page carries a rail beside its panel and wants the room;
-    // everything else here is a form and stays in a readable column.
+    // Administration keeps the full container (tables, matrices). Account does
+    // too: the surface is the page. Everything else is a form and stays narrow.
     const wide = ADMIN_SECTIONS.has(effectiveSection) || effectiveSection === 'account'
     // The account page carries its own head (avatar, name, e-mail) per its
     // design; a kicker+title above it would stack two headers and push the
     // tabs off the fold. Every other section keeps the standard pagehead.
     const isAccount = effectiveSection === 'account'
     return (
-      <div className={'fx-hub-page' + (wide ? '' : ' fx-hub-page-narrow')}>
+      <div className={'fx-hub-page' + (wide ? '' : ' fx-hub-page-narrow') + (isAccount ? ' fx-hub-page-account' : '')}>
         <button className="fx-hub-back" onClick={() => setSection('overview')}>
           <Icon d={I.chevronLeft} size={13} /> {t('settings.hub_back')}
         </button>
