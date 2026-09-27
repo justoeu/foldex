@@ -322,7 +322,16 @@ describe('service worker (sw.ts)', () => {
     expect(await res.text()).toBe('cached')
   })
 
-  it('networkFirst throws when offline and cache miss', async () => {
+  it('does not intercept only-if-cached probes the browser will not let us fetch', () => {
+    const respondWith = vi.fn()
+    handlers.fetch![0]({
+      request: { url: here('/'), method: 'GET', mode: 'navigate', cache: 'only-if-cached' },
+      respondWith,
+    })
+    expect(respondWith).not.toHaveBeenCalled()
+  })
+
+  it('networkFirst answers 504 when offline and cache miss', async () => {
     ;(globalThis as any).caches.open = vi.fn(async () => makeCache('foldex-files-v1'))
     vi.stubGlobal('fetch', vi.fn(async () => {
       throw new Error('offline')
@@ -334,7 +343,7 @@ describe('service worker (sw.ts)', () => {
         responded = p
       },
     })
-    await expect(responded!).rejects.toThrow(/offline/)
+    expect((await responded!).status).toBe(504)
   })
 
   it('fetch uses navigation fallback for navigate mode', async () => {
@@ -366,7 +375,7 @@ describe('service worker (sw.ts)', () => {
     expect(await (await responded!).text()).toBe('<html>shell</html>')
   })
 
-  it('navigation fallback throws when offline and shell missing', async () => {
+  it('navigation fallback answers 504 when offline and shell missing', async () => {
     ;(globalThis as any).caches.open = vi.fn(async () => makeCache('foldex-precache-v3'))
     vi.stubGlobal('fetch', vi.fn(async () => {
       throw new Error('offline')
@@ -378,7 +387,22 @@ describe('service worker (sw.ts)', () => {
         responded = p
       },
     })
-    await expect(responded!).rejects.toThrow(/offline/)
+    expect((await responded!).status).toBe(504)
+  })
+
+  it('cacheFirst answers 504 when the network fetch rejects', async () => {
+    ;(globalThis as any).caches.open = vi.fn(async () => makeCache('foldex-precache-v3'))
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new TypeError('Failed to fetch')
+    }))
+    let responded: Promise<Response> | undefined
+    handlers.fetch![0]({
+      request: new Request(here('/')),
+      respondWith(p: Promise<Response>) {
+        responded = p
+      },
+    })
+    expect((await responded!).status).toBe(504)
   })
 
   it('fetch uses cacheFirst for static assets', async () => {

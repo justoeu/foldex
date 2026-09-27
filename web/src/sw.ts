@@ -142,6 +142,11 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const req = event.request
   if (req.method !== 'GET') return
+  // A rejected respondWith() is not "the network failed" — the browser
+  // replaces the page with a network error. Chrome also issues the document
+  // as only-if-cached with a mode other than same-origin, and fetch() of
+  // that request throws TypeError. Leave those to the browser.
+  if (req.cache === 'only-if-cached' && req.mode !== 'same-origin') return
   const url = new URL(req.url)
 
   // Cross-origin GETs (og:image, favicon, Google Fonts CSS) must not go
@@ -198,8 +203,14 @@ async function networkFirst(req: Request, cacheName: string): Promise<Response> 
   } catch {
     const cached = await cache.match(req)
     if (cached) return cached
-    throw new Error('offline + no cache')
+    return offlineResponse()
   }
+}
+
+// respondWith() must settle with a Response. A thrown fetch() becomes
+// "the promise was rejected" and the document never loads.
+function offlineResponse(): Response {
+  return new Response('', { status: 504, statusText: 'offline' })
 }
 
 /** Drop oldest entries until cache has at most maxEntries keys. */
@@ -216,7 +227,11 @@ export async function pruneCacheLRU(cache: Cache, maxEntries: number): Promise<v
 async function cacheFirst(req: Request): Promise<Response> {
   const cached = await matchPrecache(req)
   if (cached) return cached
-  return fetch(req)
+  try {
+    return await fetch(req)
+  } catch {
+    return offlineResponse()
+  }
 }
 
 async function matchPrecache(req: Request | string): Promise<Response | undefined> {
@@ -235,7 +250,7 @@ async function navigationFallback(req: Request): Promise<Response> {
   } catch {
     const offline = await matchPrecache('/index.html')
     if (offline) return offline
-    throw new Error('offline + no shell cached')
+    return offlineResponse()
   }
 }
 

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useConfirm } from './ConfirmDialog'
@@ -20,6 +20,7 @@ export function ApiTokensSection() {
   const confirmAction = useConfirm()
 
   const tokens = useQuery({ queryKey: ['api-tokens'], queryFn: listTokens })
+  const hintId = useId()
   const [name, setName] = useState('')
   const [created, setCreated] = useState<ApiToken | null>(null)
   const [error, setError] = useState('')
@@ -115,13 +116,18 @@ export function ApiTokensSection() {
               if (name.trim() && !create.isPending) create.mutate()
             }}
           >
-            <input
-              className="fx-acc2-input fx-acc2-token-name"
-              value={name}
-              placeholder={t('tokens.name_placeholder')}
-              aria-label={t('tokens.name_label')}
-              onChange={(e) => setName(e.target.value)}
-            />
+            {/* The name is a label the owner invents. Without a visible one,
+                the example in the placeholder read as the thing to type. */}
+            <label className="fx-acc2-field fx-acc2-token-field">
+              <span className="fx-acc2-field-label">{t('tokens.name_label')}</span>
+              <input
+                className="fx-acc2-input fx-acc2-token-name"
+                value={name}
+                placeholder={t('tokens.name_placeholder')}
+                aria-describedby={hintId}
+                onChange={(e) => setName(e.target.value)}
+              />
+            </label>
             <button
               type="submit"
               className="fx-acc2-btn fx-acc2-token-create"
@@ -129,6 +135,9 @@ export function ApiTokensSection() {
             >
               {t('tokens.create')}
             </button>
+            <span className="fx-acc2-field-hint" id={hintId}>
+              {t('tokens.name_hint')}
+            </span>
           </form>
         </div>
       </div>

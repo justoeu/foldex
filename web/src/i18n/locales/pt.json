@@ -1166,8 +1166,9 @@
   },
   "tokens": {
     "section_desc": "Para a extensão do navegador e para scripts. Um token lê e escreve seus links e notas; não muda sua senha, não administra usuários e não baixa backup.",
-    "name_label": "Nome",
-    "name_placeholder": "Extensão do navegador",
+    "name_label": "Nome do token",
+    "name_hint": "Um nome que só você vê, para reconhecer este token depois. Pode ser o computador, a extensão ou um script.",
+    "name_placeholder": "ex.: notebook, script de backup",
     "create": "Criar token",
     "created_title": "Copie agora",
     "created_warning": "Esta é a única vez que ele aparece. O Foldex guarda só um hash, então não há como mostrá-lo de novo.",

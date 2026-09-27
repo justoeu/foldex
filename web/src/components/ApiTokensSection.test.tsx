@@ -44,7 +44,13 @@ describe('ApiTokensSection', () => {
     const create = await screen.findByRole('button', { name: /create token/i })
     expect(create).toBeDisabled()
 
-    await user.type(screen.getByLabelText(/name/i), 'extension')
+    // The placeholder used to be the only copy, and it read as the value to
+    // type. The label says what the field is; the hint says why it exists.
+    const name = screen.getByRole('textbox', { name: /token name/i })
+    expect(name).toHaveAccessibleDescription(/tell this token apart later/i)
+    expect(name).toHaveAttribute('placeholder', 'e.g. laptop, backup script')
+
+    await user.type(name, 'extension')
     expect(create).toBeEnabled()
   })
 

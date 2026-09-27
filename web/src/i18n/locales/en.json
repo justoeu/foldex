@@ -1166,8 +1166,9 @@
   },
   "tokens": {
     "section_desc": "For the browser extension and for scripts. A token reads and writes your links and notes; it cannot change your password, manage users or download a backup.",
-    "name_label": "Name",
-    "name_placeholder": "Browser extension",
+    "name_label": "Token name",
+    "name_hint": "A name only you see, so you can tell this token apart later. It can be the computer, the extension or a script.",
+    "name_placeholder": "e.g. laptop, backup script",
     "create": "Create token",
     "created_title": "Copy it now",
     "created_warning": "This is the only time it is shown. Foldex stores only a hash, so it cannot be shown again.",
