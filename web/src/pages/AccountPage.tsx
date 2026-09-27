@@ -123,10 +123,10 @@ export function AccountPage({ initialTab }: Readonly<{ initialTab?: AccountTab }
     <div className="fx-account">
       {/* The visible head is the identity block; the page name itself stays
           in the outline for screen readers and window titles. */}
-      <h1 className="fx-acc2-sr">{t('account.page_title')}</h1>
+      <h1 className="fx-visually-hidden">{t('account.page_title')}</h1>
       <AccountHead user={user} />
 
-      <nav className="fx-acc2-tabs-nav" aria-label={t('account.nav_aria')}>
+      <nav aria-label={t('account.nav_aria')}>
         <div className="fx-acc2-tabs" role="tablist" tabIndex={-1} onKeyDown={onTabKeys}>
           {GROUPS.map((g, i) => {
             const on = g.id === group
