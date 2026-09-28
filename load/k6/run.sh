@@ -56,6 +56,21 @@ export K6_FLOW="$FLOW"
 export K6_PROFILE="$PROFILE"
 export FOLDEX_K6_VUS
 export FOLDEX_K6_DURATION
+export FOLDEX_K6_RUN="${FOLDEX_K6_RUN:-${FLOW}-$(date +%Y%m%d%H%M%S)}"
 
-echo "k6 flow=$FLOW profile=$PROFILE vus=$FOLDEX_K6_VUS duration=$FOLDEX_K6_DURATION base=${K6_BASE_URL:-http://127.0.0.1:9089}"
-exec k6 run "$ROOT/load/k6/foldex.js"
+# The LAN Prometheus (Grafana at :3001) only stores a remote write when its
+# receiver is on. K6_GRAFANA=0 keeps the terminal summary and skips the push.
+GRAFANA="${K6_GRAFANA:-1}"
+OUT=()
+if [[ "$GRAFANA" != "0" ]]; then
+  export K6_PROMETHEUS_RW_SERVER_URL="${K6_PROMETHEUS_RW_SERVER_URL:-http://192.168.68.65:9091/api/v1/write}"
+  export K6_PROMETHEUS_RW_TREND_STATS="${K6_PROMETHEUS_RW_TREND_STATS:-p(95),p(99),max}"
+  export K6_PROMETHEUS_RW_PUSH_INTERVAL="${K6_PROMETHEUS_RW_PUSH_INTERVAL:-5s}"
+  OUT=(-o experimental-prometheus-rw)
+fi
+
+echo "k6 flow=$FLOW profile=$PROFILE vus=$FOLDEX_K6_VUS duration=$FOLDEX_K6_DURATION run=$FOLDEX_K6_RUN base=${K6_BASE_URL:-http://127.0.0.1:9089}"
+if [[ ${#OUT[@]} -gt 0 ]]; then
+  echo "grafana remote write: $K6_PROMETHEUS_RW_SERVER_URL"
+fi
+exec k6 run "${OUT[@]}" "$ROOT/load/k6/foldex.js"

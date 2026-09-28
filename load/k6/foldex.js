@@ -32,6 +32,10 @@ const EXEC = {
 }
 
 export const options = {
+  tags: {
+    testid: __ENV.FOLDEX_K6_RUN || 'manual',
+    flow,
+  },
   scenarios: {
     selected: {
       executor: 'constant-vus',

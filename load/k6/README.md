@@ -89,7 +89,11 @@ O login devolve `fx_at` e `fx_csrf`. O script manda o cookie e copia o CSRF para
 
 ## Como ler o resultado
 
-O k6 imprime, por tag `name`, `avg`, `med`, `p(95)`, `p(99)` e `max`. A métrica `unexpected_status` é a fração de respostas fora do conjunto saudável daquele fluxo. O limiar padrão é menos de 1%. O `p(95)` de `http_req_duration` fica abaixo de 800 ms na leitura e de 1,5 s na escrita. No `stress` o limiar de latência sai, porque a cota responde na hora e o resto pode enfileirar.
+O resumo também sai no terminal: por tag `name`, `avg`, `med`, `p(95)`, `p(99)` e `max`. A métrica `unexpected_status` é a fração de respostas fora do conjunto saudável daquele fluxo. O limiar padrão é menos de 1%. O `p(95)` de `http_req_duration` fica abaixo de 800 ms na leitura e de 1,5 s na escrita. No `stress` o limiar de latência sai, porque a cota responde na hora e o resto pode enfileirar.
+
+Ao mesmo tempo o `run.sh` envia as séries para o Prometheus da LAN (`http://192.168.68.65:9091/api/v1/write`), que o Grafana em http://192.168.68.65:3001 já usa. O painel é **Foldex — k6**, na pasta Foldex. No topo, o seletor **execução** é o `testid` daquela corrida (`smoke-20260927211604`, por exemplo). `K6_GRAFANA=0` desliga o envio e deixa só o terminal. Outro Prometheus: `K6_PROMETHEUS_RW_SERVER_URL`.
+
+O receptor de remote write do Prometheus da LAN precisou ser ligado (`--web.enable-remote-write-receiver`). Sem isso a API respondia 404 e o Grafana não tinha o que desenhar. A porta 9091 continua a mesma de antes, só passa a aceitar escrita de quem já alcançava a leitura.
 
 O que fazer com um `p(95)` alto, **depois** de repetir o mesmo fluxo uma segunda vez (a primeira paga cache frio):
 
@@ -120,4 +124,4 @@ Cada iteração apaga o que criou. Se o processo morrer no meio, ficam linhas cu
 
 ## O que esta suíte não faz
 
-Não compara duas versões sozinha. Guarde o resumo (`k6 run --summary-export /tmp/k6.json`, se quiser) e diff manual. Não abre o browser. Não mede o nginx, a menos que `K6_BASE_URL` seja a origem do web.
+Não compara duas versões sozinha. Cada corrida ganha um `testid` (`fluxo-AAAAMMDDhhmmss`). No Grafana, escolha essa execução. O terminal continua imprimindo o mesmo resumo. Não mede o nginx, a menos que `K6_BASE_URL` seja a origem do web.
