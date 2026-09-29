@@ -1291,6 +1291,11 @@ configuração; a regra tem que valer sozinha*.
   (policy + abusepolicy). DTOs passam a `domainerr.InvalidInput`.
 - Deixado de propósito: 2FA vs e-mail (INV-005), Setup/Reset screens, métricas backup-agent.
 
+### Log — usuário de teste no runner do k6 (2026-09-27)
+
+- `load/k6/run.sh` pergunta, no terminal, se cria ou reutiliza `k6-load@foldex.local`. Login que funciona é reutilizado. Conta ausente, senha errada ou segundo fator recria a conta (editor, sem 2FA) no Postgres do container `foldex-backend`, só quando `K6_BASE_URL` é loopback. A senha fica em `load/k6/.test-user` (0600, gitignored). No fim pergunta se apaga.
+- Sem TTY a pergunta não bloqueia. `K6_TEST_USER=1|0` e `K6_DELETE_TEST_USER=1|0` cobrem o caso. A decisão está em `scripts/test-k6-test-user.sh`.
+
 ## 2026-09-18 — Chrome addon + API token (feature/chrome-addon-api-token)
 - API token: cap 20→1 (409 preservado), Rotacionar (revoke→create, SecretBand, mid-pair copy + refetch).
 - Addon Chrome: projeto standalone `foldex-addon/` (irmão do repo) — popup 2 painéis, captura visível+full-page scroll/stitch incremental (1 canvas + 1 tile por vez, caps 40 tiles/2^28px + degrade), pasta/tag pickers, nota, ⌘⇧S, sync alarm horário com lifecycle, i18n en/pt/es, 75 testes node.

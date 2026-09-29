@@ -19,6 +19,13 @@ O alvo padrão é o backend local, `http://127.0.0.1:9089`, sem passar pelo ngin
 | `redirect` | não | `GET /go/k6-no-such-slug` sem seguir o redirect | O handler público. 404 é o esperado. |
 | `export` | uma vez | **uma** `GET /api/export?format=json` | Dump da biblioteca. Conta no balde caro (padrão 20 por hora). |
 | `mixed` | uma vez | leitura de biblioteca, stats, activity e settings, em peso | Um uso misturado, sem escrita. |
+| `capacity` | uma vez | 5 minutos. A cada minuto sobe o ritmo de GET e o de escrita, os dois ao mesmo tempo | Achar o platô: o minuto em que aparecem 429, timeout ou 5xx. |
+| `orders-write` | uma vez | rampa até 1500 `POST /api/links` por minuto, segura 2 minutos | Escrita sustentada de um link por iteração. A cota padrão de 120/min precisa estar acima de 1500 nesse intervalo. |
+| `orders-read` | uma vez | rampa até 3000 `GET /api/links?limit=50` por minuto, segura 2 minutos | A lista da conta, uma chamada por iteração. |
+| `orders-mixed` | uma vez | rampa até 1000 criações e 2000 listas por minuto, juntas, segura 2 minutos | Os dois ao mesmo tempo. A cota de escrita precisa estar acima de 1000/min. |
+| `surge-write` | uma vez | rampa até 10000 `POST /api/links` por minuto, segura 2 minutos | O mesmo formato de `orders-write`, num ritmo que passa do teto compilado de 6000/min. A cota da conta precisa estar acima de 10000 nesse intervalo. |
+| `surge-read` | uma vez | rampa até 30000 `GET /api/links?limit=50` por minuto, segura 2 minutos | A lista da conta, uma chamada por iteração. |
+| `surge-mixed` | uma vez | rampa até 8000 criações e 20000 listas por minuto, juntas, segura 2 minutos | Os dois ao mesmo tempo. A cota de escrita precisa estar acima de 8000/min. |
 
 Fora da suíte, de propósito:
 
@@ -38,15 +45,23 @@ k6 version
 
 ## Execução
 
-Na raiz do repositório:
+Na raiz do repositório, num terminal:
 
 ```bash
-# sem credencial: só o que é público
-./load/k6/run.sh smoke
+./load/k6/run.sh library-read
+```
 
-# o restante precisa de uma conta SEM segundo fator
+A primeira pergunta é se deve criar ou reutilizar o usuário de teste `k6-load@foldex.local`. **s** tenta o login dessa conta. Se a conta não existe, a senha não confere ou ela parou num segundo fator, o script cria de novo: editor, sem segundo fator, senha nova em `load/k6/.test-user` (modo `600`, fora do git). No fim ele pergunta se apaga essa conta. **Enter** nas duas perguntas deixa tudo como está.
+
+A conta só existe para a API local (`127.0.0.1`, `localhost`). O Postgres tem de ser o desta máquina: serviço `db` / `foldex-db` na rede do container, ou uma porta publicada (`127.0.0.1`, `host.docker.internal`). Outro host é recusado, e a senha do teste não sai por proxy. Para outro alvo, responda **n** e exporte a conta você mesmo. Sem terminal (pipe, CI), as perguntas não aparecem: `K6_TEST_USER=1` usa ou cria, `K6_TEST_USER=0` pula, `K6_DELETE_TEST_USER=1` apaga no fim.
+
+```bash
+# sem conta de teste: só o que é público, ou uma conta que você já tem
+K6_TEST_USER=0 ./load/k6/run.sh smoke
+
 export K6_EMAIL='load@example.com'
 export K6_PASSWORD='…'
+export K6_TEST_USER=0
 
 ./load/k6/run.sh library-read
 ./load/k6/run.sh stats
@@ -72,6 +87,7 @@ O perfil manda em VUs e duração quando você não passou os dois. Dá para cob
 | `read` | 8 | 1m | Leitura concorrente. |
 | `write` | 1 | 30s | Escrita abaixo da cota. |
 | `stress` | 20 | 2m | Só com `K6_I_MEAN_IT=1`. 429 aqui é a cota funcionando. |
+| `capacity` | rampa de 5 min | 5 min | `./load/k6/run.sh capacity`. Um degrau por minuto. GET sobe 20→50→100→200→400 iterações/s. Escrita sobe 12→24→48→96→192 iterações/min. |
 
 ```bash
 K6_PROFILE=read K6_EMAIL=… K6_PASSWORD=… ./load/k6/run.sh library-read
@@ -89,11 +105,22 @@ O login devolve `fx_at` e `fx_csrf`. O script manda o cookie e copia o CSRF para
 
 ## Como ler o resultado
 
-O resumo também sai no terminal: por tag `name`, `avg`, `med`, `p(95)`, `p(99)` e `max`. A métrica `unexpected_status` é a fração de respostas fora do conjunto saudável daquele fluxo. O limiar padrão é menos de 1%. O `p(95)` de `http_req_duration` fica abaixo de 800 ms na leitura e de 1,5 s na escrita. No `stress` o limiar de latência sai, porque a cota responde na hora e o resto pode enfileirar.
+O resumo também sai no terminal: por tag `name`, `avg`, `med`, `p(95)`, `p(99)` e `max`. Quatro taxas dizem se a corrida quebrou:
 
-Ao mesmo tempo o `run.sh` envia as séries para o Prometheus da LAN (`http://192.168.68.65:9091/api/v1/write`), que o Grafana em http://192.168.68.65:3001 já usa. O painel é **Foldex — k6**, na pasta Foldex. No topo, o seletor **execução** é o `testid` daquela corrida (`smoke-20260927211604`, por exemplo). `K6_GRAFANA=0` desliga o envio e deixa só o terminal. Outro Prometheus: `K6_PROMETHEUS_RW_SERVER_URL`.
+| Métrica | O que conta | Limiar |
+|---|---|---|
+| `unexpected_status` | status fora do conjunto saudável daquele pedido, inclusive timeout | < 1% |
+| `timeouts` | o cliente desistiu aos 30 s, o mesmo prazo do axios da interface (`FOLDEX_K6_TIMEOUT`) | < 1% |
+| `server_errors` | HTTP 5xx | < 1% |
+| `quota_limited` | HTTP 429 | informativo. No `capacity` a escrita passa da cota de propósito, então 429 conta aqui e não como falha inesperada |
 
-O receptor de remote write do Prometheus da LAN precisou ser ligado (`--web.enable-remote-write-receiver`). Sem isso a API respondia 404 e o Grafana não tinha o que desenhar. A porta 9091 continua a mesma de antes, só passa a aceitar escrita de quem já alcançava a leitura.
+O `p(95)` de `http_req_duration` fica abaixo de 800 ms na leitura e de 1,5 s na escrita. No `stress` e no `capacity` o limiar de latência sai: o `capacity` existe para subir até aparecer erro.
+
+Cada iteração de leitura faz cerca de dez GETs, então 20 iterações/s são cerca de 200 GETs/s e 400 iterações/s são cerca de 4 mil. Cada iteração de escrita faz 7 mutações. A cota da conta é 120 mutações por minuto, perto de 17 iterações de escrita por minuto: o 429 deve aparecer no segundo minuto. Timeout e 5xx, se vierem, são o platô do processo, não o da cota. O pool do backend é 16 conexões. O `max_connections` é o da instância sob teste.
+
+O envio ao Prometheus fica desligado até existir `K6_PROMETHEUS_RW_SERVER_URL`. O lugar disso é `load/k6/env.local`, copiado de `load/k6/env.example` (o arquivo local não entra no git). Com a URL definida, o `run.sh` usa `-o experimental-prometheus-rw`. `K6_GRAFANA=0` deixa só o terminal. `K6_GRAFANA=1` sem URL encerra a corrida, para ela não seguir com o painel em branco. `K6_GRAFANA_URL` é a base do Grafana; o painel desta suíte tem uid `foldex-k6`. No topo, o seletor **execução** é o `testid` daquela corrida (`smoke-20260927211604`, por exemplo). Deixe **execução** e **fluxo** em All para a corrida nova aparecer na borda direita. Abaixo da latência, o mesmo painel mostra o Go, o pool, o Postgres e a máquina que esse Prometheus já coleta da instância sob teste. Isso descreve essa instância, não o processo k6.
+
+O Prometheus que recebe a escrita precisa de `--web.enable-remote-write-receiver`. Sem o receptor a API responde 404 e o Grafana não tem série para desenhar.
 
 O que fazer com um `p(95)` alto, **depois** de repetir o mesmo fluxo uma segunda vez (a primeira paga cache frio):
 
@@ -125,3 +152,15 @@ Cada iteração apaga o que criou. Se o processo morrer no meio, ficam linhas cu
 ## O que esta suíte não faz
 
 Não compara duas versões sozinha. Cada corrida ganha um `testid` (`fluxo-AAAAMMDDhhmmss`). No Grafana, escolha essa execução. O terminal continua imprimindo o mesmo resumo. Não mede o nginx, a menos que `K6_BASE_URL` seja a origem do web.
+
+## Corridas encadeadas
+
+Os fluxos acima são um de cada vez. `scripts/k6-appcheck.sh` e `scripts/k6-surge-run.sh` chamam o `run.sh` em sequência. `scripts/k6-gate-run.sh` executa `scripts/k6_gate.js`, que separa o 503 do timeout. Logs, a URL do banco e o snapshot da cota ficam em `/tmp`, nunca no repositório. A cota volta ao valor anterior no fim, e a conta `k6-load@foldex.local` é apagada.
+
+| Script | O que faz |
+|---|---|
+| `scripts/k6-appcheck.sh` | A superfície inteira no backend que já está no ar, depois os pedidos e a rampa. Até a capacidade, a cota armazenada não muda. Nos pedidos e na rampa ela sobe para 6000/min, o teto compilado, e a escrita acima disso recebe 429. |
+| `scripts/k6-surge-run.sh` | Para o backend local, sobe um processo com o teto compilado temporário de 20000/min e roda as três rampas. O arquivo no repositório continua em 6000. |
+| `scripts/k6-gate-run.sh` | O mesmo, com o binário da worktree de admissão (`FOLDEX_ADMISSION_ROOT`, senão `../foldex-admission`) e o script `scripts/k6_gate.js`, que conta 503 à parte. |
+
+`scripts/k6-watch.sh /tmp/foldex-appcheck` fica quieto até a corrida terminar ou gravar um alerta. `K6_BASE_URL` é a origem da API (padrão `http://127.0.0.1:9089`). `FOLDEX_K6_BACKEND`, `FOLDEX_K6_POSTGRES` e `FOLDEX_K6_RUN_DIR` trocam o container, o Postgres amostrado e o diretório de log. Sem `FOLDEX_K6_POSTGRES`, a amostra de CPU do banco fica de fora. O certificado vem do mount que o container atual já usa. Os endereços de Grafana e Prometheus ficam em `load/k6/env.local`.

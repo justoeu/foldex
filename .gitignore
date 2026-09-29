@@ -2,6 +2,9 @@
 .env*
 !.env.example
 
+# Password of the local k6 load account. load/k6/run.sh writes it.
+load/k6/.test-user
+
 # Go
 backend/bin/
 backend/coverage*.out

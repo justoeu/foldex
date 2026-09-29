@@ -11,6 +11,11 @@ export const profile = __ENV.K6_PROFILE || 'smoke'
 // its own shortcut and throws away the scenarios block.
 export const vus = positive(__ENV.FOLDEX_K6_VUS, 1)
 export const duration = __ENV.FOLDEX_K6_DURATION || '15s'
+// Same ceiling as the SPA axios client (web/src/api/client.ts). The Go server
+// keeps the socket for 2 minutes and nginx /api/ for 30, but the screen the
+// user is looking at gives up at 30s. A shorter cut here counts a timeout the
+// product does not show.
+export const requestTimeout = __ENV.FOLDEX_K6_TIMEOUT || '30s'
 
 function positive(raw, fallback) {
   const n = Number(raw)

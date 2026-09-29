@@ -31,7 +31,7 @@ open https://localhost:9444
 
 HTTPS on `:9444` uses mkcert locally — see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (ports & TLS). Pin a release with `FOLDEX_VERSION` in `.env`. Source build: `make up-build`.
 
-Load checks are manual and stay out of CI. [`load/k6/README.md`](load/k6/README.md) lists every flow and the command that runs it (`make load-k6 FLOW=smoke`).
+Load checks are manual and stay out of CI. [`load/k6/README.md`](load/k6/README.md) lists every flow and the command that runs it (`make load-k6 FLOW=smoke`). On a terminal it can create, reuse, and delete a local test account.
 
 ## What you get
 

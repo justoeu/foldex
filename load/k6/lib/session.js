@@ -1,6 +1,6 @@
 import http from 'k6/http'
 import { fail } from 'k6'
-import { baseURL } from './config.js'
+import { baseURL, requestTimeout } from './config.js'
 
 const jsonHeaders = { 'Content-Type': 'application/json', Accept: 'application/json' }
 
@@ -17,7 +17,7 @@ export function login(email, password) {
   const res = http.post(
     `${baseURL}/api/auth/login`,
     JSON.stringify({ email, password }),
-    { headers: jsonHeaders, tags: { name: 'POST /api/auth/login' }, redirects: 0 },
+    { headers: jsonHeaders, tags: { name: 'POST /api/auth/login' }, redirects: 0, timeout: requestTimeout },
   )
   if (res.status === 429) {
     fail('login is rate-limited (429). Wait for Retry-After before running again.')
@@ -52,5 +52,5 @@ export function authParams(session, name, extra) {
     'X-Foldex-CSRF': session.csrf,
   }
   if (extra) Object.assign(headers, extra)
-  return { headers, tags: { name }, redirects: 0 }
+  return { headers, tags: { name }, redirects: 0, timeout: requestTimeout }
 }
