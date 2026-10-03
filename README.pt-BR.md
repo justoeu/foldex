@@ -35,7 +35,8 @@ HTTPS em `:9444` usa mkcert no dev — ver [`docs/ARCHITECTURE.md`](docs/ARCHITE
 
 - Links e notas no mesmo grid (tags, pastas, pin, busca)
 - Previews OG / favicon / screenshot
-- Senha por pasta e senha master de recuperação
+- Senha por pasta e senha master de recuperação, na mesma tela em abas separadas
+- A atividade da conta é paginada (25, 50 ou 100). Os últimos três dias começam abertos; os mais antigos ficam recolhidos
 - Import/export: Netscape HTML, JSON, ZIP completo (DB + imagens)
 - Extensão MV3 + paleta (`⌥K`)
 - Multi-usuário (sessão, 2FA, Google, RBAC) — ligado por padrão

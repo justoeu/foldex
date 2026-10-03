@@ -53,16 +53,14 @@ const adminRow: AuthUser = {
 /** Renders the hub and clicks into a tile, so section tests start where the
  *  user now does: one click deep inside the consolidated settings hub. */
 async function renderAtSection(section: 'master' | 'locked', onEditFolder?: (folderId: number) => void) {
-  renderWithProviders(<SettingsPage onEditFolder={onEditFolder} />)
-  const tile = section === 'master' ? /^master password/i : /^locked folders/i
-  await userEvent.setup().click(await screen.findByRole('button', { name: tile }))
+  renderWithProviders(<SettingsPage initialSection={section} onEditFolder={onEditFolder} />)
 }
 
 describe('SettingsPage — hub', () => {
   it('shows the personal tiles for a normal user and hides the administration scope (RBAC)', async () => {
     renderWithProviders(<SettingsPage />, { session: userSession })
     expect(await screen.findByRole('button', { name: /open account/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /^master password/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^master password/i })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: /^locked folders/i })).toBeInTheDocument()
     // No scope segment and no admin tile: /api/admin 404s for this session,
     // so the hub must not promise a surface the server denies.
@@ -362,6 +360,13 @@ describe('SettingsPage — master password', () => {
 })
 
 describe('SettingsPage — locked folders reset', () => {
+  it('keeps the master password on a tab beside the locked folders', async () => {
+    await renderAtSection('locked')
+    expect(screen.getByRole('tab', { name: /locked folders/i })).toHaveAttribute('aria-selected', 'true')
+    await userEvent.setup().click(screen.getByRole('tab', { name: /master password/i }))
+    expect(await screen.findByText(/no master password configured/i)).toBeInTheDocument()
+  })
+
   it('lists locked folders and resets one with the master password', async () => {
     state.masterPassword = 'master-pass'
     lockedFolder(7, 'Vault')
@@ -377,25 +382,25 @@ describe('SettingsPage — locked folders reset', () => {
     expect(screen.getByText(/password cleared/i)).toBeInTheDocument()
   })
 
-  it('toggles between the reset and remove prompts on the same row', async () => {
+  it('opens a modal for reset and a different one for remove', async () => {
     state.masterPassword = 'master-pass'
     lockedFolder(13, 'VaultToggle')
     await renderAtSection('locked')
     await waitFor(() => expect(screen.getByText('VaultToggle')).toBeInTheDocument())
     const user = userEvent.setup()
     const row = within(screen.getByText('VaultToggle').closest('li') as HTMLElement)
+    expect(row.getByRole('button', { name: /reset password/i })).toHaveClass('fx-acc2-btn')
+    expect(row.getByRole('button', { name: /remove password/i })).toHaveClass('fx-acc2-btn-solid-danger')
 
     await user.click(row.getByRole('button', { name: /reset password/i }))
-    expect(row.getByText(/then set a new one/i)).toBeInTheDocument()
+    const resetDialog = await screen.findByRole('dialog', { name: /reset the password for vaulttoggle/i })
+    expect(within(resetDialog).getByText(/then set a new one/i)).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
 
-    // Switching to remove swaps the prompt (single shared input, new copy).
     await user.click(row.getByRole('button', { name: /remove password/i }))
-    expect(row.getByText(/left with no password/i)).toBeInTheDocument()
-    expect(row.queryByText(/then set a new one/i)).not.toBeInTheDocument()
-
-    // Re-clicking the same action collapses it.
-    await user.click(row.getByRole('button', { name: /remove password/i }))
-    expect(row.queryByText(/left with no password/i)).not.toBeInTheDocument()
+    const removeDialog = await screen.findByRole('dialog', { name: /remove the password for vaulttoggle/i })
+    expect(within(removeDialog).getByText(/left with no password/i)).toBeInTheDocument()
   })
 
   it('removes a folder password with the master and leaves it unprotected', async () => {
@@ -409,8 +414,9 @@ describe('SettingsPage — locked folders reset', () => {
     // Scope to the folder's row — the master section also has a "Remove" button.
     const row = within(screen.getByText('VaultRemove').closest('li') as HTMLElement)
     await user.click(row.getByRole('button', { name: /remove password/i }))
-    await user.type(row.getByLabelText('Master password'), 'master-pass')
-    await user.click(row.getByRole('button', { name: /^remove$/i }))
+    const dialog = await screen.findByRole('dialog')
+    await user.type(within(dialog).getByLabelText('Master password'), 'master-pass')
+    await user.click(within(dialog).getByRole('button', { name: /^remove$/i }))
 
     await waitFor(() => expect(state.folderPasswords[12]).toBeUndefined())
     expect(screen.getByText(/folder unlocked/i)).toBeInTheDocument()

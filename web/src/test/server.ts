@@ -181,8 +181,10 @@ const buildRoutes = (): Record<Method, Route[]> => ({
       url: /^\/api\/activity$/,
       handle: (_m, _d, p, s) => {
         const before = Number(p.get('before') ?? 0)
+        const requested = Number(p.get('limit') ?? 50)
+        const limit = Number.isFinite(requested) && requested > 0 ? Math.min(requested, 200) : 50
         const rows = before > 0 ? s.activity.filter((e) => e.id < before) : s.activity
-        return { entries: rows.slice(0, 50) }
+        return { entries: rows.slice(0, limit) }
       },
     },
     // The availability probes. Present so component tests exercise the REAL

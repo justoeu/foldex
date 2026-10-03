@@ -15,7 +15,8 @@ export function ImportPage({ onDone }: Props) {
   const [previewing, setPreviewing] = useState(false)
 
   return (
-    <div style={{ padding: 6, maxWidth: 1280 }}>
+    <div className="fx-hub-page fx-hub-page-account">
+      <div className="fx-account">
       <div className="fx-pagehead" style={{ marginBottom: 18 }}>
         <div>
           <div className="fx-pagehead-kicker">{t('import.page_kicker')}</div>
@@ -134,6 +135,7 @@ export function ImportPage({ onDone }: Props) {
           }}
         />
       )}
+      </div>
     </div>
   )
 }
