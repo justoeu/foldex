@@ -206,9 +206,14 @@ release-minor: ## Bump minor (1.0.8 → 1.1.0) and commit locally
 release-major: ## Bump major (1.0.8 → 2.0.0) and commit locally
 	@./scripts/release.sh major
 
+# Manual only. Not a CI gate. FLOW=smoke|library-read|… and K6_PROFILE=smoke|read|write|stress.
+load-k6: ## Run one k6 flow against a live instance (see load/k6/README.md)
+	@./load/k6/run.sh $(or $(FLOW),smoke)
+
 .PHONY: help env up apps-up down stop-all nuke logs ps up-mail down-mail \
         db-up db-down db-nuke db-logs storage-up storage-down storage-logs \
         restart-backend restart-web migrate-up migrate-down seed psql healthz \
         test-backend test-integration coverage-backend test-web coverage-web test-all coverage-all \
         extension test-extension \
-        release-patch release-minor release-major
+        release-patch release-minor release-major \
+        load-k6
