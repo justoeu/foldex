@@ -195,6 +195,12 @@ export const I = {
     </>
   ),
   check: <path d="m4 12 5 5 11-11" />,
+  copy: (
+    <>
+      <rect x="9" y="9" width="11" height="11" rx="2" />
+      <path d="M5 15V5a2 2 0 0 1 2-2h8" />
+    </>
+  ),
   sparkles: (
     <path d="M12 3v3M12 18v3M3 12h3M18 12h3M6 6l2 2M16 16l2 2M6 18l2-2M16 8l2-2" />
   ),
@@ -246,6 +252,14 @@ export const I = {
   chevronLeft: <path d="M15 6l-6 6 6 6" />,
   chevronRight: <path d="M9 6l6 6-6 6" />,
   chevronDown: <path d="M6 9l6 6 6-6" />,
+  incognito: (
+    <>
+      <path d="M4 13c1.5-4 4.5-6 8-6s6.5 2 8 6" />
+      <circle cx="8.5" cy="16" r="2.5" />
+      <circle cx="15.5" cy="16" r="2.5" />
+      <path d="M3 21h18" />
+    </>
+  ),
   pin: (
     <>
       <path d="M12 17v5" />

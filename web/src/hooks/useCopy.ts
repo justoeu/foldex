@@ -22,18 +22,23 @@ import { useState } from 'react'
 export function useCopy() {
   const [copiedValue, setCopiedValue] = useState<string | null>(null)
 
-  async function copy(value: string) {
+  async function copy(value: string): Promise<boolean> {
     try {
       await navigator.clipboard.writeText(value)
       setCopiedValue(value)
+      return true
     } catch {
       // See the note above: intentionally silent.
+      return false
     }
   }
 
   return {
     /** Whether THIS exact value is the one that was copied. */
     copied: (value: string) => copiedValue !== null && copiedValue === value,
+    /** Resolves false when the clipboard refused — for callers whose next
+     *  step depends on the copy having landed (a toast that tells the user
+     *  what to paste, where silence would read as success). */
     copy,
   }
 }

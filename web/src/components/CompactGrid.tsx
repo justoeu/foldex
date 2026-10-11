@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Favicon } from './Favicon'
 import { TagChip } from './TagChip'
 import { Icon, I } from './icons'
+import { CopyLinkButton, OpenLinkButton } from './OpenLinkButton'
 import { goHref } from '../api/links'
 import { goNoteHref } from '../api/notes'
 import { primaryColor } from '../lib/tagColor'
@@ -107,16 +108,8 @@ function CompactLinkImpl({ link: l, onEdit }: Readonly<{ link: Link; onEdit: (l:
         <div className="fx-compact-clicks">
           <Icon d={I.flame} size={11} /> {l.click_count}
         </div>
-        <a
-          className="fx-openbtn fx-openbtn-list"
-          href={goHref(l)}
-          target="_blank"
-          rel="noopener noreferrer"
-          data-tooltip={t('link_card.open_action')}
-          aria-label={t('common.open_link_aria', { title: l.title })}
-        >
-          {t('link_card.open_action')}
-        </a>
+        <CopyLinkButton link={l} small />
+        <OpenLinkButton link={l} small />
       </div>
     </article>
   )

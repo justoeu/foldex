@@ -4,6 +4,7 @@ import { TagChip } from './TagChip'
 import { Icon, I } from './icons'
 import { hostOf } from '../lib/url'
 import { goHref } from '../api/links'
+import { CopyLinkButton, OpenLinkButton } from './OpenLinkButton'
 import { relativeTime } from '../lib/time'
 import type { Link } from '../api/types'
 
@@ -265,19 +266,8 @@ function LinkCardActions({
       >
         <Icon d={I.trash} size={14} />
       </button>
-      <a
-        className="fx-openbtn"
-        href={goHref(link)}
-        target="_blank"
-        rel="noopener noreferrer"
-        data-tooltip={t('link_card.open_action')}
-        data-tooltip-side="top"
-        aria-label={t('common.open_link_aria', { title: link.title })}
-        onClick={onGo}
-      >
-        <span className="fx-openbtn-go">{t('link_card.open_action')}</span>
-        <Icon d={I.arrowR} size={14} />
-      </a>
+      <CopyLinkButton link={link} />
+      <OpenLinkButton link={link} onGo={onGo} />
     </div>
   )
 }
