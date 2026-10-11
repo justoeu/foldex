@@ -202,7 +202,15 @@
     "list_header_link": "Link",
     "list_header_tags": "Tags",
     "list_header_clicks": "Cliques",
-    "list_header_last": "Último"
+    "list_header_last": "Último",
+    "copy_link": "Copiar link",
+    "copy_link_aria": "Copiar o link {{title}}",
+    "copied": "Copiado",
+    "copied_aria": "Link {{title}} copiado",
+    "open_menu_aria": "Mais opções de acesso para {{title}}",
+    "open_incognito": "Copiar para aba anônima",
+    "incognito_hint": "Link copiado — abra uma janela anônima (⌘/Ctrl+Shift+N) e cole (⌘/Ctrl+V)",
+    "copy_failed": "Não foi possível copiar o link"
   },
   "link_dialog": {
     "create_title": "Captura visual",

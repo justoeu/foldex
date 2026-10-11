@@ -9,6 +9,7 @@ import { useAppDialogController } from './AppDialogs'
 import { useAppDndController } from './hooks/useAppDndController'
 import { useAppNavigationController, useFolderLockRecovery } from './AppNavigation'
 import { AppShell, type AppContentState } from './AppShell'
+import { CopyToastHost } from './components/CopyToast'
 import { MutationAlert } from './components/MutationAlert'
 import { useEntryCounts } from './hooks/useEntryCounts'
 
@@ -85,6 +86,8 @@ export default function App() {
         totalLinks={entryCountsQuery.data?.links ?? 0}
       />
       {dnd.mergeError && <MutationAlert message={dnd.mergeError} onClose={dnd.dismissMergeError} />}
+      {/* One host for every clipboard toast; triggers dispatch events. */}
+      <CopyToastHost />
     </>
   )
 }

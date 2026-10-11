@@ -202,7 +202,15 @@
     "list_header_link": "Link",
     "list_header_tags": "Tags",
     "list_header_clicks": "Clicks",
-    "list_header_last": "Last"
+    "list_header_last": "Last",
+    "copy_link": "Copy link",
+    "copy_link_aria": "Copy the link {{title}}",
+    "copied": "Copied",
+    "copied_aria": "Link {{title}} copied",
+    "open_menu_aria": "More access options for {{title}}",
+    "open_incognito": "Copy for an incognito tab",
+    "incognito_hint": "Link copied — open an incognito window (⌘/Ctrl+Shift+N) and paste (⌘/Ctrl+V)",
+    "copy_failed": "Could not copy the link"
   },
   "link_dialog": {
     "create_title": "Visual capture",

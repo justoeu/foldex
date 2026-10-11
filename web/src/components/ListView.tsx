@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Favicon } from './Favicon'
 import { TagChip } from './TagChip'
 import { Icon, I } from './icons'
+import { CopyLinkButton, OpenLinkButton } from './OpenLinkButton'
 import { useConfirm } from './ConfirmDialog'
 import { goHref, useDeleteLink } from '../api/links'
 import { goNoteHref, useDeleteNote } from '../api/notes'
@@ -168,18 +169,8 @@ function LinkRowImpl({
         >
           <Icon d={I.trash} size={13} />
         </button>
-        <a
-          className="fx-openbtn fx-openbtn-list"
-          href={goHref(l)}
-          target="_blank"
-          rel="noopener noreferrer"
-          data-tooltip={t('link_card.open_action')}
-          data-tooltip-side="top"
-          aria-label={t('common.open_link_aria', { title: l.title })}
-        >
-          <Icon d={I.open} size={12} />
-          <span>{t('link_card.open_action')}</span>
-        </a>
+        <CopyLinkButton link={l} small />
+        <OpenLinkButton link={l} small />
       </div>
     </div>
   )
