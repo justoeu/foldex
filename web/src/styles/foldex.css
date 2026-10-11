@@ -845,8 +845,8 @@ button.fx-openchev:hover, button.fx-openchev.fx-openchev-open { background: var(
 .fx-openwrap .fx-openbtn-list + button.fx-openchev { height: 24px; }
 button.fx-copybtn { margin-left: 4px; }
 button.fx-copybtn-small { margin-left: 0; }
-span.fx-openmenu {
-  position: absolute; top: calc(100% + 6px); right: 0; z-index: 30;
+div.fx-openmenu {
+  position: fixed; z-index: 30;
   min-width: 220px; display: flex; flex-direction: column;
   background: var(--fx-surface-3); border: 1px solid var(--fx-border);
   border-radius: 10px; padding: 4px;

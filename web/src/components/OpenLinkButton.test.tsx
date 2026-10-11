@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { CopyLinkButton, OpenLinkButton } from './OpenLinkButton'
+import { ListView } from './ListView'
 import { CopyToastHost } from './CopyToast'
 import { renderWithProviders } from '../test/renderWithProviders'
 import type { Link } from '../api/types'
@@ -133,5 +134,28 @@ describe('OpenLinkButton', () => {
     await user.click(screen.getByRole('button', { name: /more access options/i }))
     await user.click(screen.getByRole('menuitem', { name: /incognito/i }))
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/could not copy/i))
+  })
+})
+
+describe('the three views wire the group', () => {
+  // The wiring is where the small-variant lives; a view forgetting the copy
+  // button would pass every component test above.
+  it('ListView link rows carry the copy button and the open menu', async () => {
+    renderWithProviders(
+      <ListView
+        folders={[]}
+        entries={[{ kind: 'link', ...baseLink }]}
+        sort="created"
+        onEdit={vi.fn()}
+        onEditNote={vi.fn()}
+        onOpenFolder={vi.fn()}
+        onEditFolder={vi.fn()}
+      />,
+    )
+    const user = userEvent.setup()
+    clipboardMock(user)
+    expect(screen.getByRole('button', { name: /copy the link example article/i })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /more access options/i }))
+    expect(screen.getByRole('menu')).toBeInTheDocument()
   })
 })

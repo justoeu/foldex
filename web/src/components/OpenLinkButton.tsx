@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { createPortal } from 'react-dom'
 import { Icon, I } from './icons'
 import { showCopyToast } from './CopyToast'
 import { useCopy } from '../hooks/useCopy'
+import { usePortalMenu } from '../hooks/usePortalMenu'
 import { goHref } from '../api/links'
 import type { Link } from '../api/types'
 
@@ -53,27 +54,13 @@ export function OpenLinkButton({
 }: Readonly<{ link: Link; onGo?: () => void; small?: boolean }>) {
   const { t } = useTranslation()
   const { copy } = useCopy()
-  const [open, setOpen] = useState(false)
-  const wrap = useRef<HTMLSpanElement>(null)
-
-  useEffect(() => {
-    if (!open) return
-    function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') setOpen(false)
-    }
-    function onDown(e: MouseEvent) {
-      if (!wrap.current?.contains(e.target as Node)) setOpen(false)
-    }
-    document.addEventListener('keydown', onKey)
-    document.addEventListener('mousedown', onDown)
-    return () => {
-      document.removeEventListener('keydown', onKey)
-      document.removeEventListener('mousedown', onDown)
-    }
-  }, [open])
+  // The cards and list rows clip their own overflow (rounded corners), which
+  // would cut an in-place dropdown — the menu portals to <body> like every
+  // other menu in the shell.
+  const { open, pos, btnRef, menuRef, toggle, close } = usePortalMenu()
 
   async function copyForIncognito() {
-    setOpen(false)
+    close()
     const ok = await copy(link.url)
     // Failure is told too: silence here would read as "incognito opens
     // later", which it never will.
@@ -81,7 +68,7 @@ export function OpenLinkButton({
   }
 
   return (
-    <span className="fx-openwrap" ref={wrap}>
+    <span className="fx-openwrap">
       <a
         className={'fx-openbtn' + (small ? ' fx-openbtn-list' : '')}
         href={goHref(link)}
@@ -98,22 +85,23 @@ export function OpenLinkButton({
       </a>
       <button
         type="button"
+        ref={btnRef}
         className={'fx-openchev' + (open ? ' fx-openchev-open' : '')}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={t('link_card.open_menu_aria', { title: link.title })}
-        onClick={() => setOpen((v) => !v)}
+        onClick={toggle}
       >
         <Icon d={I.chevronDown} size={12} />
       </button>
-      {open && (
-        <span className="fx-openmenu" role="menu">
+      {open && pos && createPortal(
+        <div ref={menuRef} className="fx-portalmenu fx-openmenu" role="menu" style={{ top: pos.top, right: pos.right }}>
           <button
             type="button"
             role="menuitem"
             className="fx-openmenu-item"
             onClick={() => {
-              setOpen(false)
+              close()
               void copy(link.url)
             }}
           >
@@ -122,7 +110,8 @@ export function OpenLinkButton({
           <button type="button" role="menuitem" className="fx-openmenu-item" onClick={() => void copyForIncognito()}>
             <Icon d={I.incognito} size={13} /> {t('link_card.open_incognito')}
           </button>
-        </span>
+        </div>,
+        document.body,
       )}
     </span>
   )
