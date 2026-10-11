@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react'
-import { useTranslation } from 'react-i18next'
 
 /**
  * A tiny one-line toast, bottom-center, for clipboard flows.
@@ -18,7 +17,6 @@ export function showCopyToast(message: string): void {
 }
 
 export function CopyToastHost() {
-  const { t } = useTranslation()
   const [message, setMessage] = useState('')
 
   useEffect(() => {
