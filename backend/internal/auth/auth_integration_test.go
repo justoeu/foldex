@@ -3053,3 +3053,38 @@ func TestMe_AnOrphanedTOTPChallengeIsNotReplayed(t *testing.T) {
 		assert.Less(t, pa.MaxAge, 0, "fx_pa must be expired, not left for the next reload to replay")
 	}
 }
+
+// The autopsy a refused challenge gets in the log must classify the four
+// liveness failures correctly — each points at a different fix, and a wrong
+// label sends the operator chasing the wrong one.
+func TestDiagnoseChallenge_ClassifiesTheRefusal(t *testing.T) {
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
+	require.NoError(t, testdb.Reset(context.Background(), h.pool))
+	testdb.SeedUserWithPassword(t, h.pool, "diag@example.com", "a good password", "editor")
+	enrolUser(t, h, "diag@example.com", "a good password")
+
+	c := h.client(t)
+	require.Equal(t, http.StatusOK, c.do(http.MethodPost, "/api/auth/login", map[string]string{
+		"email": "diag@example.com", "password": "a good password",
+	}).Code)
+	pa := c.cookies[auth.CookiePreAuth]
+	require.NotEmpty(t, pa)
+
+	// A second login consumes the first challenge — the refusal reason for
+	// the OLD token must read "consumed", not "unknown".
+	require.Equal(t, http.StatusOK, c.do(http.MethodPost, "/api/auth/login", map[string]string{
+		"email": "diag@example.com", "password": "a good password",
+	}).Code)
+
+	diag, err := h.repo.DiagnoseChallenge(context.Background(), pa)
+	require.NoError(t, err)
+	assert.True(t, diag.Found)
+	assert.True(t, diag.Consumed)
+	assert.False(t, diag.Expired)
+
+	// A token nobody minted must be "not found", which is what separates a
+	// lost cookie from a dead challenge.
+	diag, err = h.repo.DiagnoseChallenge(context.Background(), "no-such-token")
+	require.NoError(t, err)
+	assert.False(t, diag.Found)
+}

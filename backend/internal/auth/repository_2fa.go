@@ -250,6 +250,44 @@ func inheritChallengeCodesTx(ctx context.Context, tx pgx.Tx, previousID, id int6
 // It refuses a challenge whose attempts are already spent, so an exhausted
 // pre-auth token cannot be used to keep probing: the caller gets the same
 // answer whether the budget ran out a second ago or the token never existed.
+// ChallengeRejection is the post-mortem of a refused pre-auth token: which
+// row the cookie pointed at, and which of the four liveness conditions had
+// already failed. Built only on the failure path, for the log line that
+// answers "why is this browser stuck" without guessing.
+type ChallengeRejection struct {
+	Found         bool
+	Consumed      bool
+	Expired       bool
+	VersionSkewed bool
+	UserInactive  bool
+}
+
+// DiagnoseChallenge classifies a token ResolveChallenge refused. One extra
+// query, only on failure: the happy path never pays for the autopsy.
+func (r *Repository) DiagnoseChallenge(ctx context.Context, rawToken string) (ChallengeRejection, error) {
+	var out ChallengeRejection
+	if rawToken == "" {
+		return out, nil
+	}
+	var consumed, expired *bool
+	err := r.pool.QueryRow(ctx, `
+		SELECT c.consumed_at IS NOT NULL, c.expires_at <= now(),
+		       c.token_version <> u.token_version, u.status <> 'active'
+		FROM auth_challenge c JOIN app_user u ON u.id = c.user_id
+		WHERE c.token_hash = $1`,
+		secrets.Hash(rawToken)).Scan(&consumed, &expired, &out.VersionSkewed, &out.UserInactive)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return out, nil
+	}
+	if err != nil {
+		return out, fmt.Errorf("diagnose challenge: %w", err)
+	}
+	out.Found = true
+	out.Consumed = consumed != nil && *consumed
+	out.Expired = expired != nil && *expired
+	return out, nil
+}
+
 func (r *Repository) ResolveChallenge(ctx context.Context, rawToken string, purposes ...ChallengePurpose) (Challenge, error) {
 	if rawToken == "" {
 		return Challenge{}, ErrChallengeInvalid

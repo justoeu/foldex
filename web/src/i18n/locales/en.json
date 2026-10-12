@@ -929,7 +929,14 @@
     "expired": "This sign-in attempt expired. Please sign in again.",
     "locked_out": "Too many incorrect codes. Please sign in again.",
     "invalid_with_attempts_one": "That code is not valid. {{count}} attempt left.",
-    "invalid_with_attempts_other": "That code is not valid. {{count}} attempts left."
+    "invalid_with_attempts_other": "That code is not valid. {{count}} attempts left.",
+    "countdown_one": "Expires in {{count}}s",
+    "countdown_other": "Expires in {{count}}s",
+    "expired_title": "Code expired",
+    "expired_email_desc": "The code sent to {{email}} has expired. Want us to send another?",
+    "expired_final_desc": "The code window has closed. Return to the login screen to start again.",
+    "resend_action": "Send again",
+    "back_to_login": "Back to login"
   },
   "auth_forgot": {
     "kicker": "account recovery",

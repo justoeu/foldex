@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, afterEach } from 'vitest'
-import { fireEvent, screen, waitFor } from '@testing-library/react'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
+import { act, fireEvent, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { TwoFactorScreen } from './TwoFactorScreen'
 import { renderWithProviders } from '../../test/renderWithProviders'
@@ -201,5 +201,79 @@ describe('TwoFactorScreen', () => {
 
     await user.paste('12345')
     expect(submit).toBeDisabled()
+  })
+})
+
+describe('the entry window (60s countdown)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  function renderWithProbe(p: Partial<TwoFactorPending> = {}) {
+    return renderScreen(p)
+  }
+
+  // The window is the product contract: sixty ticks from mount, and the
+  // number the user reads must be the one being counted.
+  it('counts down from 60', async () => {
+    renderWithProbe()
+    expect(screen.getByText(/expires in 60s/i)).toBeInTheDocument()
+    act(() => { vi.advanceTimersByTime(2000) })
+    expect(screen.getByText(/expires in 58s/i)).toBeInTheDocument()
+  })
+
+  // App mode (no email asked): expiry says so and returns to the login form —
+  // the signOut path, so the pre-auth cookie dies with the screen.
+  it('expires to login when no email was requested', async () => {
+    const post = vi.spyOn(http, 'post')
+    renderWithProbe({ methods: ['totp', 'recovery_code'] })
+    act(() => { vi.advanceTimersByTime(60_000) })
+    expect(await screen.findByText(/window has closed|código acabou/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /back to login/i })).toBeInTheDocument()
+    act(() => { vi.advanceTimersByTime(3000) })
+    await waitFor(() =>
+      expect(screen.getByTestId('session-status').textContent).toBe('anonymous'),
+    )
+    expect(post).not.toHaveBeenCalledWith('/api/auth/2fa/email', expect.anything())
+  })
+
+  // Email mode: the first expiry OFFERS the resend instead of bouncing —
+  // the code may simply be stuck in a slow relay.
+  it('offers one resend after the first email window closes', async () => {
+    const post = vi.spyOn(http, 'post').mockResolvedValue({ status: 202 } as never)
+    renderWithProbe()
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    await user.click(screen.getByRole('button', { name: /e-?mail/i }))
+
+    act(() => { vi.advanceTimersByTime(60_000) })
+    expect(await screen.findByText(/send another|enviar outro/i)).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /send again|enviar novamente/i }))
+    expect(post).toHaveBeenCalledWith('/api/auth/2fa/email')
+    // The second window runs a fresh 60.
+    expect(await screen.findByText(/expires in 60s/i)).toBeInTheDocument()
+    act(() => { vi.advanceTimersByTime(59_000) })
+    expect(screen.getByText(/expires in 1s/i)).toBeInTheDocument()
+  })
+
+  // The resend is one-time by spec: the second expiry is final and signs the
+  // caller out, so "send again" can never become its own loop.
+  it('is final on the second expiry', async () => {
+    vi.spyOn(http, 'post').mockResolvedValue({ status: 202 } as never)
+    renderWithProbe()
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    await user.click(screen.getByRole('button', { name: /e-?mail/i }))
+    act(() => { vi.advanceTimersByTime(60_000) })
+    await user.click(await screen.findByRole('button', { name: /send again|enviar novamente/i }))
+
+    act(() => { vi.advanceTimersByTime(60_000) })
+    expect(await screen.findByText(/window has closed|código acabou/i)).toBeInTheDocument()
+    act(() => { vi.advanceTimersByTime(3000) })
+    await waitFor(() =>
+      expect(screen.getByTestId('session-status').textContent).toBe('anonymous'),
+    )
   })
 })

@@ -929,7 +929,14 @@
     "expired": "Este intento de acceso ha caducado. Inicia sesión de nuevo.",
     "locked_out": "Demasiados códigos incorrectos. Inicia sesión de nuevo.",
     "invalid_with_attempts_one": "Ese código no es válido. Queda {{count}} intento.",
-    "invalid_with_attempts_other": "Ese código no es válido. Quedan {{count}} intentos."
+    "invalid_with_attempts_other": "Ese código no es válido. Quedan {{count}} intentos.",
+    "countdown_one": "Expira en {{count}}s",
+    "countdown_other": "Expira en {{count}}s",
+    "expired_title": "Código expirado",
+    "expired_email_desc": "El código enviado a {{email}} expiró. ¿Quieres que enviemos otro?",
+    "expired_final_desc": "La ventana del código se cerró. Vuelve al inicio de sesión para empezar de nuevo.",
+    "resend_action": "Enviar de nuevo",
+    "back_to_login": "Volver al inicio de sesión"
   },
   "auth_forgot": {
     "kicker": "recuperación de cuenta",
