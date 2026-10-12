@@ -1188,7 +1188,9 @@
     "session_revoke_failed": "Could not end the session. Try again.",
     "activity_total_loaded_one": "{{count}} action loaded",
     "activity_total_loaded_other": "{{count}} actions loaded",
-    "page_title": "My account"
+    "page_title": "My account",
+    "activity_filter_logins": "Logins",
+    "activity_filter_clicks": "Clicks"
   },
   "tokens": {
     "section_desc": "For the browser extension and for scripts. A token reads and writes your links and notes; it cannot change your password, manage users or download a backup.",
@@ -1768,7 +1770,8 @@
     "addon_steps_title": "Installation",
     "addon_step1": "Download the .zip and extract it.",
     "addon_step3": "Enable Developer mode and choose “Load unpacked”, pointing at the extracted folder.",
-    "addon_permissions": "Permissions: activeTab, storage, scripting and alarms, plus access to this server's origin — the origin is requested only when you save a server address."
+    "addon_permissions": "Permissions: activeTab, storage, scripting and alarms, plus access to this server's origin — the origin is requested only when you save a server address.",
+    "action_link_clicked": "Opened link"
   },
   "profile": {
     "name_label": "Display name",

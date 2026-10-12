@@ -1188,7 +1188,9 @@
     "session_revoke_failed": "No se pudo cerrar la sesión. Inténtalo de nuevo.",
     "activity_total_loaded_one": "{{count}} acción cargada",
     "activity_total_loaded_other": "{{count}} acciones cargadas",
-    "page_title": "Mi cuenta"
+    "page_title": "Mi cuenta",
+    "activity_filter_logins": "Inicios",
+    "activity_filter_clicks": "Clics"
   },
   "tokens": {
     "section_desc": "Para la extensión del navegador y para scripts. Un token lee y escribe tus enlaces y notas; no cambia tu contraseña, no administra usuarios ni descarga copias de seguridad.",
@@ -1304,8 +1306,8 @@
     "audit_next": "Más antiguos",
     "attention_empty": "Nada necesita atención.",
     "by_actor": "por {{email}}",
-    "action_login_succeeded": "Inició sesión",
-    "action_login_failed": "Fallo de acceso",
+    "action_login_succeeded": "Sesión iniciada",
+    "action_login_failed": "Inicio fallido",
     "action_user_role_changed": "Rol cambiado",
     "action_user_status_changed": "Estado cambiado",
     "action_user_deleted": "Cuenta eliminada",
@@ -1768,7 +1770,8 @@
     "addon_steps_title": "Instalación",
     "addon_step1": "Descarga el .zip y extráelo.",
     "addon_step3": "Activa el Developer mode y elige “Load unpacked”, apuntando a la carpeta extraída.",
-    "addon_permissions": "Permisos: activeTab, storage, scripting y alarms, además del acceso al origen de este servidor; el origen solo se pide al guardar una dirección del servidor."
+    "addon_permissions": "Permisos: activeTab, storage, scripting y alarms, además del acceso al origen de este servidor; el origen solo se pide al guardar una dirección del servidor.",
+    "action_link_clicked": "Enlace abierto"
   },
   "profile": {
     "name_label": "Nombre visible",

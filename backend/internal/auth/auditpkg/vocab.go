@@ -91,6 +91,21 @@ func ContentActions() []string {
 	return out
 }
 
+// OwnActivityActions is what "my activity" shows: everything the account DID,
+// as opposed to what was done TO it. Content actions are the bulk; the two
+// login events are included because "I signed in from a device I don't
+// recognize" is exactly what this screen exists to surface. Link clicks are
+// NOT here: they live in click_log, not audit_log, and are merged by
+// ListOwnActivity at read time rather than dual-written.
+func OwnActivityActions() []string {
+	return append(ContentActions(),
+		AuditLoginSucceeded, AuditLoginFailed)
+}
+
+// AuditLinkClicked is the action label ListOwnActivity stamps on click_log
+// rows so the wire shape matches audit entries downstream.
+const AuditLinkClicked = "link.clicked"
+
 const (
 	SeverityInfo     = "info"
 	SeverityWarning  = "warning"

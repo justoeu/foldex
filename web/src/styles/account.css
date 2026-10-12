@@ -397,6 +397,8 @@ span.fx-acc2-act-dot-create { background: var(--acc-ok); }
 span.fx-acc2-act-dot-edit { background: var(--acc-dot-edit); }
 span.fx-acc2-act-dot-delete { background: var(--acc-dot-del); }
 span.fx-acc2-act-dot-other { background: var(--acc-warn-dot); }
+span.fx-acc2-act-dot-click { background: var(--acc-primary); }
+span.fx-acc2-act-dot-login { background: var(--acc-dot-edit); }
 span.fx-acc2-act-title { flex: 1 1 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 span.fx-acc2-act-ip { font-family: var(--fx-mono); font-size: 11.5px; color: var(--acc-faint-2); flex: none; }
 div.fx-acc2-empty {

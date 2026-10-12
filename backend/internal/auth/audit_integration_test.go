@@ -145,7 +145,7 @@ func TestCrossUser_OwnActivityNeverReturnsAnotherAccountsRows(t *testing.T) {
 
 // "Your role was changed to admin" is something done TO the account, not BY it.
 // A feed titled "my activity" must not report it.
-func TestAudit_OwnFeedExcludesIdentityEvents(t *testing.T) {
+func TestAudit_OwnFeedIncludesLoginsExcludesAdminOnYou(t *testing.T) {
 	repo, _, owner, member := auditFixture(t)
 	writeAudit(t, repo, auth.AuditRecord{
 		Action: auth.AuditRoleChanged, ActorID: &owner.ID, TargetID: &member.ID,
@@ -159,8 +159,14 @@ func TestAudit_OwnFeedExcludesIdentityEvents(t *testing.T) {
 
 	entries, err := repo.ListOwnActivity(context.Background(), int64(member.ID), 0, 50)
 	require.NoError(t, err)
-	require.Len(t, entries, 1)
+	// The login is the member's OWN action — it belongs. The role change was
+	// done TO the member by the admin — it does not.
+	require.Len(t, entries, 2)
 	assert.Equal(t, auth.AuditNoteUpdated, entries[0].Action)
+	assert.Equal(t, auth.AuditLoginSucceeded, entries[1].Action)
+	for _, e := range entries {
+		assert.NotEqual(t, auth.AuditRoleChanged, e.Action)
+	}
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -824,8 +830,16 @@ func TestActivityAPI_ServesTheCallerTheirOwnRowsWithSubjects(t *testing.T) {
 
 	body := decode(t, owner.do(http.MethodGet, "/api/activity", nil))
 	entries := body["entries"].([]any)
-	require.Len(t, entries, 1)
-	assert.Equal(t, "My private bookmark", entries[0].(map[string]any)["subject"])
+	// The link.created is the one row with a subject; logins may also appear
+	// from the harness bootstrap but carry none.
+	var subjects []string
+	for _, raw := range entries {
+		if s, ok := raw.(map[string]any)["subject"].(string); ok && s != "" {
+			subjects = append(subjects, s)
+		}
+	}
+	require.Len(t, subjects, 1)
+	assert.Equal(t, "My private bookmark", subjects[0])
 
 	// And the SAME row, read through the administrative projection, carries no
 	// label at all — the two answers are the read split.

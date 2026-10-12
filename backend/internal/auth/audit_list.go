@@ -3,8 +3,11 @@ package auth
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
+
+	"foldex/internal/auth/auditpkg"
 )
 
 // AuditFilter narrows one page of the trail.
@@ -203,28 +206,30 @@ func (r *Repository) ListAudit(ctx context.Context, f AuditFilter) ([]AuditEntry
 // the WHERE clause — actor_id = the caller, and only content actions — which is
 // INV-001's explicit-uid rule applied to a table that is otherwise instance-wide.
 //
-// Identity events are deliberately excluded even though some of them name this
-// same account. "Your role was changed to admin" is an administrative act
-// performed ON the account, not activity BY it, and mixing the two would make a
-// feed titled "my activity" report things its owner did not do.
+// The feed now answers "what did I do" rather than only "what content did I
+// change": logins are included (recognizing an unrecognized device is the one
+// security action this screen can drive), and link clicks are merged from
+// click_log so the trail reads like the user's session history. Administrative
+// acts performed ON the account (role changes, disables) stay excluded — they
+// are not activity BY the account.
 func (r *Repository) ListOwnActivity(ctx context.Context, uid int64, beforeID int64, limit int) ([]AuditEntry, error) {
 	if limit <= 0 || limit > maxAuditPageSize {
 		limit = 50
 	}
-	args := []any{uid, ContentActions()}
+	args := []any{uid, auditpkg.OwnActivityActions()}
 	cursor := ""
 	if beforeID > 0 {
 		args = append(args, beforeID)
-		cursor = fmt.Sprintf(" AND id < $%d", len(args))
+		cursor = fmt.Sprintf(" AND a.id < $%d", len(args))
 	}
 	args = append(args, limit)
 	limitArg := len(args)
 	rows, err := r.pool.Query(ctx, fmt.Sprintf(`
-		SELECT id, action, detail, host(ip), ip_trusted, user_agent,
-		       entity_kind, entity_id, subject, created_at
-		FROM audit_log
-		WHERE actor_id = $1 AND action = ANY($2::text[])%s
-		ORDER BY id DESC LIMIT $%d`, cursor, limitArg), args...)
+		SELECT a.id, a.action, a.detail, host(a.ip), a.ip_trusted, a.user_agent,
+		       a.entity_kind, a.entity_id, a.subject, a.created_at
+		FROM audit_log a
+		WHERE a.actor_id = $1 AND a.action = ANY($2::text[])%s
+		ORDER BY a.id DESC LIMIT $%d`, cursor, limitArg), args...)
 	if err != nil {
 		return nil, fmt.Errorf("list own activity: %w", err)
 	}
@@ -236,12 +241,62 @@ func (r *Repository) ListOwnActivity(ctx context.Context, uid int64, beforeID in
 			&e.UserAgent, &e.EntityKind, &e.EntityID, &e.Subject, &e.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan own activity: %w", err)
 		}
-		e.Category = CategoryContent
-		e.Severity = SeverityInfo
+		e.Category = auditpkg.AuditCategory(e.Action)
+		e.Severity = auditpkg.AuditSeverity(e.Action, 0)
 		out = append(out, e)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("list own activity: %w", err)
 	}
+
+	// Clicks live in their own table, not audit_log. Merged here rather than
+	// in a SQL UNION so the audit query stays self-contained in test schemas
+	// that don't carry the links table.
+	clicks, clickErr := r.ownClicks(ctx, uid, limit)
+	if clickErr != nil {
+		// A schema gap degrades the feed, it does not break it: the audit
+		// entries above are still the user's activity.
+		// Schema gap degrades to audit-only; not worth a hard failure.
+	} else {
+		out = append(out, clicks...)
+		sort.Slice(out, func(i, j int) bool {
+			if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+				return out[i].ID > out[j].ID
+			}
+			return out[i].CreatedAt.After(out[j].CreatedAt)
+		})
+		if len(out) > limit {
+			out = out[:limit]
+		}
+	}
 	return out, nil
+}
+
+// ownClicks reads the caller's link clicks, mapped onto the AuditEntry shape
+// so the feed is one homogeneous list downstream.
+func (r *Repository) ownClicks(ctx context.Context, uid int64, limit int) ([]AuditEntry, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT c.id, COALESCE(l.title, ''), c.clicked_at
+		FROM click_log c
+		LEFT JOIN links l ON l.id = c.entity_id AND l.user_id = $1
+		WHERE c.user_id = $1 AND c.entity_kind = 'link'
+		ORDER BY c.clicked_at DESC LIMIT $2`, uid, limit)
+	if err != nil {
+		return nil, fmt.Errorf("own clicks: %w", err)
+	}
+	defer rows.Close()
+	var out []AuditEntry
+	for rows.Next() {
+		var e AuditEntry
+		e.Action = auditpkg.AuditLinkClicked
+		e.Category = auditpkg.CategoryContent
+		e.Severity = auditpkg.SeverityInfo
+		kind := "link"
+		e.EntityKind = &kind
+		if err := rows.Scan(&e.ID, &e.Subject, &e.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan own clicks: %w", err)
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
 }

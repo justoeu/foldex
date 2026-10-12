@@ -29,7 +29,7 @@ function readPageSize(): PageSize {
 /** The chart window: two weeks, ending today. Same span the design mock shows. */
 const CHART_DAYS = 14
 
-type Kind = 'all' | 'links' | 'folders' | 'backups'
+type Kind = 'all' | 'links' | 'folders' | 'backups' | 'logins' | 'clicks'
 
 const KIND_BY_ENTITY: Record<string, Kind> = {
   link: 'links',
@@ -37,16 +37,24 @@ const KIND_BY_ENTITY: Record<string, Kind> = {
   backup: 'backups',
 }
 
+const KIND_BY_ACTION: Record<string, Kind> = {
+  'login.succeeded': 'logins',
+  'login.failed': 'logins',
+  'link.clicked': 'clicks',
+}
+
 /** The dot color classes by action prefix — create/edit/delete/other. */
 function dotClass(action: string): string {
   if (action.startsWith('create')) return 'fx-acc2-act-dot-create'
+  if (action === 'link.clicked') return 'fx-acc2-act-dot-click'
+  if (action.startsWith('login.')) return 'fx-acc2-act-dot-login'
   if (action.startsWith('update') || action.startsWith('edit')) return 'fx-acc2-act-dot-edit'
   if (action.startsWith('delete')) return 'fx-acc2-act-dot-delete'
   return 'fx-acc2-act-dot-other'
 }
 
 function entryKind(e: AuditEntry): Kind {
-  return (e.entity_kind && KIND_BY_ENTITY[e.entity_kind]) || 'all'
+  return KIND_BY_ACTION[e.action] ?? (e.entity_kind && KIND_BY_ENTITY[e.entity_kind]) ?? 'all'
 }
 
 /** Local civil date, matching the chart's day buckets: a UTC slice would
@@ -246,7 +254,7 @@ export function ActivitySection() {
               aria-label={t('account.activity_search_aria')}
             />
             <div className="fx-acc2-seg" role="group" aria-label={t('account.activity_filter_aria')}>
-              {(['all', 'links', 'folders', 'backups'] as const).map((k) => (
+              {(['all', 'links', 'folders', 'logins', 'clicks', 'backups'] as const).map((k) => (
                 <button
                   key={k}
                   type="button"
