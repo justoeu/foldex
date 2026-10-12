@@ -357,7 +357,7 @@ button.fx-acc2-seg-btn {
   font-size: 13.5px; cursor: pointer; background: transparent;
   color: var(--acc-muted); font-weight: 500;
 }
-button.fx-acc2-seg-btn[aria-selected="true"] {
+button.fx-acc2-seg-btn[aria-pressed="true"] {
   background: #fff; color: var(--acc-ink); box-shadow: 0 1px 2px rgba(0,0,0,0.08);
 }
 div.fx-acc2-days { display: flex; flex-direction: column; gap: 16px; }
@@ -487,7 +487,7 @@ div.fx-acc2-notice-inline { margin-bottom: 16px; padding: 14px 20px; text-align:
 .fx-dark .fx-account div.fx-acc2-day,
 .fx-dark .fx-account div.fx-acc2-empty,
 .fx-dark .fx-account div.fx-acc2-logout-all { background: #221e3e; }
-.fx-dark .fx-account button.fx-acc2-seg-btn[aria-selected="true"],
+.fx-dark .fx-account button.fx-acc2-seg-btn[aria-pressed="true"],
 .fx-dark .fx-account button.fx-acc2-tab[aria-selected="true"] { background: transparent; }
 .fx-dark .fx-account button.fx-acc2-btn-outline,
 .fx-dark .fx-account button.fx-acc2-btn-danger,

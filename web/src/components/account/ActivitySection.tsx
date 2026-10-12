@@ -229,7 +229,10 @@ export function ActivitySection() {
                 <div
                   className="fx-acc2-chart-col"
                   key={c.key}
-                  title={t('account.activity_day_tip', { day: c.label, count: c.count })}
+                  role="img"
+                  aria-label={t('account.activity_day_tip_aria', { day: c.label, count: c.count })}
+                  data-tooltip={t('account.activity_day_tip_other', { day: c.label, count: c.count })}
+                  data-tooltip-side="top"
                 >
                   <div
                     className={'fx-acc2-chart-bar' + (c.count ? '' : ' fx-acc2-chart-bar-empty')}
