@@ -10,7 +10,7 @@ import type { TwoFactorPending } from '../../auth/types'
 const pending: TwoFactorPending = {
   purpose: 'totp',
   email: 'ad•••••@foldex.test',
-  methods: ['totp', 'recovery_code', 'email_otp'],
+  methods: ['totp', 'recovery_code'],
   maxAttempts: 5,
 }
 
@@ -145,42 +145,37 @@ describe('TwoFactorScreen', () => {
   })
 
   it('shows the non-enumerating confirmation after the e-mail request succeeds', async () => {
-    const user = userEvent.setup()
     vi.spyOn(http, 'post').mockResolvedValue({ status: 202 } as never)
-
-    renderScreen()
-    await user.click(screen.getByRole('button', { name: /e-mail me a code/i }))
-
+    renderScreen({ methods: ['totp', 'recovery_code', 'email_otp'] })
+    // Auto-send fires on mount; the notice arrives without a click.
     expect(await screen.findByRole('status')).toHaveTextContent(/ad•••••@foldex\.test/)
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 
   it('reports a transport failure without claiming that the e-mail was sent', async () => {
-    const user = userEvent.setup()
     vi.spyOn(http, 'post').mockImplementation(() => Promise.reject({ request: {} }) as never)
-
-    renderScreen()
-    await user.click(screen.getByRole('button', { name: /e-mail me a code/i }))
-
+    renderScreen({ methods: ['totp', 'recovery_code', 'email_otp'] })
     expect(await screen.findByRole('alert')).toHaveTextContent(/check your connection and try again/i)
     expect(screen.queryByRole('status')).not.toBeInTheDocument()
   })
 
-  it('coalesces rapid e-mail requests until the first one settles', async () => {
+  it('auto-sends once on mount and the manual button still works after settle', async () => {
     let resolve!: () => void
     const post = vi.spyOn(http, 'post').mockImplementation(() =>
       new Promise((done) => { resolve = () => done({ status: 202 }) }) as never)
-    renderScreen()
+    renderScreen({ methods: ['totp', 'recovery_code', 'email_otp'] })
+
+    // The auto-send is in flight; the button reflects that.
     const button = screen.getByRole('button', { name: /e-mail me a code/i })
-
-    fireEvent.click(button)
-    fireEvent.click(button)
-
-    expect(post).toHaveBeenCalledTimes(1)
     expect(button).toBeDisabled()
     resolve()
     expect(await screen.findByRole('status')).toHaveTextContent(/if a code could be sent/i)
     expect(button).toBeEnabled()
+
+    // A manual click after settle sends a second code.
+    const user = userEvent.setup()
+    await user.click(button)
+    expect(post).toHaveBeenCalledTimes(2)
   })
 
   // The e-mail option only exists when the server said it does — an instance
@@ -244,12 +239,11 @@ describe('the entry window (60s countdown)', () => {
   // the code may simply be stuck in a slow relay.
   it('offers one resend after the first email window closes', async () => {
     const post = vi.spyOn(http, 'post').mockResolvedValue({ status: 202 } as never)
-    renderWithProbe()
+    renderWithProbe({ methods: ['totp', 'recovery_code', 'email_otp'] })
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
-    await user.click(screen.getByRole('button', { name: /e-?mail/i }))
 
-    act(() => { vi.advanceTimersByTime(60_000) })
-    expect(await screen.findByText(/send another|enviar outro/i)).toBeInTheDocument()
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000) })
+    expect(screen.getByText(/send another|enviar outro/i)).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /send again|enviar novamente/i }))
     expect(post).toHaveBeenCalledWith('/api/auth/2fa/email')
@@ -263,10 +257,9 @@ describe('the entry window (60s countdown)', () => {
   // caller out, so "send again" can never become its own loop.
   it('is final on the second expiry', async () => {
     vi.spyOn(http, 'post').mockResolvedValue({ status: 202 } as never)
-    renderWithProbe()
+    renderWithProbe({ methods: ['totp', 'recovery_code', 'email_otp'] })
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
-    await user.click(screen.getByRole('button', { name: /e-?mail/i }))
-    act(() => { vi.advanceTimersByTime(60_000) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000) })
     await user.click(await screen.findByRole('button', { name: /send again|enviar novamente/i }))
 
     act(() => { vi.advanceTimersByTime(60_000) })

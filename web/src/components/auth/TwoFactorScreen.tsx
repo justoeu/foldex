@@ -51,6 +51,7 @@ export function TwoFactorScreen({ pending }: Readonly<{ pending: TwoFactorPendin
   const [emailRequested, setEmailRequested] = useState(false)
   const [resendUsed, setResendUsed] = useState(false)
   const emailRequestedRef = useRef(false)
+  const canEmail = pending.methods.includes('email_otp')
 
   useEffect(() => {
     if (phase !== 'counting') return
@@ -62,6 +63,20 @@ export function TwoFactorScreen({ pending }: Readonly<{ pending: TwoFactorPendin
     }, 1000)
     return () => clearInterval(tick)
   }, [phase])
+
+  // The code goes out the moment the screen paints — the user arrived here
+  // because they owe one, and the 60s window they are watching is the life
+  // of the code that is already in flight. A "click to send" step before
+  // the clock starts just spends window on nothing. TOTP users see the
+  // field and the mailed code arrives whether they use it or not.
+  const autoSent = useRef(false)
+  useEffect(() => {
+    if (autoSent.current || !canEmail) return
+    autoSent.current = true
+    void requestEmail()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- canEmail comes from
+    // the challenge payload and does not change during the screen's life.
+  }, [canEmail])
 
   // The tick above only lands at 0; the transition is its own effect so a
   // phase change mid-window (resend) can restart the clock cleanly.
@@ -157,8 +172,6 @@ export function TwoFactorScreen({ pending }: Readonly<{ pending: TwoFactorPendin
     setNotice('')
     void requestEmail()
   }
-
-  const canEmail = pending.methods.includes('email_otp')
 
   if (phase === 'askResend') {
     return (
