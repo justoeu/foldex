@@ -132,6 +132,15 @@ func (h *Handler) emailFactorAvailable(purpose ChallengePurpose, mailboxAlreadyP
 // there is exactly one place that decides whether a proven password IS a login.
 func (h *Handler) completeLogin(w http.ResponseWriter, r *http.Request, user User, mailboxAlreadyProven bool) {
 	if purpose := h.secondFactorPurpose(user); purpose != "" {
+		// A half-finished login and a live session are mutually exclusive.
+		// The browser may still hold an EXPIRED fx_at/fx_rt pair from a
+		// previous session: leaving those cookies in place makes every
+		// authenticated query 401 through the stale credential, which the
+		// SPA's refresh interceptor escalates into session-lost — flipping
+		// the code screen back to the login form before the challenge's own
+		// clock has a say. Clearing them here costs nothing when they were
+		// already absent.
+		h.cookies.ClearSession(w)
 		h.startChallenge(w, r, user, purpose, mailboxAlreadyProven)
 		return
 	}
