@@ -3015,3 +3015,41 @@ func TestAdminCreateUser_BoundsThePasswordInBytes(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 	assert.Equal(t, "password_too_long", errCode(t, rec))
 }
+
+// An out-of-band factor removal (an operator clearing totp_secret directly,
+// as happens on local stacks) leaves live challenges minted for a factor that
+// no longer exists. Replaying such a challenge on /me kept the SPA on the code
+// screen — with methods nothing could satisfy — until the TTL bounced the user
+// back to the login form: a login loop whose only exit was waiting. The dead
+// challenge is now consumed on replay and the caller lands on the login form,
+// where the next sign-in derives the honest purpose instead.
+func TestMe_AnOrphanedTOTPChallengeIsNotReplayed(t *testing.T) {
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
+	require.NoError(t, testdb.Reset(context.Background(), h.pool))
+	testdb.SeedUserWithPassword(t, h.pool, "orphan@example.com", "a good password", "editor")
+	enrolUser(t, h, "orphan@example.com", "a good password")
+
+	c := h.client(t)
+	rec := c.do(http.MethodPost, "/api/auth/login", map[string]string{
+		"email": "orphan@example.com", "password": "a good password",
+	})
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Equal(t, "two_factor_required", decode(t, rec)["status"])
+	require.NotEmpty(t, c.cookies[auth.CookiePreAuth])
+
+	var uid int64
+	require.NoError(t, h.pool.QueryRow(context.Background(),
+		`SELECT id FROM app_user WHERE email_normalized = $1`, "orphan@example.com").Scan(&uid))
+	_, err := h.pool.Exec(context.Background(), `DELETE FROM totp_secret WHERE user_id = $1`, uid)
+	require.NoError(t, err)
+
+	rec = c.do(http.MethodGet, "/api/auth/me", nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.NotEqual(t, "two_factor_required", decode(t, rec)["status"],
+		"a challenge whose factor is gone must not put the caller back on the code screen")
+
+	pa := cookieByName(rec, auth.CookiePreAuth)
+	if pa != nil {
+		assert.Less(t, pa.MaxAge, 0, "fx_pa must be expired, not left for the next reload to replay")
+	}
+}
