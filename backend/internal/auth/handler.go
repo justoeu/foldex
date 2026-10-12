@@ -792,13 +792,25 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 		// with no response body of its own.
 		if ch, err := h.repo.ResolveChallenge(r.Context(), cookieValue(r, CookiePreAuth)); err == nil {
 			if u, err := h.repo.GetUser(r.Context(), ch.UserID); err == nil {
-				payload, payloadErr := h.pendingPayload(r.Context(), u, ch.Purpose, ch.MailboxAlreadyProven)
-				if payloadErr == nil {
+				// A totp challenge whose account no longer HAS any second
+				// factor is a dead end: no code can satisfy it, yet replaying
+				// it here would keep the SPA on the code screen until the
+				// challenge expires — the login loop of an out-of-band factor
+				// removal. Consume it and fall through to anonymous; the next
+				// sign-in derives the honest purpose (enrollment for admins
+				// under the policy, plain entry otherwise).
+				if ch.Purpose == PurposeTOTP && !u.HasSecondFactor() {
+					if err := h.repo.ConsumeChallenge(r.Context(), ch.ID); err != nil {
+						h.logger.Error("consume orphaned challenge", "err", err)
+					}
+					h.cookies.ClearPreAuth(w)
+				} else if payload, payloadErr := h.pendingPayload(r.Context(), u, ch.Purpose, ch.MailboxAlreadyProven); payloadErr == nil {
 					httperr.JSON(w, http.StatusOK, payload)
 					return
+				} else {
+					h.logger.Error("build pending auth response", "err", payloadErr)
+					h.cookies.ClearPreAuth(w)
 				}
-				h.logger.Error("build pending auth response", "err", payloadErr)
-				h.cookies.ClearPreAuth(w)
 			}
 		}
 		needs, err := h.repo.NeedsBootstrap(r.Context())
