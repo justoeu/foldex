@@ -328,6 +328,15 @@ export function useSessionLifecycle({
   // the login screen instead of leaving a dead session rendering 401s.
   useEffect(() => {
     setSessionLostHandler(() => {
+      // A half-finished login is not a session to lose. During a second
+      // factor the /api/status and similar queries 401 on every poll —
+      // expected, not a failure — and each one lands here through the
+      // refresh interceptor. Flipping to anonymous on the first would
+      // bounce the code screen to the login form before the user has typed
+      // anything. `lastUserId` is null across every pre-auth state
+      // (loading, anonymous, two_factor_required, convert), and a session
+      // that never existed cannot be lost.
+      if (lastUserId.current === null) return
       reloadRequest.current++
       advanceAuthEpoch()
       applySession({ status: 'anonymous', features: defaultFeatures })
