@@ -888,3 +888,13 @@ button.fx-auth-locale[aria-pressed='true'] {
   accent-color: var(--fxa-accent);
   cursor: pointer;
 }
+
+/* The entry window on the code screen: quiet by design — a full-width
+ * countdown would read as urgency, and the number already says it. */
+p.fx-otp-countdown {
+  margin: 2px 0 0; text-align: center;
+  font-family: var(--fx-mono); font-size: 11px;
+  color: var(--fx-ink-4); letter-spacing: 0.04em;
+}
+.fx-auth-alt-center { justify-content: center; gap: 14px; margin-top: 18px; }
+.fx-auth-sub { margin: 0 0 6px; font-size: 14px; color: var(--fx-ink-3); text-wrap: pretty; }

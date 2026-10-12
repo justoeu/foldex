@@ -990,8 +990,21 @@ func (h *Handler) settleStepUp(key string, err error) {
 
 // requireChallenge resolves the pre-auth cookie or writes the refusal.
 func (h *Handler) requireChallenge(w http.ResponseWriter, r *http.Request, purposes ...ChallengePurpose) (Challenge, bool) {
-	ch, err := h.repo.ResolveChallenge(r.Context(), cookieValue(r, CookiePreAuth), purposes...)
+	raw := cookieValue(r, CookiePreAuth)
+	ch, err := h.repo.ResolveChallenge(r.Context(), raw, purposes...)
 	if err != nil {
+		// The refusal itself is the caller's answer; the WHY is the
+		// operator's. A browser stuck bouncing off the code screen leaves
+		// nothing else to go on, and the four liveness failures have four
+		// different fixes (wait, restart, re-login, re-activate).
+		if errors.Is(err, ErrChallengeInvalid) {
+			if diag, derr := h.repo.DiagnoseChallenge(r.Context(), raw); derr == nil {
+				h.logger.Info("challenge rejected",
+					"found", diag.Found, "consumed", diag.Consumed,
+					"expired", diag.Expired, "version_skewed", diag.VersionSkewed,
+					"user_inactive", diag.UserInactive, "path", r.URL.Path)
+			}
+		}
 		h.writeChallengeError(w, err)
 		return Challenge{}, false
 	}
