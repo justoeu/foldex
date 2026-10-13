@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/pquerna/otp"
@@ -1012,7 +1011,7 @@ func (h *Handler) requireChallenge(w http.ResponseWriter, r *http.Request, purpo
 				h.logger.Info("challenge rejected",
 					"found", diag.Found, "consumed", diag.Consumed,
 					"expired", diag.Expired, "version_skewed", diag.VersionSkewed,
-					"user_inactive", diag.UserInactive, "path", strconv.Quote(r.URL.Path))
+					"user_inactive", diag.UserInactive)
 			}
 		}
 		h.writeChallengeError(w, err)
