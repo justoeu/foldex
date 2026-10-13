@@ -48,7 +48,6 @@ export function TwoFactorScreen({ pending }: Readonly<{ pending: TwoFactorPendin
   // never become a loop of its own.
   const [secondsLeft, setSecondsLeft] = useState(ENTRY_WINDOW_SECONDS)
   const [phase, setPhase] = useState<Phase>('counting')
-  const [emailRequested, setEmailRequested] = useState(false)
   const [resendUsed, setResendUsed] = useState(false)
   const emailRequestedRef = useRef(false)
   const canEmail = pending.methods.includes('email_otp')
@@ -159,7 +158,6 @@ export function TwoFactorScreen({ pending }: Readonly<{ pending: TwoFactorPendin
       setEmailSubmitting(false)
     }
     if (sent) {
-      setEmailRequested(true)
       emailRequestedRef.current = true
       setNotice(t('auth_otp.email_sent', { email: pending.email }))
     }
