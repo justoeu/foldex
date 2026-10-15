@@ -16,6 +16,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"foldex/internal/folders"
 	"foldex/internal/imageopt"
 	"foldex/internal/linkimage"
 	"foldex/internal/pkg/authctx"
@@ -88,6 +89,7 @@ type ScreenshotHandler struct {
 	storage       Uploader
 	urlPolicy     URLPolicy
 	logger        *slog.Logger
+	folderGate    folders.ContentGate
 	captureSem    chan struct{}
 	captureMu     sync.Mutex
 	captureUsers  map[authctx.UserID]int
@@ -101,6 +103,26 @@ type ScreenshotHandler struct {
 func (h *ScreenshotHandler) WithEnqueuer(e ports.Enqueuer) *ScreenshotHandler {
 	h.enqueuer = e
 	return h
+}
+
+// WithFolderGate enables the folder-lock check on the MUTATING image
+// routes (capture, upload, delete). File READs stay ownership-scoped
+// capability URLs: keys carry an unguessable UUID segment, are only
+// disclosed inside gated payloads, and <img> tags cannot send the unlock
+// header a stricter proxy would demand.
+func (h *ScreenshotHandler) WithFolderGate(lookup folders.PasswordHashLookup, unlockKey []byte) *ScreenshotHandler {
+	h.folderGate = folders.NewContentGate(lookup, unlockKey)
+	return h
+}
+
+func (h *ScreenshotHandler) gateFolder(r *http.Request, l Link) error {
+	if l.FolderID == nil {
+		return nil
+	}
+	if !h.folderGate.Configured() {
+		return folders.ErrGateUnavailable
+	}
+	return h.folderGate.Check(r.Context(), authctx.MustUser(r.Context()), *l.FolderID, r.Header.Get(folders.UnlockHeader))
 }
 
 // NewScreenshotHandler creates a ScreenshotHandler. urlPolicy gates
@@ -147,6 +169,11 @@ func (h *ScreenshotHandler) admitCapture(w http.ResponseWriter, r *http.Request)
 	}
 	link, err := h.repo.Get(r.Context(), uid, id)
 	if err != nil {
+		h.releaseCapture(uid)
+		httperr.Write(w, repositoryHTTPError(err))
+		return 0, 0, Link{}, false
+	}
+	if err := h.gateFolder(r, link); err != nil {
 		h.releaseCapture(uid)
 		httperr.Write(w, repositoryHTTPError(err))
 		return 0, 0, Link{}, false
@@ -499,8 +526,12 @@ func (h *ScreenshotHandler) UploadImage(w http.ResponseWriter, r *http.Request) 
 	// user's link id could overwrite their image before the scoped update
 	// reports not-found.
 	uid := authctx.MustUser(r.Context())
-	_, err = h.repo.Get(r.Context(), uid, id)
+	link, err := h.repo.Get(r.Context(), uid, id)
 	if err != nil {
+		httperr.Write(w, repositoryHTTPError(err))
+		return
+	}
+	if err := h.gateFolder(r, link); err != nil {
 		httperr.Write(w, repositoryHTTPError(err))
 		return
 	}
@@ -600,6 +631,15 @@ func (h *ScreenshotHandler) DeleteImage(w http.ResponseWriter, r *http.Request) 
 	id, err := httperr.ParseID(chi.URLParam(r, "id"))
 	if err != nil {
 		httperr.Write(w, httperr.ErrBadRequest)
+		return
+	}
+	link, err := h.repo.Get(r.Context(), authctx.MustUser(r.Context()), id)
+	if err != nil {
+		httperr.Write(w, repositoryHTTPError(err))
+		return
+	}
+	if err := h.gateFolder(r, link); err != nil {
+		httperr.Write(w, repositoryHTTPError(err))
 		return
 	}
 	if err := h.repo.ClearOGImage(r.Context(), authctx.MustUser(r.Context()), id); err != nil {

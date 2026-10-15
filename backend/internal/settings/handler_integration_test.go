@@ -134,6 +134,24 @@ func TestHandler_MasterPassword_RateLimitsWrongCurrent(t *testing.T) {
 	assert.NotEmpty(t, rr.Header().Get("Retry-After"))
 }
 
+func TestHandler_ClearMasterPassword_RateLimitsWrongCurrent(t *testing.T) {
+	h := newSettingsRouter(t)
+
+	rr := do(t, h, http.MethodPut, "/settings/master-password", map[string]any{"password": "first-master-pw"})
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	for i := range 4 {
+		rr = do(t, h, http.MethodDelete, "/settings/master-password", map[string]any{
+			"current_password": "nope",
+		})
+		require.Equal(t, http.StatusUnauthorized, rr.Code, "wrong attempt %d", i+1)
+	}
+	rr = do(t, h, http.MethodDelete, "/settings/master-password", map[string]any{
+		"current_password": "nope",
+	})
+	assert.Equal(t, http.StatusTooManyRequests, rr.Code, rr.Body.String())
+}
+
 func TestHandler_MasterPassword_HintRoundTrip(t *testing.T) {
 	h := newSettingsRouter(t)
 

@@ -206,7 +206,12 @@ func (h *Handler) refreshPreview(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	if _, err := h.repo.Get(r.Context(), authctx.MustUser(r.Context()), id); err != nil {
+	link, err := h.repo.Get(r.Context(), authctx.MustUser(r.Context()), id)
+	if err != nil {
+		httperr.Write(w, repositoryHTTPError(err))
+		return
+	}
+	if err := h.gateEntityRead(r, link); err != nil {
 		httperr.Write(w, repositoryHTTPError(err))
 		return
 	}
@@ -229,6 +234,12 @@ func (h *Handler) seenChange(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		httperr.Write(w, err)
 		return
+	}
+	if link, gerr := h.repo.Get(r.Context(), authctx.MustUser(r.Context()), id); gerr == nil {
+		if err := h.gateEntityRead(r, link); err != nil {
+			httperr.Write(w, repositoryHTTPError(err))
+			return
+		}
 	}
 	if err := h.repo.MarkChangeSeen(r.Context(), authctx.MustUser(r.Context()), id); err != nil {
 		httperr.Write(w, repositoryHTTPError(err))

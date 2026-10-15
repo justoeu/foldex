@@ -305,10 +305,9 @@ func (r *Repository) Delete(ctx context.Context, uid authctx.UserID, id int64, u
 	}
 	defer tx.Rollback(ctx)
 
+	// The folder gate doubles as the ownership proof (owner-scoped lock,
+	// ErrNotFound otherwise) the unscoped purges below rely on.
 	if err := folders.CheckEntityFolderTx(ctx, tx, "note", uid, id, unlockKey, unlockToken); err != nil {
-		return err
-	}
-	if err := crudupdate.AssertOwned(ctx, tx, "note", uid, id); err != nil {
 		return err
 	}
 	releasedMedia, err := notemedia.ReleaseNoteRefs(ctx, tx, uid, id)

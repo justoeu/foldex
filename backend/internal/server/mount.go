@@ -122,7 +122,8 @@ func newFileHandler(d Deps, linksRepo *links.Repository) *links.ScreenshotHandle
 		panic("server: Screenshotter is set but ScreenshotURL is nil — refusing to mount /api/links/{id}/screenshot without an SSRF gate")
 	}
 	return links.NewScreenshotHandler(linksRepo, d.Screenshotter, d.Storage, d.ScreenshotURL, d.Logger).
-		WithEnqueuer(d.Worker)
+		WithEnqueuer(d.Worker).
+		WithFolderGate(folders.NewRepository(d.Pool), d.FolderUnlockKey)
 }
 
 func publicShareRoutes(r chi.Router, d Deps, linksRepo *links.Repository, notesRepo *notes.Repository, fileHandler *links.ScreenshotHandler) {
@@ -266,6 +267,9 @@ func contentCRUD(pr chi.Router, d Deps, grants authgate.Grants, linksRepo *links
 	pr.Route("/entries", entries.NewHandler(entries.NewRepository(d.Pool), foldersRepo, d.FolderUnlockKey).Mount)
 
 	pr.Route("/import", func(ir chi.Router) {
+		// A wipe-mode import deletes existing links wholesale — no more a
+		// content token's job than backup restore is.
+		ir.Use(authgate.RejectAPIToken)
 		ir.Use(authgate.RequireWrite(grants, authctx.PermImportRun))
 		importer.NewHandler(importer.NewStager(d.Pool), d.Worker).Mount(ir)
 	})

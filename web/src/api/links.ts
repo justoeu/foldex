@@ -8,6 +8,8 @@ import {
   optimisticEntryPatch,
   removeCachedEntry,
 } from './entries'
+import { FOLDER_UNLOCK_HEADER } from './folders'
+import { folderUnlockTokenFor } from '../lib/folderUnlockRegistry'
 import type { Link, LinkCreate, LinkUpdate } from './types'
 
 type LinksCache = InfiniteData<Link[]>
@@ -120,7 +122,9 @@ export function useRefreshPreview() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async (id: number) => {
-      await http.post(`/api/links/${id}/refresh-preview`)
+      await http.post(`/api/links/${id}/refresh-preview`, undefined, {
+        headers: entityUnlockHeaders(qc, 'link', id),
+      })
     },
     onMutate: async (id) => optimisticEntryPatch(qc, 'link', id, { preview_status: 'pending' }),
     onError: (_err, _id, ctx) => ctx?.rollback(),
@@ -164,22 +168,37 @@ export function useFetchUrlMetadata() {
   })
 }
 
-export async function uploadLinkImage(id: number, file: File): Promise<{ url: string }> {
-  const fd = new FormData()
-  fd.append('image', file)
-  const { data } = await http.post<{ url: string }>(`/api/links/${id}/image`, fd)
-  return data
+function imageUnlockHeaders(folderId: number | null | undefined): Record<string, string> | undefined {
+  const token = folderUnlockTokenFor(folderId)
+  return token ? { [FOLDER_UNLOCK_HEADER]: token } : undefined
 }
 
-export async function captureLinkScreenshot(id: number): Promise<{ url: string }> {
-  const { data } = await http.post<{ url: string }>(`/api/links/${id}/screenshot`, undefined, {
-    timeout: 80_000,
+export async function uploadLinkImage(
+  id: number,
+  file: File,
+  folderId?: number | null,
+): Promise<{ url: string }> {
+  const fd = new FormData()
+  fd.append('image', file)
+  const { data } = await http.post<{ url: string }>(`/api/links/${id}/image`, fd, {
+    headers: imageUnlockHeaders(folderId),
   })
   return data
 }
 
-export async function removeLinkImage(id: number): Promise<void> {
-  await http.delete(`/api/links/${id}/image`)
+export async function captureLinkScreenshot(
+  id: number,
+  folderId?: number | null,
+): Promise<{ url: string }> {
+  const { data } = await http.post<{ url: string }>(`/api/links/${id}/screenshot`, undefined, {
+    timeout: 80_000,
+    headers: imageUnlockHeaders(folderId),
+  })
+  return data
+}
+
+export async function removeLinkImage(id: number, folderId?: number | null): Promise<void> {
+  await http.delete(`/api/links/${id}/image`, { headers: imageUnlockHeaders(folderId) })
 }
 
 export function useRecentChanges(days = 7, limit = 20, enabled = true) {
@@ -202,7 +221,9 @@ export function useMarkChangeSeen() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async (id: number) => {
-      await http.post(`/api/links/${id}/seen-change`)
+      await http.post(`/api/links/${id}/seen-change`, undefined, {
+        headers: entityUnlockHeaders(qc, 'link', id),
+      })
     },
     onMutate: async (id) => {
       await qc.cancelQueries({ queryKey: ['links'] })

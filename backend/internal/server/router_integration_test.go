@@ -416,6 +416,28 @@ func TestDirectEntityAccess_RespectsFolderLock(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
 	rec = doReq(http.MethodDelete, "/api/links/"+intToStr(deletable.ID), "", false, validUnlock)
 	assert.Equal(t, http.StatusNoContent, rec.Code, rec.Body.String())
+
+	// A forged unlock token is no better than none, a note DELETE is gated
+	// like a link DELETE, and moving INTO a locked folder stays allowed
+	// (INV-065: writing in reveals nothing).
+	rec = doReq(http.MethodGet, "/api/notes/"+intToStr(note.ID), "", false, "forged.token.value")
+	assert.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+	rec = doReq(http.MethodDelete, "/api/notes/"+intToStr(note.ID), "", false, "")
+	assert.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+
+	loose, err := links.NewRepository(pool).Create(ctx, uid, links.CreateInput{
+		URL: "https://loose.example", Title: "Loose",
+	})
+	require.NoError(t, err)
+	rec = doReq(http.MethodPatch, "/api/links/"+intToStr(loose.ID),
+		`{"folder_id":`+intToStr(folder.ID)+`}`, false, "")
+	assert.Equal(t, http.StatusOK, rec.Code,
+		"moving INTO a locked folder is never gated: %s", rec.Body.String())
+
+	// A wipe-mode import is not a content token's job either.
+	rec = doReq(http.MethodPost, "/api/import/", `{}`, true, "")
+	assert.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+	assert.Contains(t, rec.Body.String(), `"code":"token_scope"`)
 }
 
 func TestAdminGateRechecksLiveTOTPState(t *testing.T) {

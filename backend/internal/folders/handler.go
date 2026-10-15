@@ -63,6 +63,13 @@ func NewHandler(repo *Repository, unlockKey []byte, master MasterPasswordVerifie
 	}
 }
 
+// WithMasterLimiter shares one master-password budget with the settings
+// handler (see settings.Handler.WithMasterLimiter for why).
+func (h *Handler) WithMasterLimiter(l *attemptlimit.Limiter) *Handler {
+	h.masterLimiter = l
+	return h
+}
+
 func (h *Handler) Mount(r chi.Router) {
 	// Gated per route rather than by a group middleware because POST here is not
 	// synonymous with "write": unlock proves a password in order to SEE a

@@ -1072,3 +1072,30 @@ func TestChangePassword_RateLimitsWrongCurrentPassword(t *testing.T) {
 	})
 	assert.Equal(t, http.StatusTooManyRequests, rec.Code, rec.Body.String())
 }
+
+// The budget is per ACCOUNT, not per route: failures spent proving the
+// password to one surface count on every other surface that checks one.
+func TestStepUpPasswordBudget_IsSharedAcrossRoutes(t *testing.T) {
+	h := newHarness(t)
+	c := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
+
+	for range 2 {
+		rec := c.do(http.MethodPost, "/api/auth/email/change", map[string]string{
+			"new_email": "next@example.com", "password": "not the password",
+		})
+		require.Equal(t, http.StatusUnauthorized, rec.Code, rec.Body.String())
+	}
+	for range 3 {
+		rec := c.do(http.MethodPost, "/api/auth/password/change", map[string]string{
+			"current_password": "not the password",
+			"new_password":     "a brand new password",
+		})
+		require.Equal(t, http.StatusUnauthorized, rec.Code, rec.Body.String())
+	}
+	rec := c.do(http.MethodPost, "/api/auth/password/change", map[string]string{
+		"current_password": "not the password",
+		"new_password":     "a brand new password",
+	})
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code,
+		"five shared failures must exhaust the budget on both routes: %s", rec.Body.String())
+}

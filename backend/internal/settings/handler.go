@@ -33,6 +33,14 @@ func NewHandler(repo *Repository) *Handler {
 	return &Handler{repo: repo, limiter: attemptlimit.New(maxMasterAttempts, masterLockout)}
 }
 
+// WithMasterLimiter shares one master-password budget with the folders
+// handler: the secret is one, so its guessing budget must be one too —
+// splitting it per surface would double the guesses per hour.
+func (h *Handler) WithMasterLimiter(l *attemptlimit.Limiter) *Handler {
+	h.limiter = l
+	return h
+}
+
 const pathMasterPassword = "/master-password"
 
 func (h *Handler) Mount(r chi.Router) {

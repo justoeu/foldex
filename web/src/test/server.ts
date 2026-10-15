@@ -677,7 +677,7 @@ function listRecentChanges(_m: RegExpMatchArray, _d: any, params: URLSearchParam
   return out
 }
 
-function seenChange(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockState) {
+function seenChange(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockState, headers: Record<string, string>) {
   const id = Number(m[1])
   const idx = s.links.findIndex((l) => l.id === id)
   if (idx < 0) {
@@ -685,6 +685,7 @@ function seenChange(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockSt
     e.response = { status: 404, data: { error: { code: 'not_found', message: 'link not found' } } }
     throw e
   }
+  checkEntityFolderLock(s.links[idx]!.folder_id, s, headers)
   s.links[idx] = { ...s.links[idx], change_seen_at: new Date().toISOString() }
   return null
 }
@@ -1107,10 +1108,11 @@ function createLink(_m: RegExpMatchArray, data: any, _p: URLSearchParams, s: Moc
   return link
 }
 
-function refreshPreview(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockState) {
+function refreshPreview(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockState, headers: Record<string, string>) {
   const id = Number(m[1])
   const link = s.links.find((x) => x.id === id)
   if (!link) throw notFound()
+  checkEntityFolderLock(link.folder_id, s, headers)
   link.preview_status = 'pending'
   return null
 }
@@ -1131,7 +1133,7 @@ function getLinkByURL(_m: RegExpMatchArray, _d: any, params: URLSearchParams, s:
   return link
 }
 
-function captureScreenshot(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockState): { url: string } {
+function captureScreenshot(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockState, headers: Record<string, string>): { url: string } {
   if (s.linkScreenshotError) {
     const e: any = new Error(s.linkScreenshotError.message)
     e.response = {
@@ -1148,13 +1150,14 @@ function captureScreenshot(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s:
   const id = Number(m[1])
   const link = s.links.find((x) => x.id === id)
   if (!link) throw notFound()
+  checkEntityFolderLock(link.folder_id, s, headers)
   const url = `/api/files/screenshots/${id}.jpg`
   link.og_image_url = url
   link.preview_status = 'ok'
   return { url }
 }
 
-function uploadLinkImage(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockState): { url: string } {
+function uploadLinkImage(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockState, headers: Record<string, string>): { url: string } {
   if (s.linkImageUploadError) {
     const e: any = new Error(s.linkImageUploadError.message)
     e.response = {
@@ -1171,13 +1174,14 @@ function uploadLinkImage(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: M
   const id = Number(m[1])
   const link = s.links.find((x) => x.id === id)
   if (!link) throw notFound()
+  checkEntityFolderLock(link.folder_id, s, headers)
   const url = `/api/files/links/${id}.jpg`
   link.og_image_url = url
   link.preview_status = 'ok'
   return { url }
 }
 
-function removeLinkImage(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockState) {
+function removeLinkImage(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockState, headers: Record<string, string>) {
   if (s.linkImageRemoveError) {
     const e: any = new Error(s.linkImageRemoveError.message)
     e.response = {
@@ -1194,6 +1198,7 @@ function removeLinkImage(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: M
   const id = Number(m[1])
   const link = s.links.find((x) => x.id === id)
   if (!link) throw notFound()
+  checkEntityFolderLock(link.folder_id, s, headers)
   link.og_image_url = null
   return null
 }

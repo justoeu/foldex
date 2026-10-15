@@ -67,9 +67,10 @@ export function useLinkDialogSubmit(options: Options) {
     if (!file && !removed && !captureOnSave) return true
     options.image.setBusy(true)
     try {
-      if (file) await uploadLinkImage(linkId, file)
-      else if (captureOnSave) await captureLinkScreenshot(linkId)
-      else if (options.link) await removeLinkImage(linkId)
+      const folderId = options.link?.folder_id ?? created?.folder_id
+      if (file) await uploadLinkImage(linkId, file, folderId)
+      else if (captureOnSave) await captureLinkScreenshot(linkId, folderId)
+      else if (options.link) await removeLinkImage(linkId, folderId)
       invalidateImageQueries(queryClient)
       return true
     } catch (error) {

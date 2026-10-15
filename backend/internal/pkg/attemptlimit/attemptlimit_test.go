@@ -644,6 +644,29 @@ func TestLimiter_EvictionNeverDropsALiveLockoutWhileUnlockedKeysExist(t *testing
 		"a live lockout must not be evicted while unlocked keys can go instead")
 }
 
+func TestLimiter_EvictionUnderFullLockoutStaysBoundedAndKeepsInFlight(t *testing.T) {
+	t.Parallel()
+	l := attemptlimit.New(1, time.Hour).WithMaxKeys(10)
+
+	// An in-flight reservation is never evicted, however hard the map is
+	// flooded: the request checking that credential must still be able to
+	// settle its own slot.
+	_, ok := l.Begin("checking")
+	require.True(t, ok)
+
+	// Every other key locks on its first failure, so eviction is forced onto
+	// the locked fallback — the ceiling must hold anyway.
+	for i := range 200 {
+		l.Fail(fmt.Sprintf("locked-%d", i))
+	}
+	assert.LessOrEqual(t, l.Len(), 11,
+		"bounded by the ceiling plus the one unevictable in-flight key")
+
+	l.CommitFail("checking")
+	assert.False(t, l.LockedUntil("checking").IsZero(),
+		"the in-flight reservation settled against its own surviving entry")
+}
+
 // The same property for the set mode, and the positive case: the commit that
 // actually crosses the ceiling DOES report the edge, exactly once.
 func TestCommitFailFor_ReportsTheEdgeExactlyOnce(t *testing.T) {

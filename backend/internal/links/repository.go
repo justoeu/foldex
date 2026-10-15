@@ -367,13 +367,12 @@ func (r *Repository) Delete(ctx context.Context, uid authctx.UserID, id int64, u
 	}
 	defer tx.Rollback(ctx)
 
+	// The folder gate doubles as the ownership proof (it locks the row
+	// owner-scoped and returns ErrNotFound otherwise) — link_tag and
+	// click_log carry no user_id, so their DELETEs cannot be scoped and
+	// would otherwise purge another tenant's rows for a colliding entity_id
+	// before the link DELETE reported 404.
 	if err := folders.CheckEntityFolderTx(ctx, tx, "link", uid, id, unlockKey, unlockToken); err != nil {
-		return err
-	}
-	// Ownership is proven first: link_tag and click_log carry no user_id, so
-	// their DELETEs cannot be scoped and would otherwise purge another tenant's
-	// rows for a colliding entity_id before the link DELETE reported 404.
-	if err := crudupdate.AssertOwned(ctx, tx, "link", uid, id); err != nil {
 		return err
 	}
 	if err := entityrefs.PurgeOne(ctx, tx, "link", id); err != nil {

@@ -53,11 +53,6 @@ const MaxMembersPerKey = 128
 // bounded even when every tracked key is serving a penalty.
 const DefaultMaxKeys = 10_000
 
-const (
-	evictionSample = 64
-	evictionBatch  = 32
-)
-
 // Limiter caps failures per key, counting either ATTEMPTS or DISTINCT MEMBERS.
 //
 // The reserve-then-commit API (Begin → CommitFail / CommitSuccess / Release)
@@ -430,70 +425,52 @@ func (l *Limiter) entryLocked(key string) *attempt {
 // makeRoomLocked evicts entries until a new key fits under the ceiling.
 // In-flight reservations are never evicted: dropping one would corrupt the
 // reserve-then-commit accounting of a request still checking a credential.
+// Unlocked entries go first (stalest failure wins); a live lockout is only
+// evicted when nothing unlocked remains, soonest expiry first, because the
+// memory bound must hold even when every tracked key is serving a penalty.
 func (l *Limiter) makeRoomLocked() {
 	if l.maxKeys < 1 {
 		l.maxKeys = DefaultMaxKeys
 	}
-	if len(l.entries) < l.maxKeys {
-		return
-	}
-	for range evictionBatch {
-		if len(l.entries) < l.maxKeys {
-			return
+	for len(l.entries) >= l.maxKeys {
+		if !l.evictOneLocked() {
+			return // everything is in-flight; the map may exceed by concurrency
 		}
-		l.evictStalestLocked(false)
 	}
-	if len(l.entries) < l.maxKeys {
-		return
-	}
-	// Nothing unlocked could be evicted from the sample: fall back to a full
-	// scan, then to locked entries (soonest expiry first), so the ceiling
-	// holds even when every tracked key is serving a penalty.
-	l.evictStalestLocked(true)
 }
 
-func (l *Limiter) evictStalestLocked(allowLocked bool) {
+func (l *Limiter) evictOneLocked() bool {
 	now := l.now()
-	var (
-		stalestKey    string
-		stalestRank   time.Time
-		stalestLocked bool
-		seen          int
-	)
-	consider := func(k string, e *attempt) {
-		if e.inFlight > 0 {
-			return
-		}
-		locked := e.lockedUntil.After(now)
-		if locked && !allowLocked && stalestKey != "" {
-			return
+	if key, ok := l.stalestLocked(now, false); ok {
+		delete(l.entries, key)
+		return true
+	}
+	key, ok := l.stalestLocked(now, true)
+	if ok {
+		delete(l.entries, key)
+	}
+	return ok
+}
+
+// stalestLocked finds the best eviction candidate among entries whose
+// locked state equals wantLocked: unlocked entries rank by last failure,
+// locked ones by soonest lockout expiry.
+func (l *Limiter) stalestLocked(now time.Time, wantLocked bool) (string, bool) {
+	bestKey := ""
+	var bestRank time.Time
+	for key, e := range l.entries {
+		if e.inFlight > 0 || e.lockedUntil.After(now) != wantLocked {
+			continue
 		}
 		rank := e.lastFail
-		if locked {
+		if wantLocked {
 			rank = e.lockedUntil
 		}
-		switch {
-		case stalestKey == "":
-			stalestKey, stalestRank, stalestLocked = k, rank, locked
-		case stalestLocked && !locked:
-			stalestKey, stalestRank, stalestLocked = k, rank, locked
-		case locked == stalestLocked && rank.Before(stalestRank):
-			stalestKey, stalestRank = k, rank
+		if bestKey == "" || rank.Before(bestRank) {
+			bestKey, bestRank = key, rank
 		}
 	}
-	for k, e := range l.entries {
-		consider(k, e)
-		seen++
-		if seen >= evictionSample && stalestKey != "" && !stalestLocked {
-			break
-		}
-		if seen >= evictionSample && allowLocked && stalestKey != "" {
-			break
-		}
-	}
-	if stalestKey != "" {
-		delete(l.entries, stalestKey)
-	}
+	return bestKey, bestKey != ""
 }
 
 func (l *Limiter) clearExpiredLocked(e *attempt, now time.Time) {
