@@ -52,14 +52,49 @@ const linkColumns = `
     l.last_change_detected_at, l.change_seen_at, l.last_check_error
 `
 
-const linkFrom = `
-    FROM link l
+const linkClickLateral = `
     LEFT JOIN LATERAL (
         SELECT count(*) AS cnt, max(clicked_at) AS last_at
         FROM click_log
-        WHERE entity_kind = 'link' AND entity_id = l.id
+        WHERE entity_kind = 'link' AND user_id = l.user_id AND entity_id = l.id
     ) cl ON TRUE
 `
+
+const linkFrom = `
+    FROM link l
+` + linkClickLateral
+
+// linkStatsFrom joins the entity_click_stats projection (INV-056) under the
+// same `cl` alias and column names the LATERAL produces, so linkColumns and
+// the planner's click ORDER BY work unchanged. Used by List's click-ranked
+// sorts, where the aggregate determines rank (mirrors entries.List).
+func linkStatsFrom(ownerArg int) string {
+	return fmt.Sprintf(`
+    FROM link l
+    LEFT JOIN (
+        SELECT entity_id, click_count AS cnt, last_clicked_at AS last_at
+        FROM entity_click_stats
+        WHERE user_id = $%d AND entity_kind = 'link'
+    ) cl ON cl.entity_id = l.id
+`, ownerArg)
+}
+
+// buildListQuery assembles the List page query. Click-ranked sorts rank by
+// the stats projection; ordinary sorts paginate FIRST and aggregate clicks
+// only for the page's rows, so a 50k-click history off-page is never read.
+func buildListQuery(uid authctx.UserID, q ListQuery) (string, []any) {
+	planner := listquery.NewPlanner(q)
+	scope := planner.AddScope(uid, listquery.LinkEntity(folders.SQLNotInLockedFolder("l")))
+	page := planner.AddPage(listquery.LinkOrder())
+	where := " WHERE " + strings.Join(scope.Where, " AND ")
+	pageArgs := fmt.Sprintf(" ORDER BY %s LIMIT $%d OFFSET $%d", page.OrderBy, page.LimitArg, page.OffsetArg)
+	if page.ClickRanking {
+		return `SELECT ` + linkColumns + linkStatsFrom(scope.OwnerArg) + where + pageArgs, planner.Args()
+	}
+	paged := `SELECT l.* FROM link l` + where + pageArgs
+	return `SELECT ` + linkColumns + ` FROM (` + paged + `) l` + linkClickLateral +
+		" ORDER BY " + page.OrderBy, planner.Args()
+}
 
 // rowScanner is the Scan method shared by pgx.Row and pgx.Rows. Letting one
 // helper read into a *Link from either single-row or multi-row results keeps
@@ -202,13 +237,9 @@ func (r *Repository) GetByURL(ctx context.Context, uid authctx.UserID, pageURL s
 }
 
 func (r *Repository) List(ctx context.Context, uid authctx.UserID, q ListQuery) ([]Link, error) {
-	planner := listquery.NewPlanner(q)
-	scope := planner.AddScope(uid, listquery.LinkEntity(folders.SQLNotInLockedFolder("l")))
-	page := planner.AddPage(listquery.LinkOrder())
-	sql := `SELECT ` + linkColumns + linkFrom + " WHERE " + strings.Join(scope.Where, " AND ")
-	sql += fmt.Sprintf(" ORDER BY %s LIMIT $%d OFFSET $%d", page.OrderBy, page.LimitArg, page.OffsetArg)
+	sql, args := buildListQuery(uid, q)
 
-	rows, err := r.pool.Query(ctx, sql, planner.Args()...)
+	rows, err := r.pool.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list links: %w", err)
 	}
@@ -375,7 +406,7 @@ func (r *Repository) Delete(ctx context.Context, uid authctx.UserID, id int64, u
 	if err := folders.CheckEntityFolderTx(ctx, tx, "link", uid, id, unlockKey, unlockToken); err != nil {
 		return err
 	}
-	if err := entityrefs.PurgeOne(ctx, tx, "link", id); err != nil {
+	if err := entityrefs.PurgeOne(ctx, tx, uid, "link", id); err != nil {
 		return err
 	}
 	ct, err := tx.Exec(ctx, `DELETE FROM link WHERE user_id = $1 AND id = $2`, int64(uid), id)

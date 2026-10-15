@@ -150,7 +150,7 @@ func TestPurgeOne_DeletesOnlyTheRequestedKindAndID(t *testing.T) {
 	tx, err := f.pool.Begin(f.ctx)
 	require.NoError(t, err)
 	defer tx.Rollback(f.ctx)
-	require.NoError(t, entityrefs.PurgeOne(f.ctx, tx, "link", f.ownerLink.id))
+	require.NoError(t, entityrefs.PurgeOne(f.ctx, tx, f.owner, "link", f.ownerLink.id))
 	require.NoError(t, tx.Commit(f.ctx))
 
 	assertReferenceCounts(t, f.pool, f.ownerLink, 0)

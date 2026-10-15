@@ -87,14 +87,14 @@ func streamSnapshotJSON(ctx context.Context, tx pgx.Tx, uid authctx.UserID, w io
 	counts.LinkTags = linkTags + noteTags
 	linkClicks, err := encoder.rows(ctx, tx, `,"click_logs":`, `
 		SELECT entity_id, clicked_at FROM click_log
-		WHERE entity_kind = 'link' AND entity_id IN (SELECT id FROM link WHERE user_id = $1)
+		WHERE entity_kind = 'link' AND user_id = $1 AND entity_id IN (SELECT id FROM link WHERE user_id = $1)
 		ORDER BY id`, []any{int64(uid)}, scanClickRow)
 	if err != nil {
 		return counts, err
 	}
 	noteClicks, err := encoder.rows(ctx, tx, `,"note_clicks":`, `
 		SELECT entity_id, clicked_at FROM click_log
-		WHERE entity_kind = 'note' AND entity_id IN (SELECT id FROM note WHERE user_id = $1)
+		WHERE entity_kind = 'note' AND user_id = $1 AND entity_id IN (SELECT id FROM note WHERE user_id = $1)
 		ORDER BY id`, []any{int64(uid)}, scanNoteClickRow)
 	if err != nil {
 		return counts, err

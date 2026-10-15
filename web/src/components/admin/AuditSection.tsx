@@ -39,10 +39,10 @@ export function AuditSection() {
   const [exporting, setExporting] = useState(false)
   const [exportError, setExportError] = useState<string | null>(null)
 
-  const list = useQuery({ queryKey: auditQueryKey(filter), queryFn: () => fetchAudit(filter) })
+  const list = useQuery({ queryKey: auditQueryKey(filter), queryFn: ({ signal }) => fetchAudit(filter, signal) })
   const stats = useQuery({
     queryKey: auditStatsQueryKey(period),
-    queryFn: () => fetchAuditStats(period),
+    queryFn: ({ signal }) => fetchAuditStats(period, signal),
   })
   // Only the owner may write the blocklist, but anyone who can read the trail
   // should see what is on it — an admin who cannot tell an address is already

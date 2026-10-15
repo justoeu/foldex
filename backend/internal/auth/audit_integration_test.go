@@ -577,10 +577,17 @@ func TestFailureBursts_CountsPerAddress(t *testing.T) {
 	writeAudit(t, repo, auth.AuditRecord{Action: auth.AuditLoginFailed,
 		TargetEmail: "v@foldex.test", IP: "203.0.113.9"})
 
-	bursts, err := repo.FailureBursts(context.Background(), time.Now().Add(-24*time.Hour))
+	bursts, err := repo.FailureBursts(context.Background(), time.Now().Add(-24*time.Hour), nil)
 	require.NoError(t, err)
 	assert.Equal(t, 6, bursts["189.42.11.7"])
 	assert.Equal(t, 1, bursts["203.0.113.9"])
+
+	scoped, err := repo.FailureBursts(context.Background(), time.Now().Add(-24*time.Hour),
+		[]string{"189.42.11.7"})
+	require.NoError(t, err)
+	assert.Equal(t, 6, scoped["189.42.11.7"])
+	_, leaked := scoped["203.0.113.9"]
+	assert.False(t, leaked, "a scoped burst query must not aggregate addresses off the page")
 	assert.Equal(t, auth.SeverityCritical, auth.AuditSeverity(auth.AuditLoginFailed, bursts["189.42.11.7"]))
 	assert.Equal(t, auth.SeverityWarning, auth.AuditSeverity(auth.AuditLoginFailed, bursts["203.0.113.9"]))
 }

@@ -47,7 +47,7 @@ func (r *Repository) ListAllLinks(ctx context.Context, uid authctx.UserID) ([]li
         WITH link_clicks AS (
             SELECT entity_id, count(*)::bigint AS cnt
             FROM click_log
-            WHERE entity_kind = 'link'
+            WHERE entity_kind = 'link' AND user_id = $1
               AND entity_id IN (SELECT id FROM link WHERE user_id = $1)
             GROUP BY entity_id
         )

@@ -541,9 +541,9 @@ describe('AuditSection', () => {
     await userEvent.setup().click(screen.getByRole('button', { name: /^failed sign-in/i }))
 
     await waitFor(() =>
-      expect(get).toHaveBeenCalledWith('/api/admin/audit', {
+      expect(get).toHaveBeenCalledWith('/api/admin/audit', expect.objectContaining({
         params: { window: '7d', action: 'login.failed' },
-      }),
+      })),
     )
   })
 
@@ -555,9 +555,9 @@ describe('AuditSection', () => {
     await userEvent.setup().click(screen.getByRole('button', { name: /^content$/i }))
 
     await waitFor(() =>
-      expect(get).toHaveBeenCalledWith('/api/admin/audit', {
+      expect(get).toHaveBeenCalledWith('/api/admin/audit', expect.objectContaining({
         params: { window: '7d', category: 'content' },
-      }),
+      })),
     )
   })
 
@@ -569,9 +569,9 @@ describe('AuditSection', () => {
     await userEvent.setup().click(screen.getByRole('button', { name: '24 h' }))
 
     await waitFor(() =>
-      expect(get).toHaveBeenCalledWith('/api/admin/audit/stats', { params: { window: '24h' } }),
+      expect(get).toHaveBeenCalledWith('/api/admin/audit/stats', expect.objectContaining({ params: { window: '24h' } })),
     )
-    expect(get).toHaveBeenCalledWith('/api/admin/audit', { params: { window: '24h' } })
+    expect(get).toHaveBeenCalledWith('/api/admin/audit', expect.objectContaining({ params: { window: '24h' } }))
   })
 
   // Oldest-first is a different QUERY, not a reversed page: reversing here
@@ -584,9 +584,9 @@ describe('AuditSection', () => {
     await userEvent.setup().click(screen.getByRole('button', { name: /newest first/i }))
 
     await waitFor(() =>
-      expect(get).toHaveBeenCalledWith('/api/admin/audit', {
+      expect(get).toHaveBeenCalledWith('/api/admin/audit', expect.objectContaining({
         params: { window: '7d', order: 'asc' },
-      }),
+      })),
     )
   })
 
@@ -599,9 +599,9 @@ describe('AuditSection', () => {
     await userEvent.setup().click(screen.getByRole('button', { name: /older/i }))
 
     await waitFor(() =>
-      expect(get).toHaveBeenCalledWith('/api/admin/audit', {
+      expect(get).toHaveBeenCalledWith('/api/admin/audit', expect.objectContaining({
         params: { window: '7d', before: 7 },
-      }),
+      })),
     )
   })
 

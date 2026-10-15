@@ -621,7 +621,11 @@
     "result_duration": "Duración",
     "result_inserted_format": "{{links}} enlaces · {{notes}} notas · {{tags}} etiquetas · {{folders}} carpetas · {{clicks}} clics",
     "result_skipped_format": "{{links}} enlaces · {{notes}} notas · {{tags}} etiquetas",
-    "result_files_format": "{{uploaded}} subidas · {{skipped}} ya existían"
+    "result_files_format": "{{uploaded}} subidas · {{skipped}} ya existían",
+    "warnings_more_one": "+{{count}} aviso más",
+    "warnings_more_other": "+{{count}} avisos más",
+    "errors_more_one": "+{{count}} error más",
+    "errors_more_other": "+{{count}} errores más"
   },
   "stats": {
     "page_kicker": "📊 ANALYTICS · /go telemetry",

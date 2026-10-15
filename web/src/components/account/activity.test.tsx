@@ -86,7 +86,7 @@ describe('account page — my activity', () => {
     await userEvent.setup().click(screen.getByRole('button', { name: /^next$/i }))
 
     await waitFor(() =>
-      expect(get).toHaveBeenCalledWith('/api/activity', { params: { before: 51, limit: 50 } }),
+      expect(get).toHaveBeenCalledWith('/api/activity', expect.objectContaining({ params: { before: 51, limit: 50 } })),
     )
     await waitFor(() => expect(screen.getAllByTestId('fx-activity-row')).toHaveLength(2))
     expect(screen.queryByText('Bookmark 100')).not.toBeInTheDocument()

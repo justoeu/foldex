@@ -254,18 +254,44 @@ func (s *RunStore) LastSuccess(ctx context.Context, job string) (time.Time, erro
 // WORK, and counting them would page the operator for a restart plus one real
 // failure.
 func (s *RunStore) ConsecutiveFailures(ctx context.Context, job string) (int, error) {
-	var n int
-	err := s.pool.QueryRow(ctx, `
-		SELECT count(*) FROM backup_run
-		WHERE job = $1 AND status = 'failed'
-		  AND last_error NOT IN ($2, $3, $4, $5)
-		  AND started_at > COALESCE(
-			(SELECT max(started_at) FROM backup_run WHERE job = $1 AND status = 'succeeded'),
-			'-infinity')`, job, ReasonShutdown, ReasonLockBusy, ReasonStaleClaim, ReasonRestoreInFlight).Scan(&n)
+	counts, err := s.ConsecutiveFailuresForJobs(ctx, []string{job})
 	if err != nil {
-		return 0, fmt.Errorf("backupagent: consecutive failures: %w", err)
+		return 0, err
 	}
-	return n, nil
+	return counts[job], nil
+}
+
+// ConsecutiveFailuresForJobs is ConsecutiveFailures for a whole job set in
+// one round trip, sharing the exact predicate so the admin band and the
+// alert threshold cannot drift apart.
+func (s *RunStore) ConsecutiveFailuresForJobs(ctx context.Context, jobs []string) (map[string]int, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT j.job, count(r.id)
+		FROM unnest($1::text[]) AS j(job)
+		LEFT JOIN backup_run r
+		  ON r.job = j.job AND r.status = 'failed'
+		 AND r.last_error NOT IN ($2, $3, $4, $5)
+		 AND r.started_at > COALESCE(
+			(SELECT max(started_at) FROM backup_run WHERE job = j.job AND status = 'succeeded'),
+			'-infinity')
+		GROUP BY j.job`, jobs, ReasonShutdown, ReasonLockBusy, ReasonStaleClaim, ReasonRestoreInFlight)
+	if err != nil {
+		return nil, fmt.Errorf("backupagent: consecutive failures: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[string]int, len(jobs))
+	for rows.Next() {
+		var job string
+		var n int
+		if err := rows.Scan(&job, &n); err != nil {
+			return nil, fmt.Errorf("backupagent: consecutive failures: %w", err)
+		}
+		out[job] = n
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("backupagent: consecutive failures: %w", err)
+	}
+	return out, nil
 }
 
 // ExpireStale flips running rows older than ttl to failed('stale_claim').

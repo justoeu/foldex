@@ -69,14 +69,48 @@ const noteListColumns = `
     n.pinned, n.folder_id, n.cover_url, n.is_public, n.created_at, n.updated_at
 `
 
-const noteFrom = `
-    FROM note n
+const noteClickLateral = `
     LEFT JOIN LATERAL (
         SELECT count(*) AS cnt, max(clicked_at) AS last_at
         FROM click_log
-        WHERE entity_kind = 'note' AND entity_id = n.id
+        WHERE entity_kind = 'note' AND user_id = n.user_id AND entity_id = n.id
     ) cl ON TRUE
 `
+
+const noteFrom = `
+    FROM note n
+` + noteClickLateral
+
+// noteStatsFrom joins the entity_click_stats projection (INV-056) under the
+// same `cl` alias and column names the LATERAL produces. Used by List's
+// click-ranked sorts (mirrors entries.List).
+func noteStatsFrom(ownerArg int) string {
+	return fmt.Sprintf(`
+    FROM note n
+    LEFT JOIN (
+        SELECT entity_id, click_count AS cnt, last_clicked_at AS last_at
+        FROM entity_click_stats
+        WHERE user_id = $%d AND entity_kind = 'note'
+    ) cl ON cl.entity_id = n.id
+`, ownerArg)
+}
+
+// buildListQuery assembles the List page query: click-ranked sorts rank by
+// the stats projection; ordinary sorts paginate FIRST and aggregate clicks
+// only for the page's rows.
+func buildListQuery(uid authctx.UserID, q ListQuery) (string, []any) {
+	planner := listquery.NewPlanner(q)
+	scope := planner.AddScope(uid, listquery.NoteEntity(folders.SQLNotInLockedFolder("n")))
+	page := planner.AddPage(listquery.NoteOrder())
+	where := " WHERE " + strings.Join(scope.Where, " AND ")
+	pageArgs := fmt.Sprintf(" ORDER BY %s LIMIT $%d OFFSET $%d", page.OrderBy, page.LimitArg, page.OffsetArg)
+	if page.ClickRanking {
+		return `SELECT ` + noteListColumns + noteStatsFrom(scope.OwnerArg) + where + pageArgs, planner.Args()
+	}
+	paged := `SELECT n.* FROM note n` + where + pageArgs
+	return `SELECT ` + noteListColumns + ` FROM (` + paged + `) n` + noteClickLateral +
+		" ORDER BY " + page.OrderBy, planner.Args()
+}
 
 type rowScanner interface {
 	Scan(dest ...any) error
@@ -168,13 +202,9 @@ func (r *Repository) Get(ctx context.Context, uid authctx.UserID, id int64) (Not
 }
 
 func (r *Repository) List(ctx context.Context, uid authctx.UserID, q ListQuery) ([]Note, error) {
-	planner := listquery.NewPlanner(q)
-	scope := planner.AddScope(uid, listquery.NoteEntity(folders.SQLNotInLockedFolder("n")))
-	page := planner.AddPage(listquery.NoteOrder())
-	sql := `SELECT ` + noteListColumns + noteFrom + " WHERE " + strings.Join(scope.Where, " AND ")
-	sql += fmt.Sprintf(" ORDER BY %s LIMIT $%d OFFSET $%d", page.OrderBy, page.LimitArg, page.OffsetArg)
+	sql, args := buildListQuery(uid, q)
 
-	rows, err := r.pool.Query(ctx, sql, planner.Args()...)
+	rows, err := r.pool.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list notes: %w", err)
 	}
@@ -314,7 +344,7 @@ func (r *Repository) Delete(ctx context.Context, uid authctx.UserID, id int64, u
 	if err != nil {
 		return err
 	}
-	if err := entityrefs.PurgeOne(ctx, tx, "note", id); err != nil {
+	if err := entityrefs.PurgeOne(ctx, tx, uid, "note", id); err != nil {
 		return err
 	}
 	ct, err := tx.Exec(ctx, `DELETE FROM note WHERE user_id = $1 AND id = $2`, int64(uid), id)

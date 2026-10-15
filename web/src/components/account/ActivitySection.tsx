@@ -100,11 +100,11 @@ export function ActivitySection() {
 
   const chartFeed = useQuery({
     queryKey: [...activityQueryKey, 'chart'],
-    queryFn: () => fetchOwnActivity(undefined, CHART_SAMPLE),
+    queryFn: ({ signal }) => fetchOwnActivity(undefined, CHART_SAMPLE, signal),
   })
   const feed = useQuery({
     queryKey: [...activityQueryKey, 'page', pageSize, cursor ?? 0],
-    queryFn: () => fetchOwnActivity(cursor, pageSize),
+    queryFn: ({ signal }) => fetchOwnActivity(cursor, pageSize, signal),
     placeholderData: keepPreviousData,
   })
 

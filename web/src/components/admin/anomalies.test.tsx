@@ -267,7 +267,7 @@ describe('AuditSection — the panel inside the trail', () => {
     expect(screen.getByRole('searchbox')).toHaveValue('189.42.11.7')
     await waitFor(() => expect(get).toHaveBeenCalledWith(
       '/api/admin/audit',
-      { params: { window: '7d', q: '189.42.11.7' } },
+      expect.objectContaining({ params: { window: '7d', q: '189.42.11.7' } }),
     ))
   })
 
@@ -304,7 +304,7 @@ describe('AuditSection — the panel inside the trail', () => {
     expect(chip).toHaveAttribute('aria-pressed', 'false')
     await waitFor(() => expect(get).toHaveBeenCalledWith(
       '/api/admin/audit',
-      { params: { window: '7d', q: '189.42.11.7' } },
+      expect.objectContaining({ params: { window: '7d', q: '189.42.11.7' } }),
     ))
   })
 })

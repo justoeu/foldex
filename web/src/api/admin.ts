@@ -282,8 +282,8 @@ export function auditQueryKey(q: AuditQuery = {}) {
   ] as const
 }
 
-export async function fetchAudit(q: AuditQuery = {}): Promise<AuditEntry[]> {
-  const { data } = await http.get<{ entries: AuditEntry[] }>('/api/admin/audit', { params: auditParams(q) })
+export async function fetchAudit(q: AuditQuery = {}, signal?: AbortSignal): Promise<AuditEntry[]> {
+  const { data } = await http.get<{ entries: AuditEntry[] }>('/api/admin/audit', { params: auditParams(q), signal })
   return data.entries
 }
 
@@ -310,8 +310,8 @@ export function auditStatsQueryKey(window: AuditWindow) {
   return ['admin', 'audit', 'stats', window] as const
 }
 
-export async function fetchAuditStats(window: AuditWindow): Promise<AuditStats> {
-  const { data } = await http.get<AuditStats>('/api/admin/audit/stats', { params: { window } })
+export async function fetchAuditStats(window: AuditWindow, signal?: AbortSignal): Promise<AuditStats> {
+  const { data } = await http.get<AuditStats>('/api/admin/audit/stats', { params: { window }, signal })
   return data
 }
 
@@ -355,11 +355,11 @@ export async function unblockIP(ip: string): Promise<void> {
  */
 export const activityQueryKey = ['activity'] as const
 
-export async function fetchOwnActivity(before?: number, limit?: number): Promise<AuditEntry[]> {
+export async function fetchOwnActivity(before?: number, limit?: number, signal?: AbortSignal): Promise<AuditEntry[]> {
   const params: { before?: number; limit?: number } = {}
   if (before) params.before = before
   if (limit) params.limit = limit
-  const { data } = await http.get<{ entries: AuditEntry[] }>('/api/activity', { params })
+  const { data } = await http.get<{ entries: AuditEntry[] }>('/api/activity', { params, signal })
   return data.entries
 }
 
@@ -734,7 +734,7 @@ export function anomaliesQueryKey(window: AnomalyWindow) {
   return ['admin', 'anomalies', window] as const
 }
 
-export async function fetchAnomalies(window: AnomalyWindow): Promise<AnomalyResponse> {
-  const { data } = await http.get<AnomalyResponse>('/api/admin/anomalies', { params: { window } })
+export async function fetchAnomalies(window: AnomalyWindow, signal?: AbortSignal): Promise<AnomalyResponse> {
+  const { data } = await http.get<AnomalyResponse>('/api/admin/anomalies', { params: { window }, signal })
   return data
 }

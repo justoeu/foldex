@@ -125,10 +125,10 @@ describe('AuditSection — search', () => {
     await userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
       .type(screen.getByRole('searchbox'), '189.42')
 
-    expect(get).not.toHaveBeenCalledWith('/api/admin/audit', { params: { window: '7d', q: '189.42' } })
+    expect(get).not.toHaveBeenCalledWith('/api/admin/audit', expect.objectContaining({ params: { window: '7d', q: '189.42' } }))
     await vi.advanceTimersByTimeAsync(400)
     await waitFor(() =>
-      expect(get).toHaveBeenCalledWith('/api/admin/audit', { params: { window: '7d', q: '189.42' } }),
+      expect(get).toHaveBeenCalledWith('/api/admin/audit', expect.objectContaining({ params: { window: '7d', q: '189.42' } })),
     )
     vi.useRealTimers()
   })
