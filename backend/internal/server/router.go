@@ -32,6 +32,7 @@ import (
 	"foldex/internal/policy"
 	"foldex/internal/push"
 	"foldex/internal/roleperm"
+	"foldex/internal/settings"
 	"foldex/internal/stats"
 	"foldex/internal/tracing"
 )
@@ -108,6 +109,10 @@ type Deps struct {
 	AbusePolicy    *abusepolicy.Cache
 	AuthMiddleware *auth.Middleware
 	FolderHandler  *folders.Handler
+	// SettingsHandler serves /api/settings. Nil constructs one in the mount,
+	// which is what router tests want; production passes the instance it
+	// registered with the sweeper so its rate-limit buckets get pruned.
+	SettingsHandler *settings.Handler
 
 	// Grants is the configured RBAC matrix (ADR-42). Nil means the compiled
 	// one — the zero-value Deps used across router tests — so a suite that does

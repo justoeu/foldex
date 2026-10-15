@@ -25,6 +25,7 @@ import (
 	"foldex/internal/folders"
 	"foldex/internal/links"
 	"foldex/internal/notes"
+	"foldex/internal/pkg/authctx"
 	"foldex/internal/server"
 	"foldex/internal/testdb"
 )
@@ -246,6 +247,175 @@ func TestAdminGateResponseMatrixAcrossAuthModes(t *testing.T) {
 			}
 		})
 	}
+}
+
+type denyBackupExportGrants struct{}
+
+func (denyBackupExportGrants) Can(role authctx.Role, p authctx.Permission) bool {
+	if p == authctx.PermBackupExport {
+		return false
+	}
+	return role.Can(p)
+}
+
+// GET /api/export downloads the caller's whole library, so it belongs behind
+// the same two gates as /api/backup: the configured backup.export permission
+// (an owner who unticks it on the Roles screen must be obeyed here too) and
+// the API-token scope (reading OUT is not a content credential's job).
+func TestExport_RequiresBackupExportPermissionAndRejectsAPIToken(t *testing.T) {
+	pool := testdb.Shared(t)
+	uid := testdb.SeedUser(t, pool, "editor@test.local", "editor")
+	ctx := context.Background()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	repo := auth.NewRepository(pool)
+	apiToken, err := repo.CreateAPIToken(ctx, uid, "editor", time.Hour)
+	require.NoError(t, err)
+	session, _, err := repo.IssueSession(ctx, uid, 0, auth.SessionTTL{
+		Access: time.Minute, Refresh: time.Hour, Absolute: 24 * time.Hour, Grace: time.Second,
+	}, "", "")
+	require.NoError(t, err)
+
+	newRouter := func(grants denyBackupExportGrants, deny bool) http.Handler {
+		deps := server.Deps{
+			Pool: pool, Worker: nopWorker{}, Logger: logger,
+			Config:         config.Config{AuthEnabled: true, CORSOrigins: []string{"http://localhost:9088"}},
+			AuthMiddleware: auth.NewMiddleware(repo, auth.CookieOptions{}, logger, false),
+		}
+		if deny {
+			deps.Grants = grants
+		}
+		return server.New(deps)
+	}
+	get := func(router http.Handler, bearer bool) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/api/export?format=json", nil)
+		if bearer {
+			req.Header.Set("Authorization", "Bearer "+apiToken.Token)
+		} else {
+			req.AddCookie(&http.Cookie{Name: auth.CookieAccess, Value: session.Access})
+		}
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		return rec
+	}
+
+	rec := get(newRouter(denyBackupExportGrants{}, false), false)
+	assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	rec = get(newRouter(denyBackupExportGrants{}, true), false)
+	assert.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+	assert.Contains(t, rec.Body.String(), `"code":"forbidden_role"`)
+
+	rec = get(newRouter(denyBackupExportGrants{}, false), true)
+	assert.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+	assert.Contains(t, rec.Body.String(), `"code":"token_scope"`)
+}
+
+// Direct entity routes must honour the folder lock the list routes already
+// honour: a note's body or a link's row read by bare id (or written by bare
+// id) reveals and mutates exactly what GET /api/entries?folder_id= gates.
+// An API token can never mint an unlock token, so without this gate the
+// content-scoped credential enumerates protected rows by sequential id.
+func TestDirectEntityAccess_RespectsFolderLock(t *testing.T) {
+	pool := testdb.Shared(t)
+	uid := testdb.SeedUser(t, pool, "direct-gate@test.local", "editor")
+	ctx := context.Background()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	unlockKey := []byte("01234567890123456789012345678901")
+
+	password := "a good folder password"
+	frepo := folders.NewRepository(pool)
+	folder, err := frepo.Create(ctx, uid, folders.CreateInput{Name: "Private", Color: "#6366F1", Password: &password})
+	require.NoError(t, err)
+	link, err := links.NewRepository(pool).Create(ctx, uid, links.CreateInput{
+		URL: "https://direct.example", Title: "Link secret", FolderID: &folder.ID,
+	})
+	require.NoError(t, err)
+	note, err := notes.NewRepository(pool).Create(ctx, uid, notes.CreateInput{
+		Title: "Note secret", BodyHTML: "<p>private</p>", FolderID: &folder.ID,
+	})
+	require.NoError(t, err)
+	deletable, err := links.NewRepository(pool).Create(ctx, uid, links.CreateInput{
+		URL: "https://direct-delete.example", Title: "Link deletable", FolderID: &folder.ID,
+	})
+	require.NoError(t, err)
+	hash, err := frepo.PasswordHashFor(ctx, uid, folder.ID)
+	require.NoError(t, err)
+	require.NotNil(t, hash)
+	validUnlock := folders.IssueUnlockToken(unlockKey, folder.ID, *hash)
+
+	repo := auth.NewRepository(pool)
+	session, _, err := repo.IssueSession(ctx, uid, 0, auth.SessionTTL{
+		Access: time.Minute, Refresh: time.Hour, Absolute: 24 * time.Hour, Grace: time.Second,
+	}, "", "")
+	require.NoError(t, err)
+	apiToken, err := repo.CreateAPIToken(ctx, uid, "direct-gate", time.Hour)
+	require.NoError(t, err)
+
+	router := server.New(server.Deps{
+		Pool: pool, Worker: nopWorker{}, Logger: logger,
+		Config:          config.Config{AuthEnabled: true, CORSOrigins: []string{"http://localhost:9088"}},
+		AuthMiddleware:  auth.NewMiddleware(repo, auth.CookieOptions{}, logger, false),
+		FolderUnlockKey: unlockKey,
+	})
+
+	doReq := func(method, path, body string, useToken bool, unlock string) *httptest.ResponseRecorder {
+		var reader io.Reader
+		if body != "" {
+			reader = bytes.NewBufferString(body)
+		}
+		req := httptest.NewRequest(method, path, reader)
+		if body != "" {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		if useToken {
+			req.Header.Set("Authorization", "Bearer "+apiToken.Token)
+		} else {
+			req.AddCookie(&http.Cookie{Name: auth.CookieAccess, Value: session.Access})
+			req.AddCookie(&http.Cookie{Name: auth.CookieCSRF, Value: session.CSRF})
+			if method != http.MethodGet {
+				req.Header.Set(auth.CSRFHeader, session.CSRF)
+			}
+		}
+		if unlock != "" {
+			req.Header.Set(folders.UnlockHeader, unlock)
+		}
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		return rec
+	}
+
+	reads := []string{
+		"/api/links/" + intToStr(link.ID),
+		"/api/notes/" + intToStr(note.ID),
+		"/api/links/by-url?url=https%3A%2F%2Fdirect.example",
+	}
+	for _, path := range reads {
+		for _, useToken := range []bool{false, true} {
+			rec := doReq(http.MethodGet, path, "", useToken, "")
+			assert.Equal(t, http.StatusForbidden, rec.Code, "GET %s (token=%v): %s", path, useToken, rec.Body.String())
+			assert.Contains(t, rec.Body.String(), "folder_locked", "GET %s", path)
+			assert.NotContains(t, rec.Body.String(), "secret", "GET %s must not leak content", path)
+		}
+		rec := doReq(http.MethodGet, path, "", false, validUnlock)
+		assert.Equal(t, http.StatusOK, rec.Code, "GET %s with unlock: %s", path, rec.Body.String())
+	}
+
+	// Ungrouping by bare id strips the folder's protection without ever
+	// proving the folder password — the mutation half of the same bypass.
+	rec := doReq(http.MethodPatch, "/api/links/"+intToStr(link.ID), `{"folder_id":null}`, false, "")
+	assert.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+	rec = doReq(http.MethodPatch, "/api/links/"+intToStr(link.ID), `{"title":"renamed"}`, true, "")
+	assert.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+	rec = doReq(http.MethodPatch, "/api/notes/"+intToStr(note.ID), `{"folder_id":null}`, false, "")
+	assert.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+
+	rec = doReq(http.MethodPatch, "/api/links/"+intToStr(link.ID), `{"title":"renamed"}`, false, validUnlock)
+	assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	rec = doReq(http.MethodDelete, "/api/links/"+intToStr(deletable.ID), "", false, "")
+	assert.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+	rec = doReq(http.MethodDelete, "/api/links/"+intToStr(deletable.ID), "", false, validUnlock)
+	assert.Equal(t, http.StatusNoContent, rec.Code, rec.Body.String())
 }
 
 func TestAdminGateRechecksLiveTOTPState(t *testing.T) {

@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient, type InfiniteData, type QueryCli
 import { http } from './client'
 import {
   cachedEntryFolderId,
+  entityUnlockHeaders,
   invalidateLibrary,
   mapCachedLinkEntries,
   optimisticEntryPatch,
@@ -54,7 +55,9 @@ export function useUpdateLink() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async ({ id, body }: { id: number; body: LinkUpdate }) => {
-      const { data } = await http.patch<Link>(`/api/links/${id}`, body)
+      const { data } = await http.patch<Link>(`/api/links/${id}`, body, {
+        headers: entityUnlockHeaders(qc, 'link', id),
+      })
       return data
     },
     onMutate: ({ id, body }) => ({
@@ -92,7 +95,7 @@ export function useDeleteLink() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async (id: number) => {
-      await http.delete(`/api/links/${id}`)
+      await http.delete(`/api/links/${id}`, { headers: entityUnlockHeaders(qc, 'link', id) })
     },
     onSuccess: () => invalidateLibrary(qc, { links: true, entries: true, tags: true, folders: true, counts: true }),
   })
@@ -102,7 +105,9 @@ export function usePinLink() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async ({ id, pinned }: { id: number; pinned: boolean }) => {
-      const { data } = await http.patch<Link>(`/api/links/${id}`, { pinned })
+      const { data } = await http.patch<Link>(`/api/links/${id}`, { pinned }, {
+        headers: entityUnlockHeaders(qc, 'link', id),
+      })
       return data
     },
     onMutate: async ({ id, pinned }) => optimisticEntryPatch(qc, 'link', id, { pinned }),

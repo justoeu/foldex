@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -401,7 +402,11 @@ func (h *ScreenshotHandler) authorizeKey(ctx context.Context, key string) error 
 
 // linkKeyID extracts the link id from an id-derived object key
 // (`screenshots/12.version.jpg` → 12). Reports false for anything that is not
-// `{prefix}/{digits}.{suffix}`.
+// `{prefix}/{digits}.{suffix}`, with the suffix held to the same grammar the
+// backup restore enforces (dot-prefixed alphanumeric/hyphen segments): a
+// nested path like `screenshots/12.png/extra` must not parse as link 12.
+var linkKeySuffixRE = regexp.MustCompile(`^(\.[A-Za-z0-9-]{1,64})+$`)
+
 func linkKeyID(key string) (int64, bool) {
 	slash := strings.IndexByte(key, '/')
 	if slash < 0 {
@@ -410,6 +415,9 @@ func linkKeyID(key string) (int64, bool) {
 	rest := key[slash+1:]
 	dot := strings.IndexByte(rest, '.')
 	if dot <= 0 {
+		return 0, false
+	}
+	if !linkKeySuffixRE.MatchString(rest[dot:]) {
 		return 0, false
 	}
 	id, err := strconv.ParseInt(rest[:dot], 10, 64)

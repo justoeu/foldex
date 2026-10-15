@@ -298,14 +298,18 @@ func (h *Handler) Mount(r chi.Router) {
 	// settings) and from a pre-auth challenge (an admin forced to enrol before
 	// the login completes). Optional resolves a principal when one exists and
 	// lets the handler fall back to the challenge when it does not.
-	r.With(h.mw.Optional).Post("/2fa/totp/start", h.StartTOTP)
-	r.With(h.mw.Optional).Get("/2fa/totp/qr.png", h.TOTPQR)
-	r.With(h.mw.Optional).Post("/2fa/totp/confirm", h.ConfirmTOTP)
+	// RejectAPIToken rides along on every enrollment route: Optional resolves
+	// a Bearer [REDACTED] into a principal, and without the rejection a
+	// content-scoped token reaches the credential surface (a pending TOTP
+	// seed behind the QR route, the step-up budget behind confirm).
+	r.With(h.mw.Optional, h.mw.RejectAPIToken).Post("/2fa/totp/start", h.StartTOTP)
+	r.With(h.mw.Optional, h.mw.RejectAPIToken).Get("/2fa/totp/qr.png", h.TOTPQR)
+	r.With(h.mw.Optional, h.mw.RejectAPIToken).Post("/2fa/totp/confirm", h.ConfirmTOTP)
 	// The e-mail factor reaches the same two entry points, for the same reason:
 	// an administrator diverted into mandatory enrollment must be able to pick
 	// it, or the policy would silently mean "authenticator" (ADR-37 §7.3).
-	r.With(h.mw.Optional).Post("/2fa/email/start", h.StartEmailFactor)
-	r.With(h.mw.Optional).Post("/2fa/email/confirm", h.ConfirmEmailFactor)
+	r.With(h.mw.Optional, h.mw.RejectAPIToken).Post("/2fa/email/start", h.StartEmailFactor)
+	r.With(h.mw.Optional, h.mw.RejectAPIToken).Post("/2fa/email/confirm", h.ConfirmEmailFactor)
 
 	// Google OAuth. Mounted unconditionally: with no client credentials the
 	// provider reports Enabled() == false and the routes answer a readable
@@ -511,30 +515,41 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 
 	ip := clientIP(r)
 	ipKey := "login:ip:" + ip
-	// Keyed by the NORMALIZED value rather than the raw input, so `A@x.com` and
-	// `a@x.com ` share one budget instead of giving an attacker a fresh 5
-	// attempts per capitalization — and RESOLVED first, so an account's address
-	// and its username charge the same bucket instead of two.
-	bucket, err := h.repo.loginBucketKey(r.Context(), in.who())
+	// ONE canonical form feeds every bucket, the bucket-key query and the
+	// audit row. Normalizing (not raw input) so `A@x.com` and `a@x.com `
+	// share one budget, and truncating to the e-mail ceiling everywhere: when
+	// only the origin bucket truncated, suffix variants past byte 320 held
+	// one breadth member while minting a fresh per-account bucket (and a
+	// fresh SQL probe) per request, so neither lockout could ever trip. The
+	// credential check below still receives the RAW identifier — a truncated
+	// one could name a different account than the caller submitted.
+	submitted := truncateTo(NormalizeEmail(in.who()), maxAuditEmail)
+
+	// The origin bucket is consulted BEFORE the database: an already-locked
+	// origin must not still cost a query per attempt.
+	h.configureLoginLimits(r.Context())
+	if until, ok := h.loginByIP.Begin(ipKey); !ok {
+		writeRateLimited(w, until)
+		return
+	}
+	// RESOLVED through the account, so an account's address and its username
+	// charge the same per-account bucket instead of two.
+	bucket, err := h.repo.loginBucketKey(r.Context(), submitted)
 	if err != nil {
+		h.loginByIP.Release(ipKey)
 		h.logger.Error("login bucket key", "err", err)
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
 	emailKey := "login:em:" + bucket
 
-	h.configureLoginLimits(r.Context())
-	if until, ok := h.loginByIP.Begin(ipKey); !ok {
-		writeRateLimited(w, until)
-		return
-	}
 	if _, ok := h.loginByEmail.Begin(emailKey); !ok {
 		// Charge origin with the SUBMITTED identifier, same as a miss
 		// (INV-184). Release would skip the member and reopen a 429-on-canary
 		// oracle after filling the IP set. 401, not 429: the account bucket
 		// is resolved, so a distinct lockout status is a username-to-mailbox
 		// oracle (INV-041).
-		h.loginByIP.CommitFailFor(ipKey, truncateTo(NormalizeEmail(in.who()), maxAuditEmail))
+		h.loginByIP.CommitFailFor(ipKey, submitted)
 		burnDummyHash(in.Password)
 		httperr.Write(w, errInvalidCredentials())
 		return
@@ -557,8 +572,8 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	// itself an oracle, since the attacker learns which addresses can be
 	// locked out.
 	if !found || verr != nil || user.Status != StatusActive {
-		lockedBucket := h.recordLoginFailure(ipKey, emailKey, NormalizeEmail(in.who()))
-		h.auditLoginRejection(r, NormalizeEmail(in.who()), lockedBucket)
+		lockedBucket := h.recordLoginFailure(ipKey, emailKey, submitted)
+		h.auditLoginRejection(r, submitted, lockedBucket)
 		httperr.Write(w, errInvalidCredentials())
 		return
 	}
@@ -1020,16 +1035,24 @@ func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
+	passwordKey, ok := h.beginStepUpPassword(w, p.UserID)
+	if !ok {
+		return
+	}
 	switch err := h.repo.ChangePassword(r.Context(), p.UserID, p.SessionID,
 		in.CurrentPassword, in.NewPassword); {
 	case errors.Is(err, ErrBadCredentials), errors.Is(err, ErrPasswordMissing):
+		h.stepUpPasswordUser.CommitFail(passwordKey)
 		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_credentials",
 			"current password is incorrect"))
 		return
 	case err != nil:
+		h.stepUpPasswordUser.Release(passwordKey)
 		h.logger.Error("change password", "err", err)
 		httperr.Write(w, httperr.ErrInternal)
 		return
+	default:
+		h.stepUpPasswordUser.CommitSuccess(passwordKey)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -1154,6 +1177,21 @@ func (h *Handler) issueAndRespond(w http.ResponseWriter, r *http.Request, user U
 // errInvalidCredentials is the single failure shape the login path emits.
 func errInvalidCredentials() error {
 	return httperr.New(http.StatusUnauthorized, "invalid_credentials", "invalid e-mail or password")
+}
+
+// beginStepUpPassword reserves one guess from the per-user password budget
+// every session-authenticated password proof spends from. Without it, a
+// stolen session is an unlimited oracle for the account password on any
+// route that checks one. The caller settles the reservation exactly once:
+// CommitFail on a wrong password, CommitSuccess on a match, Release when
+// the credential was never actually tested.
+func (h *Handler) beginStepUpPassword(w http.ResponseWriter, uid authctx.UserID) (string, bool) {
+	key := userBucketKey("stepup-password", uid)
+	if until, ok := h.stepUpPasswordUser.Begin(key); !ok {
+		writeRateLimited(w, until)
+		return "", false
+	}
+	return key, true
 }
 
 func writeRateLimited(w http.ResponseWriter, until time.Time) {

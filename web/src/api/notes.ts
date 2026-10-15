@@ -1,13 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { http } from './client'
-import { cachedEntryFolderId, invalidateLibrary, optimisticEntryPatch, removeCachedEntry } from './entries'
+import { cachedEntryFolderId, entityUnlockHeaders, invalidateLibrary, optimisticEntryPatch, removeCachedEntry } from './entries'
 import type { Note, NoteCreate, NoteUpdate } from './types'
 
 export function useNote(id: number | null) {
+  const qc = useQueryClient()
+  const headers = id != null ? entityUnlockHeaders(qc, 'note', id) : undefined
   return useQuery({
-    queryKey: ['notes', id],
+    queryKey: ['notes', id, headers ? 'unlocked' : 'locked'],
     queryFn: async ({ signal }) => {
-      const { data } = await http.get<Note>(`/api/notes/${id}`, { signal })
+      const { data } = await http.get<Note>(`/api/notes/${id}`, { signal, headers })
       return data
     },
     enabled: id != null,
@@ -33,7 +35,9 @@ export function useUpdateNote() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async ({ id, body }: { id: number; body: NoteUpdate }) => {
-      const { data } = await http.patch<Note>(`/api/notes/${id}`, body)
+      const { data } = await http.patch<Note>(`/api/notes/${id}`, body, {
+        headers: entityUnlockHeaders(qc, 'note', id),
+      })
       return data
     },
     onMutate: ({ id, body }) => ({
@@ -57,7 +61,7 @@ export function useDeleteNote() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async (id: number) => {
-      await http.delete(`/api/notes/${id}`)
+      await http.delete(`/api/notes/${id}`, { headers: entityUnlockHeaders(qc, 'note', id) })
     },
     onSuccess: () => invalidateLibrary(qc, { entries: true, tags: true, folders: true, counts: true }),
   })
@@ -70,7 +74,9 @@ export function usePinNote() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async ({ id, pinned }: { id: number; pinned: boolean }) => {
-      const { data } = await http.patch<Note>(`/api/notes/${id}`, { pinned })
+      const { data } = await http.patch<Note>(`/api/notes/${id}`, { pinned }, {
+        headers: entityUnlockHeaders(qc, 'note', id),
+      })
       return data
     },
     onMutate: async ({ id, pinned }) => optimisticEntryPatch(qc, 'note', id, { pinned }),

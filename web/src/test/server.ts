@@ -1115,10 +1115,19 @@ function refreshPreview(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: Mo
   return null
 }
 
-function getLinkByURL(_m: RegExpMatchArray, _d: any, params: URLSearchParams, s: MockState) {
+// Direct entity reads/mutations enforce the parent folder's lock exactly
+// like the folder-scoped lists (and like the real backend): without a
+// valid unlock token for the entity's CURRENT folder, folder_locked.
+function checkEntityFolderLock(folderId: number | null | undefined, s: MockState, headers: Record<string, string>) {
+  if (folderId == null) return
+  if (!verifyMockUnlockToken(folderId, s, headers['X-Foldex-Folder-Unlock'])) throw folderLocked()
+}
+
+function getLinkByURL(_m: RegExpMatchArray, _d: any, params: URLSearchParams, s: MockState, headers: Record<string, string>) {
   const url = params.get('url') ?? ''
   const link = s.links.find((row) => row.url === url)
   if (!link) throw notFound()
+  checkEntityFolderLock(link.folder_id, s, headers)
   return link
 }
 
@@ -1189,10 +1198,11 @@ function removeLinkImage(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: M
   return null
 }
 
-function patchLink(m: RegExpMatchArray, data: any, _p: URLSearchParams, s: MockState): Link {
+function patchLink(m: RegExpMatchArray, data: any, _p: URLSearchParams, s: MockState, headers: Record<string, string>): Link {
   const id = Number(m[1])
   const l = s.links.find((x) => x.id === id)
   if (!l) throw notFound()
+  checkEntityFolderLock(l.folder_id, s, headers)
   if (data.url !== undefined) l.url = data.url
   if (data.title !== undefined) l.title = data.title
   if (data.description !== undefined) l.description = data.description
@@ -1210,10 +1220,11 @@ function patchLink(m: RegExpMatchArray, data: any, _p: URLSearchParams, s: MockS
   return l
 }
 
-function deleteLink(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockState) {
+function deleteLink(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockState, headers: Record<string, string>) {
   const id = Number(m[1])
   const idx = s.links.findIndex((x) => x.id === id)
   if (idx < 0) throw notFound()
+  checkEntityFolderLock(s.links[idx]!.folder_id, s, headers)
   s.links.splice(idx, 1)
   return null
 }
@@ -1267,10 +1278,11 @@ function listNotes(_m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockSt
   return s.notes
 }
 
-function getNote(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockState): Note {
+function getNote(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockState, headers: Record<string, string>): Note {
   const id = Number(m[1])
   const n = s.notes.find((x) => x.id === id)
   if (!n) throw notFound()
+  checkEntityFolderLock(n.folder_id, s, headers)
   return n
 }
 
@@ -1294,10 +1306,11 @@ function createNote(_m: RegExpMatchArray, data: any, _p: URLSearchParams, s: Moc
   return note
 }
 
-function patchNote(m: RegExpMatchArray, data: any, _p: URLSearchParams, s: MockState): Note {
+function patchNote(m: RegExpMatchArray, data: any, _p: URLSearchParams, s: MockState, headers: Record<string, string>): Note {
   const id = Number(m[1])
   const n = s.notes.find((x) => x.id === id)
   if (!n) throw notFound()
+  checkEntityFolderLock(n.folder_id, s, headers)
   if (data.title !== undefined) n.title = data.title
   if (data.body_html !== undefined) n.body_html = data.body_html
   if ('folder_id' in data) n.folder_id = data.folder_id ?? null
@@ -1310,10 +1323,11 @@ function patchNote(m: RegExpMatchArray, data: any, _p: URLSearchParams, s: MockS
   return n
 }
 
-function deleteNote(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockState) {
+function deleteNote(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockState, headers: Record<string, string>) {
   const id = Number(m[1])
   const idx = s.notes.findIndex((x) => x.id === id)
   if (idx < 0) throw notFound()
+  checkEntityFolderLock(s.notes[idx]!.folder_id, s, headers)
   s.notes.splice(idx, 1)
   return null
 }

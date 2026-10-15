@@ -23,6 +23,7 @@ type Handler struct {
 	repo       *Repository
 	storage    ports.Uploader // optional — nil disables Delete's image cleanup
 	folderGate folders.ContentGate
+	unlockKey  []byte
 }
 
 func NewHandler(repo *Repository, storage ports.Uploader) *Handler {
@@ -32,7 +33,20 @@ func NewHandler(repo *Repository, storage ports.Uploader) *Handler {
 // WithFolderGate enables unlock-token content-gate on ?folder_id= lists.
 func (h *Handler) WithFolderGate(lookup folders.PasswordHashLookup, unlockKey []byte) *Handler {
 	h.folderGate = folders.NewContentGate(lookup, unlockKey)
+	h.unlockKey = unlockKey
 	return h
+}
+
+// gateEntityRead refuses to reveal a note (body included) that sits in a
+// locked folder without the unlock token the folder-scoped lists demand.
+func (h *Handler) gateEntityRead(r *http.Request, n Note) error {
+	if n.FolderID == nil {
+		return nil
+	}
+	if !h.folderGate.Configured() {
+		return folders.ErrGateUnavailable
+	}
+	return h.folderGate.Check(r.Context(), authctx.MustUser(r.Context()), *n.FolderID, r.Header.Get(folders.UnlockHeader))
 }
 
 func (h *Handler) Mount(r chi.Router) {
@@ -86,6 +100,10 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, repositoryHTTPError(err))
 		return
 	}
+	if err := h.gateEntityRead(r, n); err != nil {
+		httperr.Write(w, repositoryHTTPError(err))
+		return
+	}
 	httperr.JSON(w, http.StatusOK, n)
 }
 
@@ -99,7 +117,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	n, err := h.repo.Update(r.Context(), authctx.MustUser(r.Context()), id, in)
+	n, err := h.repo.Update(r.Context(), authctx.MustUser(r.Context()), id, in, h.unlockKey, r.Header.Get(folders.UnlockHeader))
 	if err != nil {
 		httperr.Write(w, repositoryHTTPError(err))
 		return
@@ -124,7 +142,7 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 	if existing, err := h.repo.Get(r.Context(), authctx.MustUser(r.Context()), id); err == nil {
 		title = existing.Title
 	}
-	if err := h.repo.Delete(r.Context(), authctx.MustUser(r.Context()), id, h.storage); err != nil {
+	if err := h.repo.Delete(r.Context(), authctx.MustUser(r.Context()), id, h.unlockKey, r.Header.Get(folders.UnlockHeader), h.storage); err != nil {
 		httperr.Write(w, repositoryHTTPError(err))
 		return
 	}

@@ -193,9 +193,8 @@ func (h *Handler) OAuthLinkStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p, _ := authctx.FromContext(r.Context())
-	passwordKey := userBucketKey("stepup-password", p.UserID)
-	if until, ok := h.stepUpPasswordUser.Begin(passwordKey); !ok {
-		writeRateLimited(w, until)
+	passwordKey, ok := h.beginStepUpPassword(w, p.UserID)
+	if !ok {
 		return
 	}
 	tokenVersion, err := h.repo.VerifyUserPasswordEpoch(r.Context(), p.UserID, in.CurrentPassword)
@@ -730,23 +729,33 @@ func (h *Handler) OAuthUnlink(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
+	passwordKey, ok := h.beginStepUpPassword(w, p.UserID)
+	if !ok {
+		return
+	}
 	switch err := h.repo.UnlinkIdentity(r.Context(), p.UserID, p.SessionID, user.TokenVersion,
 		ProviderGoogle, in.Password); {
 	case errors.Is(err, ErrPasswordMissing), errors.Is(err, ErrLastCredential):
+		h.stepUpPasswordUser.Release(passwordKey)
 		httperr.Write(w, httperr.New(http.StatusConflict, "password_required",
 			"set a password before unlinking your Google account"))
 	case errors.Is(err, ErrBadCredentials):
+		h.stepUpPasswordUser.CommitFail(passwordKey)
 		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_credentials",
 			"current password is incorrect"))
 	case errors.Is(err, ErrIdentityMissing):
+		h.stepUpPasswordUser.CommitSuccess(passwordKey)
 		httperr.Write(w, httperr.New(http.StatusNotFound, "not_linked",
 			"no Google account is linked"))
 	case errors.Is(err, ErrSessionInvalid):
+		h.stepUpPasswordUser.Release(passwordKey)
 		h.writeSessionInvalid(w)
 	case err != nil:
+		h.stepUpPasswordUser.Release(passwordKey)
 		h.logger.Error("unlink", "err", err)
 		httperr.Write(w, httperr.ErrInternal)
 	default:
+		h.stepUpPasswordUser.CommitSuccess(passwordKey)
 		w.WriteHeader(http.StatusNoContent)
 	}
 }

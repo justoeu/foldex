@@ -232,12 +232,16 @@ func contentCRUD(pr chi.Router, d Deps, grants authgate.Grants, linksRepo *links
 		tags.NewHandler(tags.NewRepository(d.Pool)).Mount(tr)
 	})
 	settingsRepo := settings.NewRepository(d.Pool)
+	settingsHandler := d.SettingsHandler
+	if settingsHandler == nil {
+		settingsHandler = settings.NewHandler(settingsRepo)
+	}
 	pr.Route("/settings", func(sr chi.Router) {
 		// Master recovery password is a credential, not content — a bearer
 		// token must not set one and then reset every locked folder.
 		sr.Use(authgate.RejectAPIToken)
 		sr.Use(writeGate)
-		settings.NewHandler(settingsRepo).Mount(sr)
+		settingsHandler.Mount(sr)
 	})
 	foldersRepo := folders.NewRepository(d.Pool)
 	folderHandler := d.FolderHandler
@@ -265,7 +269,14 @@ func contentCRUD(pr chi.Router, d Deps, grants authgate.Grants, linksRepo *links
 		ir.Use(authgate.RequireWrite(grants, authctx.PermImportRun))
 		importer.NewHandler(importer.NewStager(d.Pool), d.Worker).Mount(ir)
 	})
-	pr.Route("/export", exporter.NewHandler(exporter.NewRepository(d.Pool)).Mount)
+	// Same two gates as /api/backup: downloading the whole library is reading
+	// OUT, so the configured backup.export permission governs it, and a
+	// content-scoped API token must not do it at all.
+	pr.Route("/export", func(er chi.Router) {
+		er.Use(authgate.RejectAPIToken)
+		er.Use(authgate.RequirePermission(grants, authctx.PermBackupExport))
+		exporter.NewHandler(exporter.NewRepository(d.Pool)).Mount(er)
+	})
 	statsHandler := stats.NewHandler(stats.NewRepository(d.Pool))
 	if d.StorageStatter != nil {
 		statsHandler = statsHandler.WithStorage(d.StorageStatter)

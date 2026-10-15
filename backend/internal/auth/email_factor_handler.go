@@ -302,17 +302,24 @@ func (h *Handler) DisableEmailFactor(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
+	passwordKey, ok := h.beginStepUpPassword(w, p.UserID)
+	if !ok {
+		return
+	}
 	tokenVersion, err := h.repo.VerifyUserPasswordEpoch(r.Context(), p.UserID, in.Password)
 	if err != nil {
 		if errors.Is(err, ErrBadCredentials) || errors.Is(err, ErrPasswordMissing) {
+			h.stepUpPasswordUser.CommitFail(passwordKey)
 			httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_credentials",
 				msgPasswordIncorrect))
 			return
 		}
+		h.stepUpPasswordUser.Release(passwordKey)
 		h.logger.Error("email factor disable password", "err", err)
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
+	h.stepUpPasswordUser.CommitSuccess(passwordKey)
 	// An admin under a mandatory-2FA policy may not remove their last factor:
 	// they would be diverted straight back into enrollment on the next request,
 	// having lost the one they had.

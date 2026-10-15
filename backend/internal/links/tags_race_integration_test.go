@@ -82,11 +82,11 @@ func TestUpdate_ConcurrentTagPatches_SerializeOnTheParentRow(t *testing.T) {
 	resA := make(chan error, 1)
 	resB := make(chan error, 1)
 	go func() {
-		_, err := lrepo.Update(ctx, uid, link.ID, links.UpdateInput{TagIDs: &setA})
+		_, err := lrepo.Update(ctx, uid, link.ID, links.UpdateInput{TagIDs: &setA}, nil, "")
 		resA <- err
 	}()
 	go func() {
-		_, err := lrepo.Update(ctx, uid, link.ID, links.UpdateInput{TagIDs: &setB})
+		_, err := lrepo.Update(ctx, uid, link.ID, links.UpdateInput{TagIDs: &setB}, nil, "")
 		resB <- err
 	}()
 	waitForBlockedLockCount(t, pool, 2)
@@ -136,13 +136,13 @@ func TestDelete_RacingTagPatch_LeavesNoOrphanTagRows(t *testing.T) {
 	require.NoError(t, err)
 
 	delRes := make(chan error, 1)
-	go func() { delRes <- lrepo.Delete(ctx, uid, link.ID) }()
+	go func() { delRes <- lrepo.Delete(ctx, uid, link.ID, nil, "") }()
 	waitForBlockedLockCount(t, pool, 1)
 
 	setC := []int64{t3}
 	patchRes := make(chan error, 1)
 	go func() {
-		_, err := lrepo.Update(ctx, uid, link.ID, links.UpdateInput{TagIDs: &setC})
+		_, err := lrepo.Update(ctx, uid, link.ID, links.UpdateInput{TagIDs: &setC}, nil, "")
 		patchRes <- err
 	}()
 	waitForBlockedLockCount(t, pool, 2)

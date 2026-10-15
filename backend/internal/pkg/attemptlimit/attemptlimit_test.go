@@ -616,6 +616,34 @@ func TestCommit_ReportsTheEdgeAndNotTheStandingLockout(t *testing.T) {
 			"and %d of 3 claimed to be", armed)
 }
 
+func TestLimiter_EvictsWhenMaxKeysExceeded(t *testing.T) {
+	t.Parallel()
+	l := attemptlimit.New(5, time.Minute).WithMaxKeys(100)
+
+	for i := range 1000 {
+		l.Fail(fmt.Sprintf("login:em:user-%d@example.test", i))
+	}
+	assert.LessOrEqual(t, l.Len(), 100,
+		"attacker-minted keys must not grow the map past the ceiling")
+}
+
+func TestLimiter_EvictionNeverDropsALiveLockoutWhileUnlockedKeysExist(t *testing.T) {
+	t.Parallel()
+	l := attemptlimit.New(3, time.Hour).WithMaxKeys(10)
+
+	for range 3 {
+		l.Fail("victim")
+	}
+	require.False(t, l.LockedUntil("victim").IsZero())
+
+	for i := range 500 {
+		l.Fail(fmt.Sprintf("noise-%d", i)) // one failure each: tracked, not locked
+	}
+	assert.LessOrEqual(t, l.Len(), 10)
+	assert.False(t, l.LockedUntil("victim").IsZero(),
+		"a live lockout must not be evicted while unlocked keys can go instead")
+}
+
 // The same property for the set mode, and the positive case: the commit that
 // actually crosses the ceiling DOES report the edge, exactly once.
 func TestCommitFailFor_ReportsTheEdgeExactlyOnce(t *testing.T) {

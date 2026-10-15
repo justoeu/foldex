@@ -191,11 +191,11 @@ func TestCrossUser_UpdateAndDeleteOfAnotherUsersRowIsNotFoundAndMutatesNothing(t
 	ctx, f := setup(t)
 	hijack := "hijacked"
 
-	_, err := f.lrepo.Update(ctx, f.a.uid, f.b.link.ID, links.UpdateInput{Title: &hijack})
+	_, err := f.lrepo.Update(ctx, f.a.uid, f.b.link.ID, links.UpdateInput{Title: &hijack}, nil, "")
 	assert.ErrorIs(t, err, domainerr.ErrNotFound)
 
-	assert.ErrorIs(t, f.lrepo.Delete(ctx, f.a.uid, f.b.link.ID), domainerr.ErrNotFound)
-	assert.ErrorIs(t, f.nrepo.Delete(ctx, f.a.uid, f.b.note.ID, nil), domainerr.ErrNotFound)
+	assert.ErrorIs(t, f.lrepo.Delete(ctx, f.a.uid, f.b.link.ID, nil, ""), domainerr.ErrNotFound)
+	assert.ErrorIs(t, f.nrepo.Delete(ctx, f.a.uid, f.b.note.ID, nil, "", nil), domainerr.ErrNotFound)
 	assert.ErrorIs(t, f.frepo.Delete(ctx, f.a.uid, f.b.folder.ID, nil, ""), domainerr.ErrNotFound)
 	assert.ErrorIs(t, f.trepo.Delete(ctx, f.a.uid, f.b.tag.ID), domainerr.ErrNotFound)
 
@@ -219,7 +219,7 @@ func TestCrossUser_CannotAttachAnotherUsersTag(t *testing.T) {
 	ctx, f := setup(t)
 
 	foreign := []int64{f.b.tag.ID}
-	_, err := f.lrepo.Update(ctx, f.a.uid, f.a.link.ID, links.UpdateInput{TagIDs: &foreign})
+	_, err := f.lrepo.Update(ctx, f.a.uid, f.a.link.ID, links.UpdateInput{TagIDs: &foreign}, nil, "")
 	require.Error(t, err, "attaching another tenant's tag must be rejected")
 
 	// And nothing was written: A's link still carries only A's tag.
@@ -237,11 +237,11 @@ func TestCrossUser_CannotPointAtAnotherUsersFolder(t *testing.T) {
 
 	foreign := f.b.folder.ID
 	_, err := f.lrepo.Update(ctx, f.a.uid, f.a.link.ID,
-		links.UpdateInput{FolderID: &foreign, FolderIDSet: true})
+		links.UpdateInput{FolderID: &foreign, FolderIDSet: true}, nil, "")
 	assert.Error(t, err, "link must not be movable into another tenant's folder")
 
 	_, err = f.nrepo.Update(ctx, f.a.uid, f.a.note.ID,
-		notes.UpdateInput{FolderID: &foreign, FolderIDSet: true})
+		notes.UpdateInput{FolderID: &foreign, FolderIDSet: true}, nil, "")
 	assert.Error(t, err, "note must not be movable into another tenant's folder")
 
 	_, err = f.frepo.Update(ctx, f.a.uid, f.a.folder.ID,

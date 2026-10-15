@@ -1039,3 +1039,36 @@ func TestVerifyEmail_SpendAndMarkAreOneStatement(t *testing.T) {
 	_, err = h.repo.ConsumeEmailVerification(ctx, secrets.Hash(token))
 	assert.ErrorIs(t, err, auth.ErrBadCredentials)
 }
+
+// A signed-in password check is a brute-force oracle unless it spends from
+// the same per-user budget the e-mail-change and OAuth-link proofs spend
+// from: a stolen session could otherwise guess the account password at
+// nginx speed and upgrade itself into permanent takeover.
+func TestChangePassword_RateLimitsWrongCurrentPassword(t *testing.T) {
+	h := newHarness(t)
+	c := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
+
+	for i := range 5 {
+		rec := c.do(http.MethodPost, "/api/auth/password/change", map[string]string{
+			"current_password": "not the password",
+			"new_password":     "a brand new password",
+		})
+		require.Equal(t, http.StatusUnauthorized, rec.Code, "wrong attempt %d: %s", i+1, rec.Body.String())
+	}
+
+	rec := c.do(http.MethodPost, "/api/auth/password/change", map[string]string{
+		"current_password": "not the password",
+		"new_password":     "a brand new password",
+	})
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code,
+		"the sixth wrong current password must be refused by the step-up budget: %s", rec.Body.String())
+	assert.NotEmpty(t, rec.Header().Get("Retry-After"))
+
+	// The budget is about guesses, not about the account: even the CORRECT
+	// password waits out the lockout, or the limiter would confirm guesses.
+	rec = c.do(http.MethodPost, "/api/auth/password/change", map[string]string{
+		"current_password": "correct horse battery",
+		"new_password":     "a brand new password",
+	})
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code, rec.Body.String())
+}

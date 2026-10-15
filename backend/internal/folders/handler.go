@@ -41,6 +41,10 @@ type Handler struct {
 	unlockKey   []byte
 	master      MasterPasswordVerifier
 	limiter     *attemptlimit.Limiter
+	// masterLimiter throttles master-password proofs PER USER (the unlock
+	// limiter is per folder): rotating folder ids must not mint fresh
+	// budgets for guessing the one secret that resets every folder.
+	masterLimiter *attemptlimit.Limiter
 	// grants is the effective RBAC matrix (ADR-42). Nil at construction means
 	// the compiled one — what every test that does not care about configured
 	// permissions wants; main always passes the loaded repository.
@@ -55,7 +59,7 @@ func NewHandler(repo *Repository, unlockKey []byte, master MasterPasswordVerifie
 	grants = roleperm.OrDefault(grants)
 	return &Handler{
 		repo: repo, contentGate: NewContentGate(repo, unlockKey), unlockKey: unlockKey,
-		master: master, limiter: newUnlockLimiter(), grants: grants,
+		master: master, limiter: newUnlockLimiter(), masterLimiter: newUnlockLimiter(), grants: grants,
 	}
 }
 
@@ -273,7 +277,19 @@ func (h *Handler) resetPassword(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	ok, configured, err := h.master.VerifyMaster(r.Context(), authctx.MustUser(r.Context()), in.MasterPassword)
+	uid := authctx.MustUser(r.Context())
+	key := masterKeyFor(uid)
+	if until, ok := h.masterLimiter.Begin(key); !ok {
+		h.writeLocked(w, until)
+		return
+	}
+	settled := false
+	defer func() {
+		if !settled {
+			h.masterLimiter.Release(key)
+		}
+	}()
+	ok, configured, err := h.master.VerifyMaster(r.Context(), uid, in.MasterPassword)
 	if err != nil {
 		httperr.Write(w, err)
 		return
@@ -283,22 +299,57 @@ func (h *Handler) resetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ok {
+		settled = true
+		if _, lockedUntil := h.masterLimiter.CommitFail(key); !lockedUntil.IsZero() {
+			h.writeLocked(w, lockedUntil)
+			return
+		}
 		httperr.Write(w, httperr.New(http.StatusUnauthorized, "wrong_master_password", "incorrect master password"))
 		return
 	}
 	if afterMasterProof != nil {
 		afterMasterProof()
 	}
-	if err := h.repo.ResetPasswordByMaster(r.Context(), authctx.MustUser(r.Context()), id, in.MasterPassword); err != nil {
+	if err := h.repo.ResetPasswordByMaster(r.Context(), uid, id, in.MasterPassword); err != nil {
+		if errors.Is(err, ErrStaleMasterProof) {
+			settled = true
+			if _, lockedUntil := h.masterLimiter.CommitFail(key); !lockedUntil.IsZero() {
+				h.writeLocked(w, lockedUntil)
+				return
+			}
+		}
 		httperr.Write(w, HTTPError(err))
 		return
 	}
+	settled = true
+	h.masterLimiter.CommitSuccess(key)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// rejectTokenPasswordMutation bars a content-scoped API token from the
+// password fields of folder create/update. Folder CRUD stays
+// token-reachable (it is content), but setting, rotating or removing a
+// folder password is a credential operation like unlock and
+// reset-password, which already reject tokens at the route level.
+func rejectTokenPasswordMutation(w http.ResponseWriter, r *http.Request, touchesPassword bool) bool {
+	if !touchesPassword {
+		return false
+	}
+	p, ok := authctx.FromContext(r.Context())
+	if !ok || p.Via != authctx.ViaAPIToken {
+		return false
+	}
+	httperr.Write(w, httperr.New(http.StatusForbidden, "token_scope",
+		"an API token cannot be used on this endpoint"))
+	return true
 }
 
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	in, ok := httperr.DecodeBody[CreateInput](w, r)
 	if !ok {
+		return
+	}
+	if rejectTokenPasswordMutation(w, r, in.Password != nil || in.PasswordHint != nil) {
 		return
 	}
 	f, err := h.repo.Create(r.Context(), authctx.MustUser(r.Context()), in)
@@ -335,6 +386,9 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 	}
 	in, ok := httperr.DecodeBody[UpdateInput](w, r)
 	if !ok {
+		return
+	}
+	if rejectTokenPasswordMutation(w, r, in.PasswordSet || in.PasswordHintSet || in.CurrentPassword != nil) {
 		return
 	}
 	f, err := h.repo.Update(r.Context(), authctx.MustUser(r.Context()), id, in)

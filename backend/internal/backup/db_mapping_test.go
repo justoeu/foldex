@@ -32,3 +32,25 @@ func TestLinkObjectID_SuffixGrammarBlocksTraversal(t *testing.T) {
 	assert.EqualValues(t, 123, id)
 	assert.Equal(t, ".550e8400-e29b-41d4-a716-446655440000.jpg", suffix)
 }
+
+func TestRemapRestoreFileKey_FailsClosedOnMalformedLinkKey(t *testing.T) {
+	mapping := newIDMapping()
+	mapping.linkMap[123] = 456
+
+	for _, key := range []string{
+		"screenshots/7.",
+		"images/9.png/nested",
+		"screenshots/abc.png",
+		"screenshots/0.png",
+		"images/",
+		"screenshots/999.png", // well-formed but not produced by this restore
+	} {
+		got, included := remapRestoreFileKey(key, mapping)
+		assert.False(t, included, "key %q must be excluded, not written verbatim", key)
+		assert.Empty(t, got, "key %q must not yield a writable object key", key)
+	}
+
+	got, included := remapRestoreFileKey("screenshots/123.png", mapping)
+	assert.True(t, included)
+	assert.Equal(t, "screenshots/456.png", got)
+}

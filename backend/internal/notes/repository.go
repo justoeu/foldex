@@ -209,12 +209,16 @@ func (r *Repository) List(ctx context.Context, uid authctx.UserID, q ListQuery) 
 	return out, nil
 }
 
-func (r *Repository) Update(ctx context.Context, uid authctx.UserID, id int64, in UpdateInput) (Note, error) {
+func (r *Repository) Update(ctx context.Context, uid authctx.UserID, id int64, in UpdateInput, unlockKey []byte, unlockToken string) (Note, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return Note{}, err
 	}
 	defer tx.Rollback(ctx)
+
+	if err := folders.CheckEntityFolderTx(ctx, tx, "note", uid, id, unlockKey, unlockToken); err != nil {
+		return Note{}, err
+	}
 
 	b := &crudupdate.SetBuilder{}
 	mediaKeys, err := applyNoteColumns(ctx, tx, uid, id, b, in)
@@ -294,13 +298,16 @@ func applyNoteColumns(ctx context.Context, tx pgx.Tx, uid authctx.UserID, id int
 // to exist for links was dropped when these tables were polymorphized). Media
 // cleanup is authorized only by owner-scoped note_media_ref rows; body_html is
 // attacker-authored and never grants delete authority.
-func (r *Repository) Delete(ctx context.Context, uid authctx.UserID, id int64, storage ports.Uploader) error {
+func (r *Repository) Delete(ctx context.Context, uid authctx.UserID, id int64, unlockKey []byte, unlockToken string, storage ports.Uploader) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin delete tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
+	if err := folders.CheckEntityFolderTx(ctx, tx, "note", uid, id, unlockKey, unlockToken); err != nil {
+		return err
+	}
 	if err := crudupdate.AssertOwned(ctx, tx, "note", uid, id); err != nil {
 		return err
 	}

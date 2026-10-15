@@ -339,7 +339,7 @@ func TestExport_FullSnapshotRoundTrip(t *testing.T) {
 
 	// Master password setting (app_setting arm of readSnapshot).
 	srepo := settings.NewRepository(pool)
-	require.NoError(t, srepo.SetMasterPassword(ctx, uid, "master-pass-ok", nil))
+	require.NoError(t, srepo.SetMasterPassword(ctx, uid, "master-pass-ok", nil, nil))
 
 	shotKey := fmt.Sprintf("screenshots/%d.jpg", l.ID)
 	bucket.objs[shotKey] = []byte("img")

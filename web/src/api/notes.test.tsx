@@ -3,6 +3,7 @@ import { renderHook, waitFor } from '@testing-library/react'
 import { ReactNode } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useCreateNote, useUpdateNote, useDeleteNote, usePinNote, useNote, uploadNoteImage, goNoteHref } from './notes'
+import { syncFolderUnlocks, clearFolderUnlocks } from '../lib/folderUnlockRegistry'
 import { http } from './client'
 import { freshState, installAxiosMock, type MockState } from '../test/server'
 import { makeQueryClient } from '../test/renderWithProviders'
@@ -154,6 +155,39 @@ describe('useNote', () => {
   it('stays disabled when id is null', () => {
     const { result } = renderHook(() => useNote(null), { wrapper })
     expect(result.current.fetchStatus).toBe('idle')
+  })
+
+  it('sends the folder unlock header for a note in a protected folder', async () => {
+    // Local client with the default gcTime: the seeded entries cache has no
+    // observer, and the shared harness client's zero gc would sweep it
+    // before the hook can resolve the note's folder from it.
+    const localClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    })
+    const localWrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={localClient}>{children}</QueryClientProvider>
+    )
+    state.folderPasswords[3] = 'pw'
+    state.notes.push({
+      id: 41, title: 'Locked note', slug: 'locked', body_html: '<p>secret</p>', pinned: false,
+      folder_id: 3, cover_url: null, click_count: 0, last_clicked_at: null,
+      created_at: '', updated_at: '', tags: [],
+    })
+    localClient.setQueryData(['entries', 'test-seed'], {
+      pages: [[{ kind: 'note', id: 41, folder_id: 3 }]],
+      pageParams: [0],
+    } as never)
+    try {
+      const { result } = renderHook(() => useNote(41), { wrapper: localWrapper })
+      await waitFor(() => expect(result.current.isError).toBe(true))
+
+      syncFolderUnlocks({ 3: { token: 'mock-unlock:3:pw', expiresAt: Date.now() + 60_000 } })
+      const { result: unlocked } = renderHook(() => useNote(41), { wrapper: localWrapper })
+      await waitFor(() => expect(unlocked.current.isSuccess).toBe(true))
+      expect(unlocked.current.data?.body_html).toContain('secret')
+    } finally {
+      clearFolderUnlocks()
+    }
   })
 
   // N1-NEX-004: forward TanStack's AbortSignal (entries.ts already does)

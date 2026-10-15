@@ -279,12 +279,12 @@ func TestRepository_Update_TriStateFolderID(t *testing.T) {
 	created, err := nrepo.Create(ctx, uid, notes.CreateInput{Title: "Note"})
 	require.NoError(t, err)
 
-	updated, err := nrepo.Update(ctx, uid, created.ID, notes.UpdateInput{FolderID: &folder.ID, FolderIDSet: true})
+	updated, err := nrepo.Update(ctx, uid, created.ID, notes.UpdateInput{FolderID: &folder.ID, FolderIDSet: true}, nil, "")
 	require.NoError(t, err)
 	require.NotNil(t, updated.FolderID)
 	assert.Equal(t, folder.ID, *updated.FolderID)
 
-	cleared, err := nrepo.Update(ctx, uid, created.ID, notes.UpdateInput{FolderIDSet: true})
+	cleared, err := nrepo.Update(ctx, uid, created.ID, notes.UpdateInput{FolderIDSet: true}, nil, "")
 	require.NoError(t, err)
 	assert.Nil(t, cleared.FolderID)
 }
@@ -296,7 +296,7 @@ func TestRepository_Update_SlugNullRegeneratesFromTitle(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "custom-slug", created.Slug)
 
-	updated, err := nrepo.Update(ctx, uid, created.ID, notes.UpdateInput{SlugSet: true})
+	updated, err := nrepo.Update(ctx, uid, created.ID, notes.UpdateInput{SlugSet: true}, nil, "")
 	require.NoError(t, err)
 	assert.Equal(t, "original-title", updated.Slug)
 }
@@ -307,13 +307,13 @@ func TestRepository_Update_BodyHTMLNotTriState(t *testing.T) {
 	require.NoError(t, err)
 
 	// nil BodyHTML = don't touch.
-	same, err := nrepo.Update(ctx, uid, created.ID, notes.UpdateInput{})
+	same, err := nrepo.Update(ctx, uid, created.ID, notes.UpdateInput{}, nil, "")
 	require.NoError(t, err)
 	assert.Equal(t, "<p>a</p>", same.BodyHTML)
 
 	// explicit empty string = legal cleared body.
 	empty := ""
-	cleared, err := nrepo.Update(ctx, uid, created.ID, notes.UpdateInput{BodyHTML: &empty})
+	cleared, err := nrepo.Update(ctx, uid, created.ID, notes.UpdateInput{BodyHTML: &empty}, nil, "")
 	require.NoError(t, err)
 	assert.Equal(t, "", cleared.BodyHTML)
 }
@@ -325,7 +325,7 @@ func TestRepository_Update_TagIDs(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, created.Tags)
 
-	updated, err := nrepo.Update(ctx, uid, created.ID, notes.UpdateInput{TagIDs: &[]int64{tagA.ID}})
+	updated, err := nrepo.Update(ctx, uid, created.ID, notes.UpdateInput{TagIDs: &[]int64{tagA.ID}}, nil, "")
 	require.NoError(t, err)
 	require.Len(t, updated.Tags, 1)
 	assert.Equal(t, tagA.ID, updated.Tags[0].ID)
@@ -339,7 +339,7 @@ func TestNoteUpdate_ConflictOnStaleUpdatedAt(t *testing.T) {
 	seen := created.UpdatedAt
 
 	title := "v2"
-	updated, err := nrepo.Update(ctx, uid, created.ID, notes.UpdateInput{Title: &title})
+	updated, err := nrepo.Update(ctx, uid, created.ID, notes.UpdateInput{Title: &title}, nil, "")
 	require.NoError(t, err)
 	assert.Equal(t, "v2", updated.Title)
 
@@ -347,7 +347,7 @@ func TestNoteUpdate_ConflictOnStaleUpdatedAt(t *testing.T) {
 	_, err = nrepo.Update(ctx, uid, created.ID, notes.UpdateInput{
 		Title:            &stale,
 		IfMatchUpdatedAt: &seen,
-	})
+	}, nil, "")
 	require.ErrorIs(t, err, notes.ErrStaleWrite)
 
 	// Fresh match still works.
@@ -355,7 +355,7 @@ func TestNoteUpdate_ConflictOnStaleUpdatedAt(t *testing.T) {
 	ok, err := nrepo.Update(ctx, uid, created.ID, notes.UpdateInput{
 		Title:            &fresh,
 		IfMatchUpdatedAt: &updated.UpdatedAt,
-	})
+	}, nil, "")
 	require.NoError(t, err)
 	assert.Equal(t, "v3", ok.Title)
 }
@@ -363,7 +363,7 @@ func TestNoteUpdate_ConflictOnStaleUpdatedAt(t *testing.T) {
 func TestRepository_Update_NotFound(t *testing.T) {
 	ctx, uid, nrepo, _, _ := setup(t)
 	title := "x"
-	_, err := nrepo.Update(ctx, uid, 999999, notes.UpdateInput{Title: &title})
+	_, err := nrepo.Update(ctx, uid, 999999, notes.UpdateInput{Title: &title}, nil, "")
 	require.ErrorIs(t, err, domainerr.ErrNotFound)
 }
 
@@ -375,7 +375,7 @@ func TestRepository_Delete_CascadesTagsAndClicks(t *testing.T) {
 	_, err = nrepo.SystemViewAndResolve(ctx, created.Slug, uid)
 	require.NoError(t, err)
 
-	require.NoError(t, nrepo.Delete(ctx, uid, created.ID, nil))
+	require.NoError(t, nrepo.Delete(ctx, uid, created.ID, nil, "", nil))
 
 	_, err = nrepo.Get(ctx, uid, created.ID)
 	require.ErrorIs(t, err, domainerr.ErrNotFound)
@@ -391,7 +391,7 @@ func TestRepository_Delete_CascadesTagsAndClicks(t *testing.T) {
 
 func TestRepository_Delete_NotFound(t *testing.T) {
 	ctx, uid, nrepo, _, _ := setup(t)
-	err := nrepo.Delete(ctx, uid, 999999, nil)
+	err := nrepo.Delete(ctx, uid, 999999, nil, "", nil)
 	require.ErrorIs(t, err, domainerr.ErrNotFound)
 }
 
@@ -412,7 +412,7 @@ func TestRepository_DeleteCannotDeletePublicMediaReferencedByAnotherTenant(t *te
 	attackNote, err := repo.Create(ctx, attacker, notes.CreateInput{Title: "Crafted reference", BodyHTML: publicImage})
 	require.NoError(t, err)
 
-	require.NoError(t, repo.Delete(ctx, attacker, attackNote.ID, bucket))
+	require.NoError(t, repo.Delete(ctx, attacker, attackNote.ID, nil, "", bucket))
 	assert.Equal(t, []byte("victim-bytes"), bucket.objects[key],
 		"a public reference grants read access only, never authority to delete the object")
 }
@@ -431,7 +431,7 @@ func TestRepository_OwnedMediaIsCleanedWhenLastReferenceIsDeleted(t *testing.T) 
 	})
 	require.NoError(t, err)
 
-	require.NoError(t, repo.Delete(ctx, uid, note.ID, bucket))
+	require.NoError(t, repo.Delete(ctx, uid, note.ID, nil, "", bucket))
 	assert.NotContains(t, bucket.objects, key)
 	assert.Zero(t, scalarCount(t, pool,
 		`SELECT count(*) FROM note_media WHERE user_id = $1 AND object_key = $2`, int64(uid), key))
@@ -458,7 +458,7 @@ func TestRepository_FailedNoteMediaDeleteIsVisibleAfterSuccessfulNoteDelete(t *t
 	})
 	require.NoError(t, err)
 
-	require.NoError(t, repo.Delete(ctx, uid, note.ID, bucket), "storage delete must not fail the note delete")
+	require.NoError(t, repo.Delete(ctx, uid, note.ID, nil, "", bucket), "storage delete must not fail the note delete")
 	_, err = repo.Get(ctx, uid, note.ID)
 	require.ErrorIs(t, err, domainerr.ErrNotFound)
 	assert.Contains(t, logs.String(), "object store down",
@@ -480,7 +480,7 @@ func TestRepository_UpdateCleansMediaAfterRemovingLastReference(t *testing.T) {
 	require.NoError(t, err)
 
 	body := "<p>image removed</p>"
-	_, err = repo.Update(ctx, uid, note.ID, notes.UpdateInput{BodyHTML: &body})
+	_, err = repo.Update(ctx, uid, note.ID, notes.UpdateInput{BodyHTML: &body}, nil, "")
 	require.NoError(t, err)
 	assert.NotContains(t, bucket.objects, key)
 	assert.Zero(t, scalarCount(t, pool,

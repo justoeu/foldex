@@ -685,6 +685,18 @@ func (r *Repository) deleteCascade(ctx context.Context, uid authctx.UserID, id i
 		return nil, fmt.Errorf("begin cascade delete tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	// Serialize the user's WHOLE hierarchy before materializing the subtree.
+	// Locking only the root first leaves a TOCTOU: the recursive snapshot is
+	// taken unlocked, and the later FOR UPDATE pass re-evaluates only the
+	// temp-table predicate — never parent_id — so a child moved out (or a
+	// protected grandchild moved in) between the two is deleted (or missed)
+	// on stale membership. With every folder row locked in id order, a
+	// concurrent move or password change either commits before the snapshot
+	// or waits for the cascade; the FK key-share on the parent row makes a
+	// concurrent insert under any of them wait too.
+	if err := lockAllUserFolders(ctx, tx, uid); err != nil {
+		return nil, err
+	}
 	if err := authorizeFolderDelete(ctx, tx, uid, id, unlockKey, unlockToken); err != nil {
 		return nil, err
 	}
@@ -706,6 +718,26 @@ func (r *Repository) deleteCascade(ctx context.Context, uid authctx.UserID, id i
 		return nil, err
 	}
 	return deletedFolderIDs, nil
+}
+
+func lockAllUserFolders(ctx context.Context, tx pgx.Tx, uid authctx.UserID) error {
+	rows, err := tx.Query(ctx, `
+		SELECT id FROM folder WHERE user_id = $1 ORDER BY id FOR UPDATE
+	`, int64(uid))
+	if err != nil {
+		return fmt.Errorf("lock folder hierarchy: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return fmt.Errorf("lock folder hierarchy: %w", err)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("lock folder hierarchy: %w", err)
+	}
+	return nil
 }
 
 func materializeCascadeSubtree(ctx context.Context, tx pgx.Tx, uid authctx.UserID, id int64) error {

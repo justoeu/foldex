@@ -59,9 +59,8 @@ func (h *Handler) RequestEmailChange(w http.ResponseWriter, r *http.Request) {
 	// The same per-user password budget the OAuth link step-up uses. Without
 	// it, a stolen session is an unlimited password oracle on a form that
 	// happens to be about e-mail.
-	passwordKey := userBucketKey("stepup-password", p.UserID)
-	if until, ok := h.stepUpPasswordUser.Begin(passwordKey); !ok {
-		writeRateLimited(w, until)
+	passwordKey, ok := h.beginStepUpPassword(w, p.UserID)
+	if !ok {
 		return
 	}
 	if _, err := h.repo.VerifyUserPasswordEpoch(r.Context(), p.UserID, in.Password); err != nil {

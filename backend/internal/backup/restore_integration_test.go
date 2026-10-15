@@ -336,7 +336,7 @@ func TestRestore_NotesRoundTripWipeMode(t *testing.T) {
 	n, err := nrepo.Create(ctx, uid, notes.CreateInput{Title: "Recipe", BodyHTML: "<p>flour</p>", TagIDs: []int64{tag.ID}})
 	require.NoError(t, err)
 	pub := true
-	n, err = nrepo.Update(ctx, uid, n.ID, notes.UpdateInput{IsPublic: &pub})
+	n, err = nrepo.Update(ctx, uid, n.ID, notes.UpdateInput{IsPublic: &pub}, nil, "")
 	require.NoError(t, err)
 	require.True(t, n.IsPublic)
 	_, err = nrepo.SystemViewAndResolve(ctx, n.Slug, uid)
@@ -649,7 +649,7 @@ func TestRestore_HintAndMasterPasswordRoundTripWipeMode(t *testing.T) {
 
 	srepo := settings.NewRepository(pool)
 	masterHint := "starts with the-"
-	require.NoError(t, srepo.SetMasterPassword(ctx, uid, "the-master-recovery-pass", &masterHint))
+	require.NoError(t, srepo.SetMasterPassword(ctx, uid, "the-master-recovery-pass", nil, &masterHint))
 
 	zr := exportToReader(t, svc, uid)
 	_, err = svc.Restore(ctx, uid, zr, backup.ModeWipe)
@@ -693,11 +693,12 @@ func TestRestore_AppSettingSkipMode_DoesNotClobberExistingMaster(t *testing.T) {
 	// Snapshot instance has master "snapshot-master".
 	srcSvc := backup.NewService(pool, bucket, discardLogger())
 	srepo := settings.NewRepository(pool)
-	require.NoError(t, srepo.SetMasterPassword(ctx, uid, "snapshot-master", nil))
+	require.NoError(t, srepo.SetMasterPassword(ctx, uid, "snapshot-master", nil, nil))
 	zr := exportToReader(t, srcSvc, uid)
 
 	// Now change THIS instance's master to something else, then skip-restore.
-	require.NoError(t, srepo.SetMasterPassword(ctx, uid, "local-master-wins", nil))
+	snapshotMaster := "snapshot-master"
+	require.NoError(t, srepo.SetMasterPassword(ctx, uid, "local-master-wins", &snapshotMaster, nil))
 	_, err := srcSvc.Restore(ctx, uid, zr, backup.ModeSkip)
 	require.NoError(t, err)
 

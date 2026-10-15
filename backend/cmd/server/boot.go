@@ -335,11 +335,12 @@ func assembleDeps(h *handles) (*runtime, error) {
 	folderHandler := folders.NewHandler(
 		folders.NewRepository(h.pool), h.folderUnlock, settings.NewRepository(h.pool), h.grants,
 	)
+	settingsHandler := settings.NewHandler(settings.NewRepository(h.pool))
 
 	sweeper := auth.NewSweeper(authRepo, h.logger,
 		time.Duration(h.cfg.AuthSweepIntervalMin)*time.Minute,
 		time.Duration(h.cfg.AuthSweepRetainDays)*24*time.Hour).
-		WithInMemory(authHandler.SweepLimiters, folderHandler.SweepLimiters, authMW.SweepTouch)
+		WithInMemory(authHandler.SweepLimiters, folderHandler.SweepLimiters, settingsHandler.SweepLimiters, authMW.SweepTouch)
 	sweeper.Start(h.ctx)
 
 	appMetrics := metrics.New(h.pool)
@@ -383,6 +384,7 @@ func assembleDeps(h *handles) (*runtime, error) {
 		PolicyHandler:   policyHandler,
 		AuthMiddleware:  authMW,
 		FolderHandler:   folderHandler,
+		SettingsHandler: settingsHandler,
 		AbusePolicy:     h.abuse,
 	}
 	if h.storage != nil {

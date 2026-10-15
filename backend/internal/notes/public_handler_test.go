@@ -140,7 +140,7 @@ func TestPublicHandler_OptedInNoteRendersForAnonymous(t *testing.T) {
 	require.NoError(t, err)
 	published, err := repo.Update(context.Background(), uid, created.ID, notes.UpdateInput{
 		IsPublic: boolPtr(true),
-	})
+	}, nil, "")
 	require.NoError(t, err)
 	require.True(t, published.IsPublic, "the owner must be able to opt a note in")
 

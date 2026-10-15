@@ -90,14 +90,25 @@ func planRestoreFile(entry *zip.File, mapping idMapping, prepared *preparedNoteM
 	return item, true, nil
 }
 
+// remapRestoreFileKey fails closed: every writable key must be derived from
+// this restore's own id mapping. A screenshots/ or images/ key that
+// linkObjectID rejects (malformed suffix, non-numeric id, traversal material)
+// is excluded rather than written verbatim — object keys are flat and shared
+// across tenants, so honouring the archive's declared key would let a
+// hand-crafted ZIP overwrite another tenant's object.
 func remapRestoreFileKey(oldKey string, mapping idMapping) (string, bool) {
-	if _, _, _, isLinkKey := linkObjectID(oldKey); isLinkKey {
-		return mapping.remapFileKey(oldKey)
-	}
-	if strings.HasPrefix(oldKey, notesPrefix) {
+	switch {
+	case strings.HasPrefix(oldKey, "screenshots/"), strings.HasPrefix(oldKey, "images/"):
+		key, mapped := mapping.remapFileKey(oldKey)
+		if !mapped {
+			return "", false
+		}
+		return key, true
+	case strings.HasPrefix(oldKey, notesPrefix):
 		return mapping.remapNoteFileKey(oldKey)
+	default:
+		return "", false
 	}
-	return oldKey, true
 }
 
 func (s *Service) wipeRestoreFiles(ctx context.Context, uid authctx.UserID, mode ConflictMode, ownedKeys []string, report *FileReport) error {

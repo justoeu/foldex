@@ -30,6 +30,15 @@ import (
 // not leave the non-secret reminder equal to the recovery secret.
 var ErrHintMatchesPassword = errors.New("hint must not be the same as the password")
 
+var (
+	// ErrCurrentPasswordRequired: a master is already configured and the
+	// caller offered no proof of it. Only the FIRST set is proof-free.
+	ErrCurrentPasswordRequired = errors.New("current master password is required to change it")
+	// ErrWrongMasterPassword: the offered current password does not match
+	// the hash the row lock is holding.
+	ErrWrongMasterPassword = errors.New("current master password is incorrect")
+)
+
 type Repository struct {
 	pool *pgxpool.Pool
 }
@@ -82,7 +91,12 @@ func (r *Repository) MasterPasswordHint(ctx context.Context, uid authctx.UserID)
 //     an empty hint field must NOT silently wipe the reminder)
 //   - non-nil, ""    → clear the hint
 //   - non-nil, "x"   → set/replace the hint (stored verbatim, never hashed)
-func (r *Repository) SetMasterPassword(ctx context.Context, uid authctx.UserID, plain string, hint *string) error {
+//
+// When a master is already configured, current must prove it — checked
+// against the hash read under the row lock, never before it: a check-then-act
+// outside the lock lets two concurrent first-sets both land (the second
+// silently replacing the first) and lets a proof of H1 rotate H2 away.
+func (r *Repository) SetMasterPassword(ctx context.Context, uid authctx.UserID, plain string, current *string, hint *string) error {
 	hash, err := pwhash.Hash(plain)
 	if err != nil {
 		return fmt.Errorf("hash master password: %w", err)
@@ -92,20 +106,28 @@ func (r *Repository) SetMasterPassword(ctx context.Context, uid authctx.UserID, 
 		return fmt.Errorf("begin set master password: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	// Same user-row lock folder reset takes (RACE-HER-002): rotate and recover
-	// serialize so a proof of H1 cannot land after this write of H2. The hint
-	// equality check reads THIS locked row on purpose: a pre-lock read on the
-	// pool could pass while a concurrent write commits hint == password right
-	// after, persisting the exact equality INV-066/067 exists to refuse.
-	var storedHint *string
+	// Same user-row lock folder reset takes: rotate and recover serialize so
+	// a proof of H1 cannot land after this write of H2. The authorization and
+	// the hint equality check read THIS locked row on purpose: a pre-lock
+	// read on the pool could pass while a concurrent write commits right
+	// after, persisting exactly what the checks exist to refuse.
+	var liveHash, storedHint *string
 	err = tx.QueryRow(ctx,
-		`SELECT master_password_hint FROM app_user WHERE id = $1 FOR NO KEY UPDATE`,
-		int64(uid)).Scan(&storedHint)
+		`SELECT master_password_hash, master_password_hint FROM app_user WHERE id = $1 FOR NO KEY UPDATE`,
+		int64(uid)).Scan(&liveHash, &storedHint)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("set master password: user %d not found", int64(uid))
 	}
 	if err != nil {
 		return fmt.Errorf("lock master password: %w", err)
+	}
+	if liveHash != nil {
+		if current == nil {
+			return ErrCurrentPasswordRequired
+		}
+		if !pwhash.Verify(*liveHash, *current) {
+			return ErrWrongMasterPassword
+		}
 	}
 	if hint == nil && storedHint != nil && secrethint.EqualsPassword(*storedHint, plain) {
 		return ErrHintMatchesPassword
@@ -136,33 +158,42 @@ func (r *Repository) SetMasterPassword(ctx context.Context, uid authctx.UserID, 
 }
 
 // ClearMasterPassword removes the master password AND its hint for uid
-// (recovery disabled — a hint for a nonexistent password is dead data).
-func (r *Repository) ClearMasterPassword(ctx context.Context, uid authctx.UserID) error {
+// after proving current against the locked row (recovery disabled — a hint
+// for a nonexistent password is dead data). It reports whether a master was
+// configured at all: clearing an unconfigured one is an idempotent no-op
+// that proves nothing and refuses nothing.
+func (r *Repository) ClearMasterPassword(ctx context.Context, uid authctx.UserID, current string) (bool, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("begin clear master password: %w", err)
+		return false, fmt.Errorf("begin clear master password: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	var locked int64
+	var liveHash *string
 	err = tx.QueryRow(ctx,
-		`SELECT id FROM app_user WHERE id = $1 FOR NO KEY UPDATE`, int64(uid)).Scan(&locked)
+		`SELECT master_password_hash FROM app_user WHERE id = $1 FOR NO KEY UPDATE`, int64(uid)).Scan(&liveHash)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil
+		return false, nil
 	}
 	if err != nil {
-		return fmt.Errorf("lock master password: %w", err)
+		return false, fmt.Errorf("lock master password: %w", err)
+	}
+	if liveHash == nil {
+		return false, nil
+	}
+	if !pwhash.Verify(*liveHash, current) {
+		return true, ErrWrongMasterPassword
 	}
 	if _, err := tx.Exec(ctx, `
         UPDATE app_user
         SET master_password_hash = NULL, master_password_hint = NULL, updated_at = now()
         WHERE id = $1
     `, int64(uid)); err != nil {
-		return fmt.Errorf("clear master password: %w", err)
+		return true, fmt.Errorf("clear master password: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit clear master password: %w", err)
+		return true, fmt.Errorf("commit clear master password: %w", err)
 	}
-	return nil
+	return true, nil
 }
 
 // VerifyMaster reports whether plain matches uid's master password. configured
