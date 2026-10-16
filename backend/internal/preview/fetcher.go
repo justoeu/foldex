@@ -1,6 +1,7 @@
 package preview
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -142,29 +143,50 @@ func (f *Fetcher) tryHardcodedOEmbed(ctx context.Context, pageURL string, u *url
 }
 
 func (f *Fetcher) fetchHTMLHead(ctx context.Context, pageURL string) (Result, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, nil)
+	body, finalURL, err := f.fetchStage(ctx, pageURL)
 	if err != nil {
 		return Result{}, err
+	}
+	return extractStage(body, finalURL), nil
+}
+
+// fetchStage is the network half of the head fetch: everything bounded by
+// the caller's context and the client timeout happens here, and only here.
+// It returns the capped body bytes plus the post-redirect URL relatives
+// resolve against. A body read that fails partway returns the bytes read so
+// far, matching the streaming tokenizer this replaced, which parsed a
+// truncated stream for whatever head metadata arrived before the cut.
+func (f *Fetcher) fetchStage(ctx context.Context, pageURL string) ([]byte, *url.URL, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, nil)
+	if err != nil {
+		return nil, nil, err
 	}
 	req.Header.Set("User-Agent", previewUserAgent)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "en,pt;q=0.9")
 	resp, err := f.client.Do(req)
 	if err != nil {
-		return Result{}, err
+		return nil, nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return Result{}, fmt.Errorf("fetch: %w", &HTTPStatusError{Code: resp.StatusCode})
+		return nil, nil, fmt.Errorf("fetch: %w", &HTTPStatusError{Code: resp.StatusCode})
 	}
-	body := io.LimitReader(resp.Body, 2<<20)
-	r := parseHead(body)
-	finalURL := resp.Request.URL
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	return body, resp.Request.URL, nil
+}
+
+// extractStage is the parse half of the head fetch. It takes no context on
+// purpose: tokenizing already-fetched bytes is CPU work, and leaving it
+// under the fetch deadline meant a slow parse of a large head could be
+// cut off by a budget meant for the network.
+func extractStage(body []byte, finalURL *url.URL) Result {
+	r := parseHead(bytes.NewReader(body))
 	resolved := resolveRelatives(r, finalURL)
 	if resolved.FaviconURL == "" {
 		resolved.FaviconURL = finalURL.Scheme + "://" + finalURL.Host + "/favicon.ico"
 	}
-	return resolved, nil
+	return resolved
 }
 
 func (f *Fetcher) enrichFromDiscoveredOEmbed(ctx context.Context, resolved Result) Result {

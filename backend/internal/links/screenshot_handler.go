@@ -15,6 +15,7 @@ import (
 	"foldex/internal/linkimage"
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/httperr"
+	"foldex/internal/pkg/semaphore"
 	"foldex/internal/ports"
 )
 
@@ -79,9 +80,8 @@ type ScreenshotHandler struct {
 	*FileHandler
 	screenshotter Screenshotter
 	urlPolicy     URLPolicy
-	captureSem    chan struct{}
-	captureMu     sync.Mutex
-	captureUsers  map[authctx.UserID]int
+	captureSlots  *semaphore.Keyed[authctx.UserID]
+	captureInit   sync.Once
 }
 
 // WithEnqueuer wires the preview worker so a missing object can heal itself.
@@ -102,8 +102,7 @@ func NewScreenshotHandler(repo screenshotRepo, sc Screenshotter, st ports.Upload
 		FileHandler:   NewFileHandler(repo, st, logger),
 		screenshotter: sc,
 		urlPolicy:     urlPolicy,
-		captureSem:    make(chan struct{}, maxCaptureInFlight),
-		captureUsers:  make(map[authctx.UserID]int),
+		captureSlots:  semaphore.NewKeyed[authctx.UserID](maxCaptureInFlight, maxCapturePerUser),
 	}
 }
 
@@ -227,36 +226,25 @@ func (h *ScreenshotHandler) cleanupUnpublishedScreenshot(id int64, key string) {
 	}
 }
 
+// ensureCaptureSlots lazily builds the admission counter for handlers
+// assembled as bare struct literals in tests, which never pass through
+// NewScreenshotHandler.
+func (h *ScreenshotHandler) ensureCaptureSlots() {
+	h.captureInit.Do(func() {
+		if h.captureSlots == nil {
+			h.captureSlots = semaphore.NewKeyed[authctx.UserID](maxCaptureInFlight, maxCapturePerUser)
+		}
+	})
+}
+
 func (h *ScreenshotHandler) acquireCapture(uid authctx.UserID) bool {
-	h.captureMu.Lock()
-	defer h.captureMu.Unlock()
-	if h.captureSem == nil {
-		h.captureSem = make(chan struct{}, maxCaptureInFlight)
-	}
-	if h.captureUsers == nil {
-		h.captureUsers = make(map[authctx.UserID]int)
-	}
-	if h.captureUsers[uid] >= maxCapturePerUser {
-		return false
-	}
-	select {
-	case h.captureSem <- struct{}{}:
-		h.captureUsers[uid]++
-		return true
-	default:
-		return false
-	}
+	h.ensureCaptureSlots()
+	return h.captureSlots.TryAcquire(uid)
 }
 
 func (h *ScreenshotHandler) releaseCapture(uid authctx.UserID) {
-	h.captureMu.Lock()
-	if h.captureUsers[uid] <= 1 {
-		delete(h.captureUsers, uid)
-	} else {
-		h.captureUsers[uid]--
-	}
-	<-h.captureSem
-	h.captureMu.Unlock()
+	h.ensureCaptureSlots()
+	h.captureSlots.Release(uid)
 }
 
 func screenshotOperationErrorReason(err error) string {

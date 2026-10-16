@@ -68,7 +68,7 @@ func TestLifecycle_StopIsIdempotentAndStartAfterStopIsInert(t *testing.T) {
 	w.Stop()
 
 	w.Start(context.Background())
-	require.Nil(t, w.ctx, "Start after Stop must not create a context")
+	require.Nil(t, w.life.Ctx(), "Start after Stop must not create a context")
 }
 
 // A cancelled parent has to bring the loop down even while it is sitting in the

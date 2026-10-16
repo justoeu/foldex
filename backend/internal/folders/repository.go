@@ -19,7 +19,7 @@ import (
 )
 
 // maxSerializationRetries bounds SERIALIZABLE update retries on SQLSTATE 40001
-//. Concurrent nest moves under load surface as transparent
+// . Concurrent nest moves under load surface as transparent
 // retries instead of 500 to the client.
 const maxSerializationRetries = 3
 

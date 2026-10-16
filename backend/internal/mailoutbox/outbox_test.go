@@ -154,7 +154,7 @@ func TestRelay_PanicOnOneMessageDoesNotAckOrKillTheProcess(t *testing.T) {
 	rl := NewRelay(nil, sink, Options{Workers: 1, Batch: 8, PollInterval: time.Hour},
 		slog.New(slog.NewTextHandler(&logs, nil)))
 	rl.repo = q
-	rl.ctx = context.Background()
+	rl.life.SeedContext(context.Background())
 
 	assert.False(t, rl.drain())
 

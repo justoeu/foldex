@@ -122,24 +122,13 @@ func (s *AMQPSink) channelLocked() (*ConfirmingChannel, error) {
 	}
 	s.discardLocked()
 
-	conn, err := dialAMQP(s.cfg.URL, s.cfg.TLSConfig)
+	h, err := BuildAMQPHandler(HandlerKindRelay, s.cfg)
 	if err != nil {
 		return nil, err
 	}
-	ch, err := NewConfirmingChannel(conn)
-	if err != nil {
-		_ = conn.Close()
-		return nil, err
-	}
-	state, err := s.cfg.Topology.Declare(ch.Raw())
-	if err != nil {
-		_ = ch.Close()
-		_ = conn.Close()
-		return nil, err
-	}
-	s.warnIfNobodyIsListening(state)
-	s.conn, s.ch = conn, ch
-	return ch, nil
+	s.warnIfNobodyIsListening(h.SendQueue)
+	s.conn, s.ch = h.Conn, h.Publish
+	return s.ch, nil
 }
 
 // Deliver publishes one message and waits for the broker to take it.

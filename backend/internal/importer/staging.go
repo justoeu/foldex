@@ -67,7 +67,54 @@ func validateImportClickBudget(items []Item) error {
 	return nil
 }
 
-func newImportStagingPlan(items []Item, seed *jsonSeed) *importStagingPlan {
+// resolvedSeed is the pure half of seed handling: the JSON seed's tag and
+// folder catalogues with names trimmed, colours sanitized and blanks
+// dropped. Resolving it apart from the plan keeps every decision that needs
+// no database in one testable place.
+type resolvedSeed struct {
+	tags    []stagedImportTag
+	folders []stagedImportFolder
+}
+
+func resolveSeeds(seed *jsonSeed) resolvedSeed {
+	var out resolvedSeed
+	if seed == nil {
+		return out
+	}
+	for _, tag := range seed.tags {
+		name := strings.TrimSpace(tag.Name)
+		if name == "" {
+			continue
+		}
+		staged := stagedImportTag{
+			name:   name,
+			color:  sanitizeImportColor(tag.Color),
+			seeded: true,
+		}
+		if tag.Icon != nil {
+			icon := *tag.Icon
+			staged.icon = &icon
+		}
+		out.tags = append(out.tags, staged)
+	}
+	for _, folder := range seed.folders {
+		name := strings.TrimSpace(folder.Name)
+		if name == "" {
+			continue
+		}
+		out.folders = append(out.folders, stagedImportFolder{
+			name:  name,
+			color: sanitizeImportColor(folder.Color),
+		})
+	}
+	return out
+}
+
+// planImport is the pure half of ApplyWithMode: it groups duplicate URLs,
+// normalizes tags and builds the tag/folder catalogues from the items and
+// the resolved seed. It performs no I/O; applyImportPlan owns every
+// database step that follows.
+func planImport(items []Item, seed *jsonSeed) *importStagingPlan {
 	plan := &importStagingPlan{
 		groups:         make(map[string]*importItemGroup, len(items)),
 		urls:           make([]string, 0, len(items)),
@@ -89,33 +136,22 @@ func newImportStagingPlan(items []Item, seed *jsonSeed) *importStagingPlan {
 }
 
 func (plan *importStagingPlan) addSeedCatalogs(seed *jsonSeed) {
-	if seed == nil {
-		return
-	}
-	for _, tag := range seed.tags {
-		name := strings.TrimSpace(tag.Name)
-		if name == "" {
-			continue
-		}
-		staged, exists := plan.tagCatalog[name]
+	resolved := resolveSeeds(seed)
+	for _, tag := range resolved.tags {
+		staged, exists := plan.tagCatalog[tag.name]
 		if !exists {
-			plan.tagOrder = append(plan.tagOrder, name)
+			plan.tagOrder = append(plan.tagOrder, tag.name)
 		}
-		staged.name = name
-		staged.color = sanitizeImportColor(tag.Color)
+		staged.name = tag.name
+		staged.color = tag.color
 		staged.seeded = true
-		if tag.Icon != nil {
-			icon := *tag.Icon
-			staged.icon = &icon
+		if tag.icon != nil {
+			staged.icon = tag.icon
 		}
-		plan.tagCatalog[name] = staged
+		plan.tagCatalog[tag.name] = staged
 	}
-	for _, folder := range seed.folders {
-		name := strings.TrimSpace(folder.Name)
-		if name == "" {
-			continue
-		}
-		plan.addFolder(name, sanitizeImportColor(folder.Color))
+	for _, folder := range resolved.folders {
+		plan.addFolder(folder.name, folder.color)
 	}
 }
 
@@ -528,11 +564,18 @@ func importDuplicateWarnings(items []Item, groups map[string]*importItemGroup, i
 }
 
 func applyStagedImport(ctx context.Context, tx pgx.Tx, uid authctx.UserID, items []Item, mode importMode, seed *jsonSeed) (int, int, int, []string, []int64, error) {
-	plan := newImportStagingPlan(items, seed)
+	plan := planImport(items, seed)
 	existing, err := loadExistingImportLinks(ctx, tx, uid, plan.urls)
 	if err != nil {
 		return 0, 0, 0, nil, nil, err
 	}
+	return applyImportPlan(ctx, tx, uid, plan, items, mode, existing)
+}
+
+// applyImportPlan is the impure half of ApplyWithMode: given the pure plan
+// and the existing rows it selects, stages, upserts, wipes and inserts —
+// every statement of the import transaction after the existing-link load.
+func applyImportPlan(ctx context.Context, tx pgx.Tx, uid authctx.UserID, plan *importStagingPlan, items []Item, mode importMode, existing map[string]existingImportLink) (int, int, int, []string, []int64, error) {
 	if err := plan.selectRows(ctx, tx, items, mode, existing); err != nil {
 		return 0, 0, 0, nil, nil, err
 	}

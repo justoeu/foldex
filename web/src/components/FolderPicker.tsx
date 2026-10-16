@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
 import { useFolderPickerController } from '../hooks/useFolderPickerController'
+import { FolderRow } from './sidebar/FolderRow'
 import type { FolderPickerRow } from '../lib/folderPicker'
 
 type Props = Readonly<{
@@ -11,24 +12,6 @@ type Props = Readonly<{
 }>
 
 type Controller = ReturnType<typeof useFolderPickerController>
-
-const PICKER_ROW_ICON = {
-  create: I.plus,
-  folder: I.folder,
-  none: I.x,
-} as const
-
-function pickerRowIcon(kind: FolderPickerRow['kind']) {
-  return PICKER_ROW_ICON[kind]
-}
-
-function pickerRowClass(active: boolean, kind: FolderPickerRow['kind'], selected: boolean): string {
-  let className = 'fx-folderpicker-row'
-  if (active) className += ' fx-folderpicker-row-active'
-  if (kind === 'create') className += ' fx-folderpicker-row-create'
-  if (selected) className += ' fx-folderpicker-row-chosen'
-  return className
-}
 
 export function FolderPicker(props: Props) {
   const { t } = useTranslation()
@@ -83,7 +66,7 @@ function FolderPickerOptions({ picker }: Readonly<{ picker: Controller }>) {
         <li className="fx-folderpicker-empty" role="presentation">{t('folder_picker.no_match')}</li>
       )}
       {picker.rows.map((row, index) => (
-        <FolderPickerOption
+        <FolderRow
           key={row.kind === 'folder' ? `f-${row.id}` : row.kind}
           row={row}
           index={index}
@@ -97,52 +80,6 @@ function FolderPickerOptions({ picker }: Readonly<{ picker: Controller }>) {
   )
 }
 
-function FolderPickerOption({
-  row,
-  index,
-  active,
-  selected,
-  onHighlight,
-  onCommit,
-}: Readonly<{
-  row: FolderPickerRow
-  index: number
-  active: boolean
-  selected: boolean
-  onHighlight: (index: number) => void
-  onCommit: (row: FolderPickerRow) => Promise<void>
-}>) {
-  const { t } = useTranslation()
-  return (
-    <li
-      role="option"
-      aria-selected={selected}
-      className={pickerRowClass(active, row.kind, selected)}
-      onMouseDown={(event) => {
-        event.preventDefault()
-        void onCommit(row)
-      }}
-      onMouseEnter={() => onHighlight(index)}
-    >
-      <span className="fx-folderpicker-row-icon" aria-hidden="true">
-        <Icon d={pickerRowIcon(row.kind)} size={row.kind === 'none' ? 11 : 13} />
-      </span>
-      <span className="fx-folderpicker-row-label">
-        {row.kind === 'folder' && row.hasPassword && (
-          <span className="fx-folder-lock-icon" aria-hidden="true" data-tooltip={t('folder_card.locked_tooltip')} data-tooltip-side="top">
-            <Icon d={I.lock} size={12} />
-          </span>
-        )}
-        {row.label}
-      </span>
-      {selected && (
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
-          <path d="M5 12l5 5 9-12" />
-        </svg>
-      )}
-    </li>
-  )
-}
 
 function isSelected(row: FolderPickerRow, selected: number | null): boolean {
   if (row.kind === 'none') return selected === null

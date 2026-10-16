@@ -3,8 +3,6 @@ package mailoutbox
 import (
 	"context"
 	"log/slog"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -31,12 +29,7 @@ type DeadLetterWatcher struct {
 	cfg    AMQPConfig
 	logger *slog.Logger
 
-	ctx     context.Context
-	cancel  context.CancelFunc
-	stopped atomic.Bool
-	start   sync.Once
-	stop    sync.Once
-	wg      sync.WaitGroup
+	life Lifecycle
 }
 
 func NewDeadLetterWatcher(repo *Repository, cfg AMQPConfig, logger *slog.Logger) *DeadLetterWatcher {
@@ -47,85 +40,22 @@ func NewDeadLetterWatcher(repo *Repository, cfg AMQPConfig, logger *slog.Logger)
 	return &DeadLetterWatcher{repo: repo, cfg: cfg, logger: logger}
 }
 
-// Start launches the consume loop. Same guard as Relay.Start: a second call
-// must not replace the context out from under the running loop.
 func (w *DeadLetterWatcher) Start(parent context.Context) {
-	w.start.Do(func() {
-		if w.stopped.Load() {
-			return
-		}
-		w.ctx, w.cancel = context.WithCancel(parent)
-		w.wg.Add(1)
-		go w.loop()
+	w.life.Start(parent, func(ctx context.Context) {
+		ReconnectLoop(ctx, w.life.Stopped, w.logger, "mail dead-letter watcher", false, deadLetterReconnectDelay, func() error {
+			// Prefetch 1: this queue is a trickle by construction — it only
+			// receives what exhausted the whole ladder — and a low prefetch
+			// keeps a restart from stranding a batch of unsettled rows.
+			return ConsumeOnce(ctx, ConsumeConfig{
+				Kind: HandlerKindDeadLetter, Cfg: w.cfg,
+				Queue: w.cfg.Topology.deadQueue(), Prefetch: 1,
+				OnDelivery: func(_ *AMQPHandler, d amqp.Delivery) { w.settle(d) },
+			})
+		})
 	})
 }
 
-func (w *DeadLetterWatcher) Stop() {
-	w.stop.Do(func() {
-		w.stopped.Store(true)
-		if w.cancel != nil {
-			w.cancel()
-		}
-		w.wg.Wait()
-	})
-}
-
-func (w *DeadLetterWatcher) loop() {
-	defer w.wg.Done()
-	for {
-		if w.stopped.Load() || w.ctx.Err() != nil {
-			return
-		}
-		if err := w.consume(); err != nil && w.ctx.Err() == nil {
-			w.logger.Warn("mail dead-letter watcher", "err", err)
-		}
-		select {
-		case <-w.ctx.Done():
-			return
-		case <-time.After(ReconnectWait(deadLetterReconnectDelay)):
-		}
-	}
-}
-
-// consume runs one connection's worth of deliveries, returning when it drops.
-func (w *DeadLetterWatcher) consume() error {
-	conn, err := dialAMQP(w.cfg.URL, w.cfg.TLSConfig)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = conn.Close() }()
-
-	ch, err := conn.Channel()
-	if err != nil {
-		return err
-	}
-	defer func() { _ = ch.Close() }()
-	if _, err := w.cfg.Topology.Declare(ch); err != nil {
-		return err
-	}
-	// One at a time. This queue is a trickle by construction — it only receives
-	// what exhausted the whole ladder — and a low prefetch keeps a restart from
-	// stranding a batch of unsettled rows.
-	if err := ch.Qos(1, 0, false); err != nil {
-		return err
-	}
-
-	deliveries, err := ch.Consume(w.cfg.Topology.deadQueue(), "", false, false, false, false, nil)
-	if err != nil {
-		return err
-	}
-	for {
-		select {
-		case <-w.ctx.Done():
-			return nil
-		case d, ok := <-deliveries:
-			if !ok {
-				return nil
-			}
-			w.settle(d)
-		}
-	}
-}
+func (w *DeadLetterWatcher) Stop() { w.life.Stop() }
 
 func (w *DeadLetterWatcher) settle(d amqp.Delivery) {
 	msg, err := DecodeWire(d.Body)
@@ -142,7 +72,7 @@ func (w *DeadLetterWatcher) settle(d amqp.Delivery) {
 		reason = raw
 	}
 
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(w.ctx), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(w.life.Ctx()), 5*time.Second)
 	defer cancel()
 	settled, err := w.repo.MarkDead(ctx, msg.OutboxID, reason)
 	if err != nil {

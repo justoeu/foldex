@@ -47,8 +47,8 @@ func TestS3776Charter_Drain(t *testing.T) {
 	t.Cleanup(cancel)
 
 	t.Run("stopped returns false", func(t *testing.T) {
-		rl := &Relay{logger: logger, ctx: ctx, opts: Options{Batch: 2, Workers: 1}}
-		rl.stopped.Store(true)
+		rl := &Relay{logger: logger, life: Lifecycle{ctx: ctx}, opts: Options{Batch: 2, Workers: 1}}
+		rl.life.stopped.Store(true)
 		assert.False(t, rl.drain())
 	})
 
@@ -57,7 +57,7 @@ func TestS3776Charter_Drain(t *testing.T) {
 			repo:   &charterQueue{},
 			sink:   charterSink{},
 			logger: logger,
-			ctx:    ctx,
+			life:   Lifecycle{ctx: ctx},
 			opts:   Options{Batch: 2, Workers: 1, SendTimeout: time.Second},
 		}
 		assert.False(t, rl.drain())
@@ -68,7 +68,7 @@ func TestS3776Charter_Drain(t *testing.T) {
 			repo:   &charterQueue{err: errors.New("db down")},
 			sink:   charterSink{},
 			logger: logger,
-			ctx:    ctx,
+			life:   Lifecycle{ctx: ctx},
 			opts:   Options{Batch: 2, Workers: 1, SendTimeout: time.Second},
 		}
 		assert.False(t, rl.drain())
@@ -80,7 +80,7 @@ func TestS3776Charter_Drain(t *testing.T) {
 			repo:   q,
 			sink:   charterSink{},
 			logger: logger,
-			ctx:    ctx,
+			life:   Lifecycle{ctx: ctx},
 			opts:   Options{Batch: 2, Workers: 1, SendTimeout: time.Second},
 		}
 		assert.True(t, rl.drain())

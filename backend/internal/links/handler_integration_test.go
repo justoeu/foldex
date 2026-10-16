@@ -20,6 +20,7 @@ import (
 	"foldex/internal/folders"
 	"foldex/internal/links"
 	"foldex/internal/pkg/domainerr"
+	"foldex/internal/ports"
 	"foldex/internal/tags"
 	"foldex/internal/testdb"
 
@@ -57,7 +58,7 @@ func (s stubFolderLookup) PasswordHashFor(context.Context, authctx.UserID, int64
 	return s.hash, s.err
 }
 
-func newLinksRouter(t *testing.T, worker links.Enqueuer, lookup folders.PasswordHashLookup, key []byte) (http.Handler, *links.Repository, authctx.UserID) {
+func newLinksRouter(t *testing.T, worker ports.Enqueuer, lookup folders.PasswordHashLookup, key []byte) (http.Handler, *links.Repository, authctx.UserID) {
 	t.Helper()
 	pool := testdb.Shared(t)
 

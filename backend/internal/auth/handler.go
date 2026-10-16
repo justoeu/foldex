@@ -819,7 +819,12 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 				// removal. Consume it and fall through to anonymous; the next
 				// sign-in derives the honest purpose (enrollment for admins
 				// under the policy, plain entry otherwise).
-				if ch.Purpose == PurposeTOTP && !u.HasSecondFactor() {
+				// Enabled is the UNFILTERED aggregate on purpose: /me accepts
+				// the pending challenge while ANY factor can satisfy it, even
+				// an e-mail factor on an instance whose admin policy is
+				// TOTP-only. Deriving from the shared status must not narrow
+				// that acceptance.
+				if ch.Purpose == PurposeTOTP && !h.twoFactorStatusWithTOTPOnly(r.Context(), u).Enabled {
 					if err := h.repo.ConsumeChallenge(r.Context(), ch.ID); err != nil {
 						h.logger.Error("consume orphaned challenge", "err", err)
 					}

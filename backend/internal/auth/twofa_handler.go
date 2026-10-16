@@ -728,7 +728,7 @@ func (h *Handler) DisableTOTP(w http.ResponseWriter, r *http.Request) {
 	// Policy check first: an admin who could disable their LAST second factor
 	// would make AUTH_REQUIRE_2FA_FOR_ADMINS a suggestion. The next login would
 	// divert them straight back into mandatory enrollment anyway.
-	if !h.mayRemoveFactor(h.mw.requireTOTPForAdmins(r.Context()), user, factorTOTP) {
+	if !h.twoFactorStatusWithTOTPOnly(r.Context(), user).MayRemoveTOTP {
 		httperr.Write(w, httperr.New(http.StatusForbidden, "totp_required_for_admins",
 			"administrators must keep two-factor authentication enabled"))
 		return
@@ -857,29 +857,81 @@ func (h *Handler) RegenerateRecoveryCodes(w http.ResponseWriter, r *http.Request
 // question the screen would otherwise guess at. See mayRemoveFactor.
 func (h *Handler) TwoFactorStatus(w http.ResponseWriter, r *http.Request) {
 	p, _ := authctx.FromContext(r.Context())
-	user, err := h.repo.GetUser(r.Context(), p.UserID)
+	status, err := h.loadTwoFactorStatusWithTOTPOnly(r.Context(), p.UserID)
 	if err != nil {
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
-	remaining, err := h.repo.CountRecoveryCodes(r.Context(), p.UserID)
-	if err != nil {
-		httperr.Write(w, httperr.ErrInternal)
-		return
-	}
-	totpOnly := h.mw.requireTOTPForAdmins(r.Context())
 	httperr.JSON(w, http.StatusOK, map[string]any{
-		"enabled":                  user.HasSecondFactor(),
-		"totp_enabled":             user.TOTPEnabled,
-		"email_enabled":            user.Email2FAEnabled,
-		"recovery_codes_remaining": remaining,
-		"required":                 h.require2FAForAdmins && user.Role.IsAdmin(),
-		"can_disable_totp":         user.TOTPEnabled && h.mayRemoveFactor(totpOnly, user, factorTOTP),
-		"can_disable_email":        user.Email2FAEnabled && h.mayRemoveFactor(totpOnly, user, factorEmail),
+		"enabled":                  status.Enabled,
+		"totp_enabled":             status.User.TOTPEnabled,
+		"email_enabled":            status.User.Email2FAEnabled,
+		"recovery_codes_remaining": status.RecoveryCodesRemaining,
+		"required":                 status.Required,
+		"can_disable_totp":         status.CanDisableTOTP,
+		"can_disable_email":        status.CanDisableEmail,
 		// The e-mail method is only offerable where a mailed code can actually
 		// arrive; the `log` driver would print the "factor" to stdout.
-		"email_available": h.mailer.Driver() == "smtp",
+		"email_available": status.EmailAvailable,
 	})
+}
+
+// twoFactorStatus is the one assembled view of an account's second-factor
+// state: the settings screen, the two disable (step-up) guards and /me's
+// pending-challenge check all derive from it, so the question "what may
+// this account do about its factors" has exactly one answer. TOTPOnly is
+// resolved once, when the status is built — see mayRemoveFactor for why
+// resolving per question would double the policy reads.
+type twoFactorStatus struct {
+	User                   User
+	RecoveryCodesRemaining int
+	TOTPOnly               bool
+	// Enabled is the unfiltered aggregate — HasSecondFactor, never narrowed
+	// by TOTPOnly. /me's orphaned-challenge check depends on that: an
+	// e-mail-only account under a TOTP-only admin policy still HAS a factor
+	// its pending challenge can be satisfied with.
+	Enabled         bool
+	Required        bool
+	CanDisableTOTP  bool
+	CanDisableEmail bool
+	MayRemoveTOTP   bool
+	MayRemoveEmail  bool
+	EmailAvailable  bool
+}
+
+// loadTwoFactorStatusWithTOTPOnly loads the user and recovery-code count
+// and assembles the status. Callers that already hold the User (the
+// step-up disable paths, /me) use twoFactorStatusWithTOTPOnly instead, so
+// deriving never adds a query they did not already make.
+func (h *Handler) loadTwoFactorStatusWithTOTPOnly(ctx context.Context, uid authctx.UserID) (twoFactorStatus, error) {
+	user, err := h.repo.GetUser(ctx, uid)
+	if err != nil {
+		return twoFactorStatus{}, err
+	}
+	remaining, err := h.repo.CountRecoveryCodes(ctx, uid)
+	if err != nil {
+		return twoFactorStatus{}, err
+	}
+	status := h.twoFactorStatusWithTOTPOnly(ctx, user)
+	status.RecoveryCodesRemaining = remaining
+	return status, nil
+}
+
+func (h *Handler) twoFactorStatusWithTOTPOnly(ctx context.Context, user User) twoFactorStatus {
+	totpOnly := h.mw.requireTOTPForAdmins(ctx)
+	mayRemoveTOTP := h.mayRemoveFactor(totpOnly, user, factorTOTP)
+	mayRemoveEmail := h.mayRemoveFactor(totpOnly, user, factorEmail)
+	return twoFactorStatus{
+		User:            user,
+		TOTPOnly:        totpOnly,
+		Enabled:         user.HasSecondFactor(),
+		Required:        h.require2FAForAdmins && user.Role.IsAdmin(),
+		CanDisableTOTP:  user.TOTPEnabled && mayRemoveTOTP,
+		CanDisableEmail: user.Email2FAEnabled && mayRemoveEmail,
+		MayRemoveTOTP:   mayRemoveTOTP,
+		MayRemoveEmail:  mayRemoveEmail,
+		EmailAvailable:  h.mailer.Driver() == "smtp",
+	}
 }
 
 // ─────────────────────────────────────────────────────────────────────

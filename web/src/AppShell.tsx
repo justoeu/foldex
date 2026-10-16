@@ -7,6 +7,7 @@ import { Home } from './components/HomeView'
 import { LinkDialog } from './components/LinkDialog'
 import { FolderDialog } from './components/FolderDialog'
 import { CommandPalette } from './components/CommandPalette'
+import { NoteViewDialog } from './components/NoteViewDialog'
 import { TooltipPortal } from './components/TooltipPortal'
 import { Icon, I } from './components/icons'
 import { useAccountLocale } from './i18n/useAccountLocale'
@@ -192,27 +193,34 @@ function HomePage({ workspace, navigation, dialogs, dnd, content, totalLinks }: 
       onOpenFolder={navigation.requestOpenFolder}
       onNavigateBack={navigation.navigateBack}
       isLoading={content.entriesLoading}
-      onEdit={dialogs.openEditLink}
-      onAddImage={dialogs.openLinkImage}
-      onEditNote={dialogs.openEditNote}
-      onEditFolder={dialogs.openEditFolder}
-      onNewLink={dialogs.openNewLink}
-      onImport={() => workspace.setView('import')}
+      actions={{
+        onEdit: dialogs.openEditLink,
+        onAddImage: dialogs.openLinkImage,
+        onEditNote: dialogs.openEditNote,
+        onEditFolder: dialogs.openEditFolder,
+        onNewLink: dialogs.openNewLink,
+        onImport: () => workspace.setView('import'),
+        onReload: reload,
+      }}
       viewMode={navigation.viewMode}
       gridCols={workspace.gridCols}
       foldersCompact={navigation.foldersCompact}
       sort={workspace.sort}
-      onReload={reload}
       reloading={content.entriesFetching || content.foldersFetching || content.allFoldersFetching}
-      hasMoreLinks={content.hasMoreEntries}
-      loadingMoreLinks={content.fetchingMoreEntries}
-      onLoadMoreLinks={() => void content.fetchMoreEntries()}
+      paging={{
+        hasMoreLinks: content.hasMoreEntries,
+        loadingMoreLinks: content.fetchingMoreEntries,
+        onLoadMoreLinks: () => void content.fetchMoreEntries(),
+      }}
+      onViewNote={dialogs.openViewNote}
       revealTarget={workspace.revealTarget}
       onRevealed={workspace.clearReveal}
-      onMoveLinkToFolder={dnd.onMoveLinkToFolder}
-      onMoveNoteToFolder={dnd.onMoveNoteToFolder}
-      onMergeEntries={dnd.onMergeEntries}
-      onMoveFolder={dnd.onMoveFolder}
+      dnd={{
+        onMoveLinkToFolder: dnd.onMoveLinkToFolder,
+        onMoveNoteToFolder: dnd.onMoveNoteToFolder,
+        onMergeEntries: dnd.onMergeEntries,
+        onMoveFolder: dnd.onMoveFolder,
+      }}
     />
   )
 }
@@ -320,12 +328,26 @@ function AppOverlays({ workspace, navigation, dialogs }: Props) {
           />
         </Suspense>
       )}
+      {dialogs.viewNoteId !== null && (
+        <NoteViewDialog
+          noteId={dialogs.viewNoteId}
+          onClose={dialogs.closeViewNote}
+          onEdit={(note) => {
+            dialogs.closeViewNote()
+            dialogs.openEditNote(note.id)
+          }}
+        />
+      )}
       <CommandPalette
         open={workspace.paletteOpen}
         onClose={workspace.closePalette}
         onOpenFolder={openPaletteFolder}
         onRevealLink={(link) => void revealLinkFromPalette(link)}
         onEditLink={editLinkFromPalette}
+        onViewNote={dialogs.openViewNote}
+        onSelectTag={(tag) => {
+          if (!workspace.selectedTags.includes(tag.id)) workspace.toggleTag(tag.id)
+        }}
       />
       <TooltipPortal />
     </>

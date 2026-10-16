@@ -62,10 +62,9 @@ func seal(t *testing.T, o *mailoutbox.Outbox, template, locale string, params ma
 func newTestWorker(t *testing.T, o *mailoutbox.Outbox, m mailer.Mailer) *Worker {
 	t.Helper()
 	w := New(o, m, mailoutbox.AMQPConfig{URL: "amqp://127.0.0.1:1/"}, Options{}, discard())
-	// send() reads w.ctx for its timeout; Start would also spin up a consume
-	// loop against a broker that is not there.
-	w.ctx, w.cancel = context.WithCancel(context.Background())
-	t.Cleanup(w.cancel)
+	// send() reads the lifecycle ctx for its timeout; Start would also spin
+	// up a consume loop against a broker that is not there.
+	t.Cleanup(w.life.SeedContext(context.Background()))
 	return w
 }
 

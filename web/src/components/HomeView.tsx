@@ -5,7 +5,6 @@ import type { TFunction } from 'i18next'
 import { Icon, I } from './icons'
 import { LinkCard } from './LinkCard'
 import { NoteCard, type NoteEntry } from './NoteCard'
-import { NoteViewDialog } from './NoteViewDialog'
 import { FolderCard } from './FolderCard'
 import { ListView } from './ListView'
 import { CompactGrid } from './CompactGrid'
@@ -41,29 +40,36 @@ export type HomeProps = Readonly<{
   onOpenFolder: (id: number) => void
   onNavigateBack: () => void
   isLoading: boolean
-  onEdit: (l: LinkT) => void
-  onAddImage: (l: LinkT) => void
-  onEditNote: (id: number) => void
-  onEditFolder: (f: FolderT) => void
-  onNewLink: () => void
-  onImport: () => void
+  actions: Readonly<{
+    onEdit: (l: LinkT) => void
+    onAddImage: (l: LinkT) => void
+    onEditNote: (id: number) => void
+    onEditFolder: (f: FolderT) => void
+    onNewLink: () => void
+    onImport: () => void
+    onReload: () => void
+  }>
   viewMode: ViewMode
   gridCols: 3 | 5 | 8
   foldersCompact: boolean
   sort: Sort
-  onReload: () => void
   reloading: boolean
-  onMoveLinkToFolder: (linkId: number, folderId: number) => void
-  onMoveNoteToFolder: (noteId: number, folderId: number) => void
-  onMergeEntries: (a: MergeSource, b: MergeSource) => void
-  onMoveFolder: (sourceId: number, targetId: number) => void
+  dnd: Readonly<{
+    onMoveLinkToFolder: (linkId: number, folderId: number) => void
+    onMoveNoteToFolder: (noteId: number, folderId: number) => void
+    onMergeEntries: (a: MergeSource, b: MergeSource) => void
+    onMoveFolder: (sourceId: number, targetId: number) => void
+  }>
   // Pagination: when the backend reports more pages exist, Home shows a
   // "Load more" button under the grid (all three viewModes). fetchNextPage
   // appends the next page to the InfiniteData cache; flattenEntries above
   // already merges it into the `entries` array passed in.
-  hasMoreLinks: boolean
-  loadingMoreLinks: boolean
-  onLoadMoreLinks: () => void
+  paging: Readonly<{
+    hasMoreLinks: boolean
+    loadingMoreLinks: boolean
+    onLoadMoreLinks: () => void
+  }>
+  onViewNote: (id: number) => void
   revealTarget?: RevealTarget | null
   onRevealed?: () => void
 }>
@@ -77,28 +83,21 @@ export function Home({
   onOpenFolder,
   onNavigateBack,
   isLoading,
-  onEdit,
-  onAddImage,
-  onEditNote,
-  onEditFolder,
-  onNewLink,
-  onImport,
+  actions,
   viewMode,
   gridCols,
   foldersCompact,
   sort,
-  onReload,
   reloading,
-  onMoveLinkToFolder,
-  onMoveNoteToFolder,
-  onMergeEntries,
-  onMoveFolder,
-  hasMoreLinks,
-  loadingMoreLinks,
-  onLoadMoreLinks,
+  dnd,
+  paging,
+  onViewNote,
   revealTarget = null,
   onRevealed,
 }: HomeProps) {
+  const { onEdit, onAddImage, onEditNote, onEditFolder, onNewLink, onImport, onReload } = actions
+  const { onMoveLinkToFolder, onMoveNoteToFolder, onMergeEntries, onMoveFolder } = dnd
+  const { hasMoreLinks, loadingMoreLinks, onLoadMoreLinks } = paging
   const { t } = useTranslation()
   const totalClicks = useMemo(() => entries.reduce((acc, e) => acc + e.click_count, 0), [entries])
   const { data: tags = [] } = useTags()
@@ -167,6 +166,7 @@ export function Home({
 
       {viewMode === 'cards' && (
         <CardsView
+          onViewNote={onViewNote}
           folders={folders}
           entries={entries}
           sort={sort}
@@ -242,6 +242,7 @@ export function CardsView({
   onMoveNoteToFolder,
   onMergeEntries,
   onMoveFolder,
+  onViewNote,
   t,
 }: Readonly<{
   folders: FolderT[]
@@ -258,6 +259,7 @@ export function CardsView({
   onMoveNoteToFolder: (noteId: number, folderId: number) => void
   onMergeEntries: (a: MergeSource, b: MergeSource) => void
   onMoveFolder: (sourceId: number, targetId: number) => void
+  onViewNote: (id: number) => void
   t: TFunction
 }>) {
   const onMergeIntoLink = useCallback(
@@ -319,8 +321,7 @@ export function CardsView({
   // path that inserts into it, so an in-app read records nothing. Leaving the
   // bump would show a count the server never took, which the next refetch
   // silently corrects — a number that goes up and then back down on its own.
-  const [viewingNoteId, setViewingNoteId] = useState<number | null>(null)
-  const onOpenNote = useCallback((note: NoteEntry) => setViewingNoteId(note.id), [])
+  const onOpenNote = useCallback((note: NoteEntry) => onViewNote(note.id), [onViewNote])
 
   // Default order: folders first (rule from CLAUDE.md), then entries in the
   // order the backend already returned them (pinned-first + active sort,
@@ -438,16 +439,6 @@ export function CardsView({
             onOpen={onOpenNote}
           />
         ),
-      )}
-      {viewingNoteId !== null && (
-        <NoteViewDialog
-          noteId={viewingNoteId}
-          onClose={() => setViewingNoteId(null)}
-          onEdit={(note) => {
-            setViewingNoteId(null)
-            onEditNote(note.id)
-          }}
-        />
       )}
     </div>
   )

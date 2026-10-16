@@ -34,6 +34,7 @@ import (
 	"foldex/internal/pkg/authctx/authctxtest"
 	"foldex/internal/pkg/domainerr"
 	"foldex/internal/pkg/netpolicy"
+	"foldex/internal/pkg/semaphore"
 )
 
 // pngHeader is the 8-byte magic prefix every PNG starts with. http.DetectContentType
@@ -331,8 +332,7 @@ func buildRouter(t *testing.T, sc Screenshotter, up ports.Uploader, repo screens
 		},
 		screenshotter: sc,
 		urlPolicy:     allowAllPolicy,
-		captureSem:    make(chan struct{}, maxCaptureInFlight),
-		captureUsers:  make(map[authctx.UserID]int),
+		captureSlots:  semaphore.NewKeyed[authctx.UserID](maxCaptureInFlight, maxCapturePerUser),
 	}
 
 	r := chi.NewRouter()
@@ -599,7 +599,7 @@ func TestCaptureAndStore_RejectsRFC6598WithProductionPolicy(t *testing.T) {
 		},
 		screenshotter: sc,
 		urlPolicy:     netpolicy.IsPublicURL,
-		captureSem:    make(chan struct{}, maxCaptureInFlight),
+		captureSlots:  semaphore.NewKeyed[authctx.UserID](maxCaptureInFlight, maxCapturePerUser),
 	}
 	r := chi.NewRouter()
 	r.Use(authctxtest.Middleware(authctxtest.DefaultUser))
@@ -627,7 +627,7 @@ func TestCaptureAndStore_PolicyUsesBoundedContextOnce(t *testing.T) {
 			repo: repo, storage: up, logger: newTestLogger(),
 		},
 		screenshotter: sc,
-		captureSem:    make(chan struct{}, maxCaptureInFlight),
+		captureSlots:  semaphore.NewKeyed[authctx.UserID](maxCaptureInFlight, maxCapturePerUser),
 		urlPolicy: func(ctx context.Context, _ string) bool {
 			calls++
 			deadline, ok := ctx.Deadline()
@@ -816,7 +816,7 @@ func TestCaptureAndStore_Returns429WhenSaturated(t *testing.T) {
 		},
 		screenshotter: sc,
 		urlPolicy:     allowAllPolicy,
-		captureSem:    make(chan struct{}, maxCaptureInFlight),
+		captureSlots:  semaphore.NewKeyed[authctx.UserID](maxCaptureInFlight, maxCapturePerUser),
 	}
 	r1 := chi.NewRouter()
 	r1.Use(authctxtest.Middleware(authctxtest.DefaultUser))
@@ -1470,8 +1470,7 @@ func buildHealRouter(t *testing.T, up *fakeUploader, repo *fakeRepo) (http.Handl
 			logger:  newTestLogger(),
 		},
 		urlPolicy:    allowAllPolicy,
-		captureSem:   make(chan struct{}, maxCaptureInFlight),
-		captureUsers: make(map[authctx.UserID]int),
+		captureSlots: semaphore.NewKeyed[authctx.UserID](maxCaptureInFlight, maxCapturePerUser),
 	}).WithEnqueuer(enq)
 
 	r := chi.NewRouter()

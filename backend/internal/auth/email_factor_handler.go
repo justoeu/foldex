@@ -330,7 +330,7 @@ func (h *Handler) DisableEmailFactor(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
-	if !h.mayRemoveFactor(h.mw.requireTOTPForAdmins(r.Context()), user, factorEmail) {
+	if !h.twoFactorStatusWithTOTPOnly(r.Context(), user).MayRemoveEmail {
 		// Same rule as DisableTOTP's, so the same answer: a 409 here and a 403
 		// there for one refusal would read as two different policies, and
 		// `admin_2fa_required` is what the middleware emits for a DIFFERENT

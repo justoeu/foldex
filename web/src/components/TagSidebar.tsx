@@ -9,6 +9,7 @@ import { relativeTime } from '../lib/time'
 import { VERSION, BUILD_DATE, formatBuildDate } from '../version'
 import { useEscape } from '../hooks/useEscape'
 import { isBoolean, usePersistedState } from '../hooks/usePersistedState'
+import { TagRow } from './sidebar/TagRow'
 
 type Props = Readonly<{
   selected: number[]
@@ -298,27 +299,3 @@ function SectionHeader({
   )
 }
 
-function TagRow({
-  name,
-  color,
-  count,
-  active,
-  onClick,
-}: Readonly<{
-  name: string
-  color: string
-  count: number
-  active: boolean
-  onClick: () => void
-}>) {
-  return (
-    <button
-      className={'fx-side-row' + (active ? ' fx-side-row-active' : '')}
-      onClick={onClick}
-    >
-      <span className="fx-side-dot" style={{ background: color }} />
-      <span className="fx-side-label">{name}</span>
-      <span className="fx-side-count">{count}</span>
-    </button>
-  )
-}
