@@ -1,5 +1,4 @@
 import { useMemo, useState } from 'react'
-import { formatLocalYMD } from '../../lib/time'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { activityQueryKey, fetchOwnActivity, type ActivityCursor, type AuditEntry } from '../../api/admin'

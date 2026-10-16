@@ -219,24 +219,7 @@ func (r *Repository) ListOwnActivity(ctx context.Context, uid authctx.UserID, be
 		limit = 50
 	}
 	args := []any{int64(uid), auditpkg.OwnActivityActions()}
-	cursor := ""
-	// The feed merges two id spaces (audit ids positive, click ids negated),
-	// so the keyset cursor is the composite (created_at, feed id) of the
-	// previous page's last row — one total order both sources can compare
-	// against, with no dereference of the cursor row (a deleted cursor row
-	// or another tenant's id can neither break paging nor leak timing).
-	// A bare beforeID (stale client) keeps the legacy id-only bound.
-	if beforeAt != nil {
-		args = append(args, *beforeAt, beforeID)
-		cursor = fmt.Sprintf(" AND (a.created_at, a.id) < ($%d, $%d)", len(args)-1, len(args))
-	} else if beforeID > 0 {
-		args = append(args, beforeID)
-		cursor = fmt.Sprintf(" AND a.id < $%d", len(args))
-	} else if beforeID < 0 {
-		args = append(args, -beforeID)
-		cursor = fmt.Sprintf(` AND a.created_at < (
-			SELECT clicked_at FROM click_log WHERE id = $%d AND user_id = $1)`, len(args))
-	}
+	cursor, args := ownActivityCursor(args, beforeID, beforeAt)
 	args = append(args, limit)
 	limitArg := len(args)
 	rows, err := r.pool.Query(ctx, fmt.Sprintf(`
@@ -273,18 +256,70 @@ func (r *Repository) ListOwnActivity(ctx context.Context, uid authctx.UserID, be
 	if clickErr != nil && !pgerr.IsUndefinedTable(clickErr) {
 		return nil, fmt.Errorf("list own activity clicks: %w", clickErr)
 	} else if clickErr == nil {
-		out = append(out, clicks...)
-		sort.Slice(out, func(i, j int) bool {
-			if out[i].CreatedAt.Equal(out[j].CreatedAt) {
-				return out[i].ID > out[j].ID
-			}
-			return out[i].CreatedAt.After(out[j].CreatedAt)
-		})
-		if len(out) > limit {
-			out = out[:limit]
-		}
+		out = mergeActivityClicks(out, clicks, limit)
 	}
 	return out, nil
+}
+
+// ownActivityCursor builds the keyset bound for the audit half of the feed.
+// The feed merges two id spaces (audit ids positive, click ids negated), so
+// the cursor is the composite (created_at, feed id) of the previous page's
+// last row — one total order both sources can compare against, with no
+// dereference of the cursor row (a deleted cursor row or another tenant's
+// id can neither break paging nor leak timing). A bare beforeID (stale
+// client) keeps the legacy id-only bound.
+func ownActivityCursor(args []any, beforeID int64, beforeAt *time.Time) (string, []any) {
+	switch {
+	case beforeAt != nil:
+		args = append(args, *beforeAt, beforeID)
+		return fmt.Sprintf(" AND (a.created_at, a.id) < ($%d, $%d)", len(args)-1, len(args)), args
+	case beforeID > 0:
+		args = append(args, beforeID)
+		return fmt.Sprintf(" AND a.id < $%d", len(args)), args
+	case beforeID < 0:
+		args = append(args, -beforeID)
+		return fmt.Sprintf(` AND a.created_at < (
+			SELECT clicked_at FROM click_log WHERE id = $%d AND user_id = $1)`, len(args)), args
+	}
+	return "", args
+}
+
+// ownClicksCursor is the click half's counterpart to ownActivityCursor:
+// the same composite (created_at, feed id) bound expressed in click space
+// as (clicked_at, -id), with the legacy id-only fallbacks resolved through
+// owner-scoped lookups of the cursor row in the opposite source.
+func ownClicksCursor(args []any, beforeID int64, beforeAt *time.Time) (string, []any) {
+	switch {
+	case beforeAt != nil:
+		args = append(args, *beforeAt, beforeID)
+		return fmt.Sprintf(" AND (c.clicked_at, -c.id) < ($%d, $%d)", len(args)-1, len(args)), args
+	case beforeID > 0:
+		args = append(args, beforeID)
+		return fmt.Sprintf(` AND c.clicked_at < (
+			SELECT created_at FROM audit_log WHERE id = $%d AND actor_id = $1)`, len(args)), args
+	case beforeID < 0:
+		args = append(args, -beforeID)
+		return fmt.Sprintf(` AND (c.clicked_at, c.id) < (
+			SELECT clicked_at, id FROM click_log WHERE id = $%d AND user_id = $1)`, len(args)), args
+	}
+	return "", args
+}
+
+// mergeActivityClicks folds the click rows into the audit rows in feed
+// order (newest first, feed id breaking timestamp ties) and truncates the
+// merged page back to the requested size.
+func mergeActivityClicks(out, clicks []AuditEntry, limit int) []AuditEntry {
+	out = append(out, clicks...)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID > out[j].ID
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out
 }
 
 // ownClicks reads the caller's link clicks, mapped onto the AuditEntry shape
@@ -297,19 +332,7 @@ func (r *Repository) ListOwnActivity(ctx context.Context, uid authctx.UserID, be
 // owner-scoped lookups of the cursor row.
 func (r *Repository) ownClicks(ctx context.Context, uid authctx.UserID, beforeID int64, beforeAt *time.Time, limit int) ([]AuditEntry, error) {
 	args := []any{int64(uid)}
-	window := ""
-	if beforeAt != nil {
-		args = append(args, *beforeAt, beforeID)
-		window = fmt.Sprintf(" AND (c.clicked_at, -c.id) < ($%d, $%d)", len(args)-1, len(args))
-	} else if beforeID > 0 {
-		args = append(args, beforeID)
-		window = fmt.Sprintf(` AND c.clicked_at < (
-			SELECT created_at FROM audit_log WHERE id = $%d AND actor_id = $1)`, len(args))
-	} else if beforeID < 0 {
-		args = append(args, -beforeID)
-		window = fmt.Sprintf(` AND (c.clicked_at, c.id) < (
-			SELECT clicked_at, id FROM click_log WHERE id = $%d AND user_id = $1)`, len(args))
-	}
+	window, args := ownClicksCursor(args, beforeID, beforeAt)
 	args = append(args, limit)
 	rows, err := r.pool.Query(ctx, fmt.Sprintf(`
 		SELECT c.id, c.entity_id, COALESCE(l.title, ''), c.clicked_at

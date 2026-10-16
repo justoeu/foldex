@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type CSSProperties } from 'react'
+import { useCallback, useMemo, type CSSProperties } from 'react'
 import { useRevealEntry, type RevealTarget } from '../hooks/useRevealEntry'
 import { Trans, useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
