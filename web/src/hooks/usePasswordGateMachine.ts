@@ -52,7 +52,7 @@ export function formatCountdown(seconds: number): string {
 }
 
 export function usePasswordGateMachine({ unlock, onUnlocked, hasHint, messages }: Options) {
-  const [password, setPasswordRaw] = useState('')
+  const [password, setPassword] = useState('')
   const [state, setState] = useState<PasswordGateState>({ kind: 'idle', error: null })
   // The attempt counter outlives the lockout state: the hint must still show
   // once the countdown expires, so it cannot be derived from the union alone.
@@ -82,8 +82,8 @@ export function usePasswordGateMachine({ unlock, onUnlocked, hasHint, messages }
   const showHint = hasHint && failedAttempts >= HINT_AFTER_ATTEMPTS
   const error = 'error' in state ? state.error : null
 
-  const setPassword = useCallback((value: string) => {
-    setPasswordRaw(value)
+  const updatePassword = useCallback((value: string) => {
+    setPassword(value)
     setState((s) => {
       if (s.kind === 'locked-out' || s.kind === 'submitting') return s
       return value ? { kind: 'awaiting-code' } : { kind: 'idle', error: null }
@@ -98,7 +98,7 @@ export function usePasswordGateMachine({ unlock, onUnlocked, hasHint, messages }
       onUnlocked(result)
     } catch (e: unknown) {
       const parsed = parseUnlockError(e)
-      setPasswordRaw('')
+      setPassword('')
       if (parsed.code === 'too_many_attempts' && parsed.lockedUntil) {
         setNowTs(Date.now())
         setFailedAttempts((n) => Math.max(n, HINT_AFTER_ATTEMPTS))
@@ -114,24 +114,24 @@ export function usePasswordGateMachine({ unlock, onUnlocked, hasHint, messages }
       }
       if (parsed.code === 'wrong_password') {
         if (typeof parsed.failedAttempts === 'number') setFailedAttempts(parsed.failedAttempts)
-        setState((s) => ({
-          kind: 'wrong-code',
-          error:
-            typeof parsed.attemptsRemaining === 'number' && parsed.attemptsRemaining > 0
-              ? messages.attemptsRemaining(parsed.attemptsRemaining)
-              : messages.incorrect,
-          failedAttempts:
-            typeof parsed.failedAttempts === 'number'
-              ? parsed.failedAttempts
-              : s.kind === 'wrong-code'
-                ? s.failedAttempts
-                : 0,
-        }))
+        setState((s) => {
+          let attempts = 0
+          if (typeof parsed.failedAttempts === 'number') attempts = parsed.failedAttempts
+          else if (s.kind === 'wrong-code') attempts = s.failedAttempts
+          return {
+            kind: 'wrong-code',
+            error:
+              typeof parsed.attemptsRemaining === 'number' && parsed.attemptsRemaining > 0
+                ? messages.attemptsRemaining(parsed.attemptsRemaining)
+                : messages.incorrect,
+            failedAttempts: attempts,
+          }
+        })
         return
       }
       setState({ kind: 'idle', error: messages.generic })
     }
   }, [password, state.kind, locked, unlock, onUnlocked, messages])
 
-  return { state, password, setPassword, submit, error, failedAttempts, locked, remainingSecs, showHint }
+  return { state, password, setPassword: updatePassword, submit, error, failedAttempts, locked, remainingSecs, showHint }
 }

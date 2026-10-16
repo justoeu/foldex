@@ -334,9 +334,10 @@ self.addEventListener('notificationclick', (event) => {
   // For tests, just focus or open the SPA root. Change notifications carry
   // the /r/{slug} redirect (records the click, marks the change seen);
   // older payloads fall back to the id form.
+  const idFallback = data.slug ? `/r/${data.slug}` : `/go/${data.link_id}`
   const target = data.kind === 'test' || !data.link_id
     ? '/'
-    : safeNotificationPath(data.url) ?? (data.slug ? `/r/${data.slug}` : `/go/${data.link_id}`)
+    : safeNotificationPath(data.url) ?? idFallback
   event.waitUntil(
     (async () => {
       const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
