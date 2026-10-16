@@ -1,9 +1,11 @@
 import { useCallback, useState } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
+import { http } from '../api/client'
+import { entityUnlockHeaders, invalidateLibrary } from '../api/entries'
 import { useUpdateLink } from '../api/links'
 import { useUpdateNote } from '../api/notes'
-import { useCreateFolder, useUpdateFolder } from '../api/folders'
+import { useUpdateFolder } from '../api/folders'
 import type { Folder, MergeSource } from '../api/types'
 import { isSameEntry, wouldCreateFolderCycle } from '../AppDnd'
 
@@ -20,7 +22,6 @@ export function useAppDndController({
   const queryClient = useQueryClient()
   const updateLink = useUpdateLink()
   const updateNote = useUpdateNote()
-  const createFolder = useCreateFolder()
   const updateFolder = useUpdateFolder()
   const [mergeError, setMergeError] = useState<string | null>(null)
 
@@ -37,46 +38,44 @@ export function useAppDndController({
     updateFolder.mutate({ id: sourceId, body: { parent_id: targetId } })
   }, [folders, updateFolder.mutate])
 
-  const moveEntryToFolder = useCallback((source: MergeSource, folderId: number) => (
-    source.kind === 'link'
-      ? updateLink.mutateAsync({ id: source.id, body: { folder_id: folderId } })
-      : updateNote.mutateAsync({ id: source.id, body: { folder_id: folderId } })
-  ), [updateLink.mutateAsync, updateNote.mutateAsync])
-
-  const reconcileMerge = useCallback(async () => {
-    await Promise.allSettled([
-      queryClient.invalidateQueries({ queryKey: ['entries'] }),
-      queryClient.invalidateQueries({ queryKey: ['folders'] }),
-      queryClient.invalidateQueries({ queryKey: ['links'] }),
-    ])
-  }, [queryClient])
+  // One mutation for the whole merge: routing the create and the two moves
+  // through useCreateFolder/useUpdateLink/useUpdateNote fired three
+  // sequential rounds of the same library invalidations (folders, entries,
+  // links) within milliseconds. Raw calls here invalidate exactly once,
+  // when everything has settled.
+  const merge = useMutation({
+    mutationFn: async ({ a, b }: { a: MergeSource; b: MergeSource }) => {
+      const { data: folder } = await http.post<Folder>('/api/folders', {
+        name: t('home.merge_new_folder_name'),
+        parent_id: openFolder,
+      })
+      const move = (source: MergeSource) => http.patch(
+        source.kind === 'link' ? `/api/links/${source.id}` : `/api/notes/${source.id}`,
+        { folder_id: folder.id },
+        // Same contract useUpdateLink/useUpdateNote carry: moving OUT of a
+        // locked folder needs its unlock token.
+        { headers: entityUnlockHeaders(queryClient, source.kind, source.id) },
+      )
+      const moves = await Promise.allSettled([move(a), move(b)])
+      return { folder, partial: moves.some((r) => r.status === 'rejected') }
+    },
+    onSettled: () => invalidateLibrary(queryClient, { folders: true, links: true, entries: true }),
+  })
 
   const onMergeEntries = useCallback(async (a: MergeSource, b: MergeSource) => {
     if (isSameEntry(a, b)) return
     setMergeError(null)
-    let folder: Folder
     try {
-      folder = await createFolder.mutateAsync({
-        name: t('home.merge_new_folder_name'),
-        parent_id: openFolder,
-      })
+      const { folder, partial } = await merge.mutateAsync({ a, b })
+      if (partial) {
+        setMergeError(t('home.merge_partial_error'))
+        return
+      }
+      onFolderCreated(folder)
     } catch {
-      await reconcileMerge()
       setMergeError(t('home.merge_error'))
-      return
     }
-
-    const moves = await Promise.allSettled([
-      moveEntryToFolder(a, folder.id),
-      moveEntryToFolder(b, folder.id),
-    ])
-    if (moves.some((result) => result.status === 'rejected')) {
-      await reconcileMerge()
-      setMergeError(t('home.merge_partial_error'))
-      return
-    }
-    onFolderCreated(folder)
-  }, [createFolder.mutateAsync, moveEntryToFolder, onFolderCreated, openFolder, reconcileMerge, t])
+  }, [merge.mutateAsync, onFolderCreated, t])
 
   return {
     onMoveLinkToFolder,

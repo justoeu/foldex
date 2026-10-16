@@ -243,9 +243,9 @@ export function useMarkChangeSeen() {
   })
 }
 
-export async function lookupLinkByURL(url: string): Promise<Link | null> {
+export async function lookupLinkByURL(url: string, signal?: AbortSignal): Promise<Link | null> {
   try {
-    const { data } = await http.get<Link>('/api/links/by-url', { params: { url } })
+    const { data } = await http.get<Link>('/api/links/by-url', { params: { url }, signal })
     return data
   } catch (error) {
     const status = (error as { response?: { status?: number } })?.response?.status

@@ -67,6 +67,24 @@ function MountedQuery({ queryKey, queryFn }: { queryKey: string; queryFn: () => 
 }
 
 describe('BackupRestoreDialog', () => {
+  it('caps rendered validation warnings and summarizes the overflow', async () => {
+    state.backupValidation = {
+      ok: true,
+      manifest: {
+        version: 1, schema_version: 1, created_at: '', owner_email: 'a@b.c',
+        counts: { links: 5, notes: 4, tags: 2, folders: 1, link_tags: 3, click_logs: 8, files: 0, file_bytes: 0 },
+      },
+      conflicts: { links: 0, tags: 0, folders: 0 },
+      warnings: Array.from({ length: 500 }, (_, i) => `warning number ${i}`),
+      errors: [],
+    }
+    renderDialog()
+    await waitFor(() => expect(screen.getByText(/warning number 0/)).toBeInTheDocument())
+    expect(screen.getAllByText(/warning number \d+/)).toHaveLength(50)
+    expect(screen.getByText(/\+450 more warnings/)).toBeInTheDocument()
+    expect(screen.queryByText(/warning number 499/)).not.toBeInTheDocument()
+  })
+
   it('shows validation summary and counts after validate resolves', async () => {
     renderDialog()
     await waitFor(() => expect(screen.getByText(/5 links · 4 notes · 2 tags · 1 folders/)).toBeInTheDocument())

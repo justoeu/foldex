@@ -105,10 +105,11 @@ func (h *AdminHandler) ListAudit(w http.ResponseWriter, r *http.Request) {
 // because a secondary aggregate was unavailable would hide the trail during
 // exactly the incident it exists for.
 func (h *AdminHandler) raiseBurstSeverity(r *http.Request, entries []AuditEntry, since time.Time) {
-	if !containsFailure(entries) {
+	ips := failureIPs(entries)
+	if len(ips) == 0 {
 		return
 	}
-	bursts, err := h.repo.FailureBursts(r.Context(), since)
+	bursts, err := h.repo.FailureBursts(r.Context(), since, ips)
 	if err != nil {
 		h.logger.Warn("audit failure bursts", "err", err)
 		return
@@ -116,13 +117,22 @@ func (h *AdminHandler) raiseBurstSeverity(r *http.Request, entries []AuditEntry,
 	applyBursts(entries, bursts)
 }
 
-func containsFailure(entries []AuditEntry) bool {
+// failureIPs is the page's distinct failed-login addresses — the only
+// ones whose burst counts can change a severity on this page.
+func failureIPs(entries []AuditEntry) []string {
+	seen := map[string]struct{}{}
+	var out []string
 	for _, e := range entries {
-		if e.Action == AuditLoginFailed {
-			return true
+		if e.Action != AuditLoginFailed || e.IP == nil {
+			continue
 		}
+		if _, dup := seen[*e.IP]; dup {
+			continue
+		}
+		seen[*e.IP] = struct{}{}
+		out = append(out, *e.IP)
 	}
-	return false
+	return out
 }
 
 // applyBursts is the half of raiseBurstSeverity that does no I/O, so a caller
@@ -202,7 +212,7 @@ func (h *AdminHandler) ExportAudit(w http.ResponseWriter, r *http.Request) {
 	// the period for each of up to fifty pages — one export turning into fifty
 	// identical scans of the table's bulk. A failure leaves the floor severity
 	// in place rather than aborting a download that is otherwise correct.
-	bursts, err := h.repo.FailureBursts(r.Context(), f.Since)
+	bursts, err := h.repo.FailureBursts(r.Context(), f.Since, nil)
 	if err != nil {
 		h.logger.Warn("audit export failure bursts", "err", err)
 		bursts = map[string]int{}

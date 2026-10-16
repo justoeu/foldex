@@ -26,7 +26,7 @@ export function useExistingLinkByURL(
 
   const query = useQuery({
     queryKey: ['links', 'by-url', debounced],
-    queryFn: () => lookupLinkByURL(debounced),
+    queryFn: ({ signal }) => lookupLinkByURL(debounced, signal),
     enabled: enabled && looksLikeUrl(debounced),
     retry: false,
     staleTime: 0,

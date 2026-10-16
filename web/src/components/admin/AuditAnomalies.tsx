@@ -75,7 +75,7 @@ export function AuditAnomalies({ canBlock, onInspect }: Props) {
   const [window, setWindow] = useState<AnomalyWindow>('24h')
   const query = useQuery({
     queryKey: anomaliesQueryKey(window),
-    queryFn: () => fetchAnomalies(window),
+    queryFn: ({ signal }) => fetchAnomalies(window, signal),
   })
   const controls = useBlockControls()
 

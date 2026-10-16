@@ -36,7 +36,7 @@ describe('useStatsDashboard', () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
 
     expect(http.get).toHaveBeenCalledTimes(1)
-    expect(http.get).toHaveBeenCalledWith('/api/stats/dashboard?days=60&limit=5')
+    expect(http.get).toHaveBeenCalledWith('/api/stats/dashboard?days=60&limit=5', { signal: expect.any(AbortSignal) })
     expect(result.current.data?.summary.total_clicks).toBe(2)
   })
 })

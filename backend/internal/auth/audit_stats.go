@@ -148,16 +148,24 @@ func (r *Repository) AuditStatsSince(ctx context.Context, since time.Time) (Audi
 	// only appears away from UTC, and it looks like "a quiet day" — so the
 	// bound stays inside SQL, where the clock and the rows are the same clock.
 	days, err := r.pool.Query(ctx, `
+		WITH by_day AS (
+		    SELECT date_trunc('day', created_at) AS day,
+		           count(*) FILTER (WHERE action = 'login.succeeded') AS succeeded,
+		           count(*) FILTER (WHERE action = 'login.failed') AS failed,
+		           count(*) FILTER (WHERE action NOT IN ('login.succeeded','login.failed')
+		                                 AND NOT (action = ANY($2::text[]))) AS other,
+		           count(*) FILTER (WHERE action = ANY($2::text[])) AS content
+		    FROM audit_log
+		    WHERE created_at >= date_trunc('day', $1::timestamptz)
+		    GROUP BY 1
+		)
 		SELECT d,
-		       count(a.id) FILTER (WHERE a.action = 'login.succeeded'),
-		       count(a.id) FILTER (WHERE a.action = 'login.failed'),
-		       count(a.id) FILTER (WHERE a.action NOT IN ('login.succeeded','login.failed')
-		                             AND NOT (a.action = ANY($2::text[]))),
-		       count(a.id) FILTER (WHERE a.action = ANY($2::text[]))
+		       COALESCE(b.succeeded, 0), COALESCE(b.failed, 0),
+		       COALESCE(b.other, 0), COALESCE(b.content, 0)
 		FROM generate_series(date_trunc('day', $1::timestamptz),
 		                     date_trunc('day', now()), '1 day') AS d
-		LEFT JOIN audit_log a ON a.created_at >= d AND a.created_at < d + interval '1 day'
-		GROUP BY d ORDER BY d`, since, content)
+		LEFT JOIN by_day b ON b.day = d
+		ORDER BY d`, since, content)
 	if err != nil {
 		return out, fmt.Errorf("audit days: %w", err)
 	}
@@ -331,12 +339,21 @@ func (r *Repository) worstBurst(ctx context.Context, since time.Time) (*AuditRis
 // produced — the input AuditSeverity needs to tell a typo from an attack.
 //
 // One query for the whole page rather than one per row: severity is a property
-// of the address's behaviour, not of the single row being classified.
-func (r *Repository) FailureBursts(ctx context.Context, since time.Time) (map[string]int, error) {
-	rows, err := r.pool.Query(ctx, `
+// of the address's behaviour, not of the single row being classified. A
+// non-empty ips scopes the aggregate to those addresses (the audit page
+// passes its ≤50 on-screen addresses so a page load never groups the whole
+// window); nil keeps the whole-window form the CSV export computes once.
+func (r *Repository) FailureBursts(ctx context.Context, since time.Time, ips []string) (map[string]int, error) {
+	query := `
 		SELECT host(ip), count(*) FROM audit_log
-		WHERE created_at >= $1 AND action = 'login.failed' AND ip IS NOT NULL
-		GROUP BY ip`, since)
+		WHERE created_at >= $1 AND action = 'login.failed' AND ip IS NOT NULL`
+	args := []any{since}
+	if len(ips) > 0 {
+		query += ` AND ip = ANY($2::inet[])`
+		args = append(args, ips)
+	}
+	query += ` GROUP BY ip`
+	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failure bursts: %w", err)
 	}

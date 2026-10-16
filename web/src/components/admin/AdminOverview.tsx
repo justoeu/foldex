@@ -24,7 +24,7 @@ export function AdminOverview({ onOpen }: Props) {
   // endpoint: "what needs attention" is just "what happened recently" filtered
   // by how alarming it is — and the shared key means AuditSection reads it
   // from cache rather than refetching.
-  const recent = useQuery({ queryKey: auditQueryKey(), queryFn: () => fetchAudit({}) })
+  const recent = useQuery({ queryKey: auditQueryKey(), queryFn: ({ signal }) => fetchAudit({}, signal) })
 
   const attention = Array.isArray(recent.data) ? recent.data : []
 

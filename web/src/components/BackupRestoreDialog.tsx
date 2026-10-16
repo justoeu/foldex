@@ -19,6 +19,35 @@ type Props = Readonly<{
   onRestored: () => void
 }>
 
+// Validation and duplicate-mode restore emit one string per colliding URL,
+// renamed tag or missing file — thousands on a large library. Rendering them
+// all froze the import dialog on commit; cap and summarize the overflow,
+// matching ImportPreviewDialog.
+const MAX_RENDERED_MESSAGES = 50
+
+function CappedMessageList({ items, kind, t }: Readonly<{ items: string[]; kind: 'error' | 'warning'; t: TFunction }>) {
+  const hidden = items.length - MAX_RENDERED_MESSAGES
+  const danger = kind === 'error'
+  return (
+    <div
+      style={{
+        background: danger ? 'rgba(244,63,94,0.08)' : 'rgba(245,158,11,0.08)',
+        borderRadius: 8,
+        padding: 10,
+        fontSize: 12,
+        color: danger ? 'var(--fx-danger)' : 'var(--fx-ink-3)',
+        maxHeight: 200,
+        overflowY: 'auto',
+      }}
+    >
+      {items.slice(0, MAX_RENDERED_MESSAGES).map((m, i) => (
+        <div key={`${m}-${i}`}>{danger ? '✗' : '⚠'} {m}</div>
+      ))}
+      {hidden > 0 && <div>{t(danger ? 'backup.errors_more' : 'backup.warnings_more', { count: hidden })}</div>}
+    </div>
+  )
+}
+
 function restoreSubmitLabel(restoring: boolean, mode: ConflictMode, t: TFunction): string {
   if (restoring) return t('backup.submit_restoring')
   if (mode === 'wipe') return t('backup.submit_restore_wipe')
@@ -139,9 +168,7 @@ export function BackupRestoreDialog({ file, onClose, onRestored }: Props) {
                 )}
 
                 {validation.errors.length > 0 && (
-                  <div style={{ background: 'rgba(244,63,94,0.08)', borderRadius: 8, padding: 10, fontSize: 12, color: 'var(--fx-danger)' }}>
-                    {validation.errors.map((e, i) => <div key={`${e}-${i}`}>✗ {e}</div>)}
-                  </div>
+                  <CappedMessageList items={validation.errors} kind="error" t={t} />
                 )}
 
                 {!hasErrors && !report && m && (
@@ -209,11 +236,7 @@ function ValidationSummary({ v, t }: Readonly<{ v: BackupValidation; t: TFunctio
       <Row label={t('backup.summary_clicks')} value={t('backup.summary_clicks_value', { count: m.counts.click_logs })} />
       <Row label={t('backup.summary_files')} value={t('backup.summary_files_value', { count: m.counts.files, size: formatBytes(m.counts.file_bytes) })} />
       <Row label={t('backup.summary_conflicts')} value={t('backup.summary_conflicts_value', { links: v.conflicts.links, tags: v.conflicts.tags })} />
-      {v.warnings.length > 0 && (
-        <div style={{ background: 'rgba(245,158,11,0.08)', borderRadius: 8, padding: 10, fontSize: 12, color: 'var(--fx-ink-3)' }}>
-          {v.warnings.map((w, i) => <div key={`${w}-${i}`}>⚠ {w}</div>)}
-        </div>
-      )}
+      {v.warnings.length > 0 && <CappedMessageList items={v.warnings} kind="warning" t={t} />}
     </div>
   )
 }
@@ -235,11 +258,7 @@ function RestoreReportBlock({ r, t }: Readonly<{ r: RestoreReport; t: TFunction 
       <Row label={t('backup.result_skipped')} value={t('backup.result_skipped_format', { links: r.skipped.links, notes: r.skipped.notes, tags: r.skipped.tags })} />
       <Row label={t('backup.result_files')} value={t('backup.result_files_format', { uploaded: r.files.uploaded, skipped: r.files.skipped })} />
       <Row label={t('backup.result_duration')} value={t('backup.report_duration_value', { value: (r.duration_ms / 1000).toFixed(2) })} />
-      {r.warnings.length > 0 && (
-        <div style={{ background: 'rgba(245,158,11,0.08)', borderRadius: 8, padding: 10, fontSize: 12, color: 'var(--fx-ink-3)' }}>
-          {r.warnings.map((w, i) => <div key={`${w}-${i}`}>⚠ {w}</div>)}
-        </div>
-      )}
+      {r.warnings.length > 0 && <CappedMessageList items={r.warnings} kind="warning" t={t} />}
     </div>
   )
 }

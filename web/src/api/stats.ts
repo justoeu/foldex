@@ -46,7 +46,7 @@ export type StatsDashboard = {
 export function useStatsDashboard(days = 60, limit = 5) {
   return useQuery({
     queryKey: ['stats', 'dashboard', days, limit],
-    queryFn: async () => (await http.get<StatsDashboard>(`/api/stats/dashboard?days=${days}&limit=${limit}`)).data,
+    queryFn: async ({ signal }) => (await http.get<StatsDashboard>(`/api/stats/dashboard?days=${days}&limit=${limit}`, { signal })).data,
   })
 }
 
@@ -58,10 +58,11 @@ export type StorageStats = {
 export function useStatsStorage() {
   return useQuery({
     queryKey: ['stats', 'storage'],
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       try {
-        return (await http.get<StorageStats>('/api/stats/storage')).data
-      } catch {
+        return (await http.get<StorageStats>('/api/stats/storage', { signal })).data
+      } catch (error) {
+        if (signal.aborted) throw error
         // Endpoint is absent when the object store is unreachable — render the card as
         // "—" rather than crashing the whole page.
         return null

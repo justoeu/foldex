@@ -113,35 +113,50 @@ func scanRun(row pgx.Row) (*Run, error) {
 	return r, nil
 }
 
-// Summary builds one JobStatus per job, in Jobs order.
-//
-// Two small queries per job rather than one clever statement: this renders an
-// administration band a human opens occasionally, and the readable form is
-// worth more than saving six round trips.
+// Summary builds one JobStatus per job, in Jobs order, in two round trips
+// total (latest successes + failure counts) however many jobs exist: this
+// band is polled, so its cost must not scale with the job count.
 func (s *Repository) Summary(ctx context.Context) ([]JobStatus, error) {
-	out := make([]JobStatus, 0, len(Jobs))
-	for _, job := range Jobs {
-		last, err := scanRun(s.pool.QueryRow(ctx, `
-			SELECT `+runColumns+` FROM backup_run
-			WHERE job = $1 AND status = 'succeeded'
-			ORDER BY started_at DESC LIMIT 1`, job))
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("backupstatus: last success for %s: %w", job, err)
-		}
-		fails, err := s.consecutiveFailures(ctx, job)
+	lastByJob := map[string]Run{}
+	rows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT ON (job) `+runColumns+` FROM backup_run
+		WHERE job = ANY($1::text[]) AND status = 'succeeded'
+		ORDER BY job, started_at DESC`, Jobs)
+	if err != nil {
+		return nil, fmt.Errorf("backupstatus: last successes: %w", err)
+	}
+	for rows.Next() {
+		run, err := scanRun(rows)
 		if err != nil {
+			rows.Close()
 			return nil, err
 		}
-		out = append(out, JobStatus{Job: job, LastSuccess: last, ConsecutiveFailures: fails})
+		if run != nil {
+			lastByJob[run.Job] = *run
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("backupstatus: last successes: %w", err)
+	}
+
+	// The shared backupjobs counter: the number the band shows MUST be the
+	// number the alert threshold compares against.
+	fails, err := backupjobs.NewRunStore(s.pool).ConsecutiveFailuresForJobs(ctx, Jobs)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]JobStatus, 0, len(Jobs))
+	for _, job := range Jobs {
+		var last *Run
+		if run, ok := lastByJob[job]; ok {
+			run := run
+			last = &run
+		}
+		out = append(out, JobStatus{Job: job, LastSuccess: last, ConsecutiveFailures: fails[job]})
 	}
 	return out, nil
-}
-
-// consecutiveFailures delegates to the shared backupjobs counter: the number the
-// band shows MUST be the number the alert threshold compares against, and two
-// hand-copied queries is exactly how they drift apart.
-func (s *Repository) consecutiveFailures(ctx context.Context, job string) (int, error) {
-	return backupjobs.NewRunStore(s.pool).ConsecutiveFailures(ctx, job)
 }
 
 // Schedule, SetSchedule, DeleteSchedule and AgentState delegate to the
