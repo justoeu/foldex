@@ -1,11 +1,12 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
-import { screen, waitFor } from '@testing-library/react'
+import { screen, waitFor, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { LoginScreen } from './LoginScreen'
 import { SetupScreen } from './SetupScreen'
 import { renderWithProviders, testAdminUser } from '../../test/renderWithProviders'
 import { http } from '../../api/client'
 import { useAuth } from '../../auth/AuthProvider'
+import { urlTokens } from '../../auth/authUrl'
 import type { MeResponse } from '../../api/auth'
 
 const features = { google_oauth: false, two_factor: false, email_delivery: false }
@@ -217,6 +218,61 @@ describe('LoginScreen', () => {
     expect(screen.queryByRole('button', { name: /forgot your password/i })).not.toBeInTheDocument()
   })
 
+  it('falls back to a generic message for an unrecognised server error', async () => {
+    rejectWith('totally_new_code', 500)
+    renderWithProviders(<LoginScreen />, { session: null })
+    const user = userEvent.setup()
+    await user.type(screen.getByRole('textbox', { name: /e-mail/i }), 'a@b.c')
+    await user.type(screen.getByLabelText(/^password$/i), 'x')
+    await user.click(screen.getByRole('button', { name: /sign in/i }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(/something went wrong/i)
+  })
+
+  // A failed Google round-trip returns as a plain navigation; ?oauth_error=
+  // (captured into urlTokens at boot) is the only explanation available.
+  it.each([
+    ['cancelled', /cancelled the Google sign-in/i],
+    ['not_linked', /could not sign you in with that Google account/i],
+    ['email_unverified', /not confirmed that address/i],
+    ['already_linked', /already linked to another user/i],
+    ['invite_email_mismatch', /issued to a different address/i],
+    ['invite_invalid', /invitation is no longer valid/i],
+    ['oauth_disabled', /not configured on this instance/i],
+    ['something_unmapped', /did not complete/i],
+  ] as const)('explains the %s oauth failure on arrival', (code, copy) => {
+    urlTokens.oauthError = code
+    try {
+      renderWithProviders(<LoginScreen />, { session: null })
+      expect(screen.getByRole('alert')).toHaveTextContent(copy)
+    } finally {
+      urlTokens.oauthError = undefined
+    }
+  })
+
+  it('offers Google sign-in only when the instance enables it', () => {
+    const on = { status: 'anonymous', features: { ...features, google_oauth: true } }
+    const { unmount } = renderWithProviders(<LoginScreen />, { session: on as never })
+    expect(screen.getByRole('button', { name: /google/i })).toBeInTheDocument()
+    unmount()
+    renderWithProviders(<LoginScreen />, { session: { status: 'anonymous', features } as never })
+    expect(screen.queryByRole('button', { name: /google/i })).not.toBeInTheDocument()
+  })
+
+  it('still renders when localStorage refuses to hand back the remembered address', () => {
+    const real = window.localStorage.getItem.bind(window.localStorage)
+    const spy = vi.spyOn(window.localStorage, 'getItem').mockImplementation((key: string) => {
+      if (key === 'foldex.auth.email') throw new Error('blocked')
+      return real(key)
+    })
+    try {
+      renderWithProviders(<LoginScreen />, { session: null })
+      expect(screen.getByRole('textbox', { name: /e-mail/i })).toHaveValue('')
+      expect(screen.getByRole('checkbox')).not.toBeChecked()
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
   it('uses the right autocomplete hints so password managers work', () => {
     renderWithProviders(<LoginScreen />, { session: null })
     expect(screen.getByRole('textbox', { name: /e-mail/i })).toHaveAttribute('autocomplete', 'username')
@@ -314,6 +370,50 @@ describe('SetupScreen', () => {
     await user.click(screen.getByRole('button', { name: /create account/i }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/already has an account/i)
+  })
+
+  async function fillSetup(user: ReturnType<typeof userEvent.setup>) {
+    await user.type(screen.getByRole('textbox', { name: /e-mail/i }), 'a@b.c')
+    await user.type(screen.getByLabelText(/^password$/i), 'a good password')
+    await user.type(screen.getByLabelText(/confirm password/i), 'a good password')
+  }
+
+  it.each([
+    ['email_taken', 409, /already registered/i],
+    ['invalid_email', 400, /valid e-mail address/i],
+    ['password_too_short', 400, /at least \d+ characters/i],
+    ['password_too_long', 400, /too long/i],
+    ['unmapped', 500, /something went wrong/i],
+  ] as const)('maps the %s bootstrap failure onto copy', async (code, status, copy) => {
+    rejectWith(code, status)
+    renderWithProviders(<SetupScreen />, { session: null })
+    const user = userEvent.setup()
+    await fillSetup(user)
+    await user.click(screen.getByRole('button', { name: /create account/i }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(copy)
+  })
+
+  it('reports an unreachable backend during setup as a network problem', async () => {
+    vi.spyOn(http, 'post').mockRejectedValue({})
+    renderWithProviders(<SetupScreen />, { session: null })
+    const user = userEvent.setup()
+    await fillSetup(user)
+    await user.click(screen.getByRole('button', { name: /create account/i }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(/could not reach the server/i)
+  })
+
+  // The disabled submit is the first line of defence; the onSubmit guard is
+  // the second (implicit submission, autofill races). Drive the form
+  // directly to prove the guard fires and no request escapes.
+  it('refuses a direct form submit when the passwords differ', async () => {
+    const post = vi.spyOn(http, 'post')
+    renderWithProviders(<SetupScreen />, { session: null })
+    const user = userEvent.setup()
+    await user.type(screen.getByLabelText(/^password$/i), 'a good password')
+    await user.type(screen.getByLabelText(/confirm password/i), 'a different one')
+    fireEvent.submit(screen.getByLabelText(/^password$/i).closest('form')!)
+    expect(await screen.findByRole('alert')).toHaveTextContent(/do not match/i)
+    expect(post).not.toHaveBeenCalled()
   })
 
   it('relays the backend password policy verbatim', async () => {

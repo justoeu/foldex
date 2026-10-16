@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { screen, waitFor } from '@testing-library/react'
+import { screen, waitFor, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ForgotScreen } from './ForgotScreen'
 import { ResetScreen } from './ResetScreen'
@@ -204,6 +204,55 @@ describe('ResetScreen', () => {
     await user.click(screen.getByRole('button', { name: /save and sign in/i }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/no longer valid/i)
+  })
+
+  async function fillReset(user: ReturnType<typeof userEvent.setup>) {
+    await user.type(screen.getByLabelText(/^new password$/i), 'a brand new password')
+    await user.type(screen.getByLabelText(/confirm new password/i), 'a brand new password')
+    await user.click(screen.getByRole('button', { name: /save and sign in/i }))
+  }
+
+  it.each([
+    ['password_too_long', 400, /too long/i],
+    ['too_many_attempts', 429, /too many attempts/i],
+    ['unmapped', 500, /something went wrong/i],
+  ] as const)('maps the %s reset failure onto copy', async (code, status, copy) => {
+    vi.spyOn(http, 'post').mockImplementation(() => rejectWith(status, code) as never)
+    renderWithProviders(<ResetScreen token="TOK" onGiveUp={() => {}} />, { session: null })
+    await fillReset(userEvent.setup())
+    expect(await screen.findByRole('alert')).toHaveTextContent(copy)
+  })
+
+  it('reports an unreachable backend during reset as a network problem', async () => {
+    vi.spyOn(http, 'post').mockImplementation(() => Promise.reject({ response: undefined }) as never)
+    renderWithProviders(<ResetScreen token="TOK" onGiveUp={() => {}} />, { session: null })
+    await fillReset(userEvent.setup())
+    expect(await screen.findByRole('alert')).toHaveTextContent(/could not reach the server/i)
+  })
+
+  // Same two-layer guard as SetupScreen: the button disables on mismatch,
+  // and onSubmit refuses a direct submission so the single-use token is
+  // never spent on a typo.
+  it('refuses a direct form submit when the confirmation differs', async () => {
+    const post = vi.spyOn(http, 'post').mockResolvedValue({ data: {} } as never)
+    renderWithProviders(<ResetScreen token="TOK" onGiveUp={() => {}} />, { session: null })
+    const user = userEvent.setup()
+    await user.type(screen.getByLabelText(/^new password$/i), 'a brand new password')
+    await user.type(screen.getByLabelText(/confirm new password/i), 'a different password')
+    fireEvent.submit(screen.getByLabelText(/^new password$/i).closest('form')!)
+    expect(await screen.findByRole('alert')).toHaveTextContent(/do not match/i)
+    expect(post).not.toHaveBeenCalled()
+  })
+
+  it('keeps the submit disabled for a too-short password and offers the way back', async () => {
+    const onGiveUp = vi.fn()
+    renderWithProviders(<ResetScreen token="TOK" onGiveUp={onGiveUp} />, { session: null })
+    const user = userEvent.setup()
+    await user.type(screen.getByLabelText(/^new password$/i), 'short')
+    expect(screen.getByLabelText(/^new password$/i)).toHaveAttribute('aria-invalid', 'true')
+    expect(screen.getByRole('button', { name: /save and sign in/i })).toBeDisabled()
+    await user.click(screen.getByRole('button', { name: /back to sign in/i }))
+    expect(onGiveUp).toHaveBeenCalledTimes(1)
   })
 
   it('surfaces the password policy from the server', async () => {

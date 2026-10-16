@@ -552,6 +552,25 @@ describe('useRestoreBackup', () => {
     ])
   })
 
+  it('still invalidates every affected cache after a successful restore', async () => {
+    const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } })
+    const invalidate = vi.fn().mockResolvedValue(undefined)
+    client.invalidateQueries = invalidate
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    )
+    const { result } = renderHook(() => useRestoreBackup(), { wrapper })
+    await act(async () => {
+      await expect(result.current.mutateAsync({
+        file: new File([new Uint8Array([0])], 'backup.zip'),
+        mode: 'wipe',
+      })).resolves.toMatchObject({ mode: 'wipe' })
+    })
+    expect(invalidate.mock.calls.map((call) => call[0]?.queryKey?.[0])).toEqual([
+      'links', 'entries', 'folders', 'tags', 'stats', 'entry-counts',
+    ])
+  })
+
   it('does not turn successful restore into failure when cache invalidation rejects', async () => {
     const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } })
     client.invalidateQueries = vi.fn().mockRejectedValue(new Error('cache failure'))
@@ -566,5 +585,122 @@ describe('useRestoreBackup', () => {
         mode: 'skip',
       })).resolves.toMatchObject({ mode: 'skip' })
     })
+  })
+})
+
+describe('backup history + headers edge cases', () => {
+  it('discards a stored value that is JSON but not an array', () => {
+    localStorage.setItem('foldex.backups', '{"links":1}')
+    expect(readBackupHistory()).toEqual([])
+    expect(localStorage.getItem('foldex.backups')).toBeNull()
+  })
+
+  it('removes the key entirely when every stored entry is invalid', () => {
+    localStorage.setItem('foldex.backups', JSON.stringify([{ id: '' }, 42, 'nope']))
+    expect(readBackupHistory()).toEqual([])
+    expect(localStorage.getItem('foldex.backups')).toBeNull()
+  })
+
+  it('survives storage that throws on read', () => {
+    const spy = vi.spyOn(window.localStorage, 'getItem').mockImplementation(() => {
+      throw new Error('blocked')
+    })
+    try {
+      expect(readBackupHistory()).toEqual([])
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('reads counts through a Headers-like get() and zeroes non-numeric values', () => {
+    const headers = new Headers({
+      'x-foldex-backup-counts-links': 'not-a-number',
+      'x-foldex-backup-counts-tags': '4',
+      'x-foldex-backup-counts-folders': 'NaN-ish',
+    })
+    expect(countsFromHeaders(headers)).toEqual({
+      links: 0, notes: 0, tags: 4, folders: 0, link_tags: 0, click_logs: 0, files: 0, file_bytes: 0,
+    })
+    expect(countsFromHeaders(undefined)).toBeNull()
+    expect(countsFromHeaders(new Headers())).toBeNull()
+  })
+
+  it('isBackupStorageUnavailable stays false for shapeless errors', () => {
+    expect(isBackupStorageUnavailable(new Error('plain'))).toBe(false)
+    expect(isBackupStorageUnavailable(null)).toBe(false)
+    expect(isBackupStorageUnavailable(undefined)).toBe(false)
+  })
+})
+
+describe('generateBackup fallback details', () => {
+  function installPicker() {
+    const writer = {
+      write: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+      abort: vi.fn(async () => undefined),
+    }
+    Object.defineProperty(window, 'showSaveFilePicker', {
+      configurable: true,
+      value: vi.fn(async () => ({ createWritable: async () => ({ getWriter: () => writer }) })),
+    })
+    return writer
+  }
+
+  it('records zero counts and a fresh timestamp when the response carries no backup headers', async () => {
+    installPicker()
+    const reader = {
+      read: vi.fn()
+        .mockResolvedValueOnce({ done: false, value: new Uint8Array([9]) })
+        .mockResolvedValueOnce({ done: true, value: undefined }),
+      cancel: vi.fn(async () => undefined),
+    }
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'X-Foldex-Backup-Filename': 'renamed-by-hand.zip' }),
+      body: { getReader: () => reader },
+    } as unknown as Response)
+
+    const before = Date.now()
+    const entry = await generateBackup()
+    expect(entry.counts).toEqual({
+      links: 0, notes: 0, tags: 0, folders: 0, link_tags: 0, click_logs: 0, files: 0, file_bytes: 0,
+    })
+    const stamped = Date.parse(entry.created_at)
+    expect(stamped).toBeGreaterThanOrEqual(before - 1000)
+    expect(stamped).toBeLessThanOrEqual(Date.now() + 1000)
+  })
+
+  it('falls back to a status-coded message when the error body is not JSON', async () => {
+    const writer = installPicker()
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 502,
+      json: async () => { throw new Error('not json') },
+    } as unknown as Response)
+
+    await expect(generateBackup()).rejects.toMatchObject({
+      message: 'backup request failed (502)',
+      response: { status: 502 },
+    })
+    expect(writer.abort).toHaveBeenCalled()
+    expect(readBackupHistory()).toEqual([])
+  })
+
+  it('uses the default export_failed error when a failed download carries none', async () => {
+    mockNavigationTicket()
+    vi.mocked(http.get).mockResolvedValueOnce(downloadStatus('failed') as never)
+    const origCreate = document.createElement.bind(document)
+    vi.spyOn(document, 'createElement').mockImplementation((tag: string) => {
+      const el = origCreate(tag)
+      if (tag === 'a') (el as HTMLAnchorElement).click = vi.fn()
+      return el
+    })
+
+    await expect(generateBackup()).rejects.toMatchObject({
+      message: 'failed to produce backup',
+      response: { status: 409, data: { error: { code: 'export_failed' } } },
+    })
+    expect(readBackupHistory()).toEqual([])
   })
 })

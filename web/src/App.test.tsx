@@ -816,3 +816,182 @@ describe('App', () => {
     expect(await screen.findByDisplayValue('https://example.com')).toBeInTheDocument()
   })
 })
+
+// AppShell owns the chrome around the pages: FAB, quick-nav, mobile drawer
+// backdrop, lazy pages and the overlay callbacks that stitch dialogs to
+// navigation. These drive that wiring end-to-end.
+describe('AppShell wiring', () => {
+  it('opens the new-link dialog from the floating action button', async () => {
+    renderWithProviders(<App />)
+    const user = userEvent.setup()
+    const fab = document.querySelector('.fx-fab') as HTMLElement
+    expect(fab).not.toBeNull()
+    await user.click(fab)
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+  })
+
+  it('renders the lazy Stats page from the quick-nav', async () => {
+    renderWithProviders(<App />)
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: /^Stats$/i }))
+    const heading = await screen.findByRole('heading', { level: 1 })
+    expect(heading).toHaveTextContent('Stats')
+  })
+
+  it('goes home from inside a folder via the quick-nav and reloads a folder in place', async () => {
+    state.folders.push({
+      id: 1, name: 'Work', color: '#000', parent_id: null, link_count: 0, folder_count: 0,
+      preview_links: [], preview_folders: [], created_at: '',
+    } as any)
+    renderWithProviders(<App />)
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: /Open folder Work/i }))
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /Open folder Work/i })).not.toBeInTheDocument())
+
+    const folderFetches = () => vi.mocked(http.get).mock.calls
+      .filter(([url]) => String(url).includes('folder_id=1')).length
+    const before = folderFetches()
+    await user.click(screen.getByRole('button', { name: /reload folder/i }))
+    await waitFor(() => expect(folderFetches()).toBeGreaterThan(before))
+
+    await user.click(screen.getByRole('button', { name: /^Home$/i }))
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Open folder Work/i })).toBeInTheDocument())
+  })
+
+  it('opens the mobile drawer and dismisses it from the backdrop', async () => {
+    renderWithProviders(<App />)
+    const user = userEvent.setup()
+    await waitFor(() => expect(screen.getByText('jira')).toBeInTheDocument())
+    expect(document.querySelector('.fx-mobile-backdrop')).toBeNull()
+    await user.click(screen.getByRole('button', { name: /expand sidebar/i }))
+    const backdrop = document.querySelector('.fx-mobile-backdrop') as HTMLElement
+    expect(backdrop).not.toBeNull()
+    expect(document.querySelector('.fx-frame-mobile-drawer-open')).not.toBeNull()
+    fireEvent.click(backdrop)
+    await waitFor(() => expect(document.querySelector('.fx-mobile-backdrop')).toBeNull())
+  })
+
+  it('jumps from the empty state into the Import page', async () => {
+    renderWithProviders(<App />)
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: /Import bookmarks\.html/i }))
+    expect(await screen.findByRole('heading', { name: 'Import' })).toBeInTheDocument()
+  })
+
+  // Regression: openSettingsAt set the section jump and then routed through
+  // the setView wrapper, which clears the jump for plain navigation — in the
+  // same batch, erasing the deep link. The account menu's Profile entry must
+  // land on the profile SECTION, not the hub overview.
+  it('navigates from the account menu Profile entry into the profile section', async () => {
+    renderWithProviders(<App />)
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: /account menu/i }))
+    await user.click(await screen.findByRole('menuitem', { name: /profile/i }))
+    // The profile jump lands on the account section (which carries its own
+    // head, no Settings h1) with the profile card visible.
+    expect(await screen.findByText('Your profile')).toBeInTheDocument()
+    expect((await screen.findAllByText('admin@foldex.test')).length).toBeGreaterThan(0)
+  })
+
+  it('reads a note and jumps from the reader into the editor', async () => {
+    state.notes.push({
+      id: 7, title: 'Readable note', slug: 'readable', body_html: '<p>body text</p>', pinned: false,
+      folder_id: null, cover_url: null, click_count: 0, last_clicked_at: null,
+      created_at: '', updated_at: '', tags: [],
+    })
+    renderWithProviders(<App />)
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: /Read Readable note/i }))
+    const reader = await screen.findByRole('dialog')
+    expect(within(reader).getByText(/body text/i)).toBeInTheDocument()
+    await user.click(within(reader).getByRole('button', { name: /^edit$/i }))
+    await waitFor(() =>
+      expect(screen.getByRole('dialog', { name: /edit note/i })).toBeInTheDocument())
+    await waitFor(() =>
+      expect(screen.getByPlaceholderText('Give your note a title…')).toHaveValue('Readable note'))
+  })
+
+  it('applies a tag chosen in the command palette to the sidebar filter', async () => {
+    state.links.push({
+      id: 3, url: 'https://tagged.example', title: 'Tagged', slug: 'tagged', click_count: 0,
+      preview_status: 'ok', created_at: '', updated_at: '',
+      tags: [{ id: 1, name: 'jira', color: '#1f6feb' }],
+    } as any)
+    renderWithProviders(<App />)
+    const user = userEvent.setup()
+    await waitFor(() => expect(screen.getByText('Tagged')).toBeInTheDocument())
+    await user.click(screen.getByLabelText(/^Search$/i))
+    const palette = await screen.findByRole('dialog', { name: /command palette/i })
+    await user.type(within(palette).getByPlaceholderText(/Search by/i), 'jira')
+    await user.click(await within(palette).findByRole('button', { name: /filter by jira/i }))
+    await waitFor(() => {
+      const row = [...document.querySelectorAll('.fx-side-row')]
+        .find((el) => el.textContent?.includes('jira'))
+      expect(row?.className).toContain('fx-side-row-active')
+    })
+  })
+
+  it('reveals an already-bookmarked root link when opening it from the duplicate warning', async () => {
+    state.links.push({
+      id: 5, url: 'https://dup-root.example', title: 'DupRoot', slug: 'dup-root', click_count: 0,
+      preview_status: 'ok', pinned: false, folder_id: null, created_at: '', updated_at: '', tags: [],
+    } as any)
+    renderWithProviders(<App />)
+    const user = userEvent.setup()
+    await waitFor(() => expect(screen.getByText('DupRoot')).toBeInTheDocument())
+    await user.click(screen.getAllByRole('button', { name: /new link/i })[0])
+    await user.type(await screen.findByRole('textbox', { name: /^URL$/i }), 'https://dup-root.example')
+    await user.click(await screen.findByRole('button', { name: /edit saved link/i }))
+    // The dialog reopens on the EXISTING link instead of creating a copy.
+    expect(await screen.findByDisplayValue('https://dup-root.example')).toBeInTheDocument()
+    expect(state.links).toHaveLength(1)
+  })
+
+  it('jumps into the folder of an already-bookmarked link opened from the duplicate warning', async () => {
+    state.folders.push({
+      id: 9, name: 'Server Local', color: '#000', parent_id: null, has_password: false,
+      link_count: 1, folder_count: 0, preview_links: [], preview_folders: [], created_at: '',
+    } as any)
+    state.links.push({
+      id: 6, url: 'https://dup-folder.example', title: 'DupFolder', slug: 'dup-folder', click_count: 0,
+      preview_status: 'ok', pinned: false, folder_id: 9, created_at: '', updated_at: '', tags: [],
+    } as any)
+    renderWithProviders(<App />)
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: /Open folder Server Local/i }))
+      .catch(() => undefined)
+    // Back out so the jump has somewhere to go, then trigger the warning.
+    if (screen.queryByRole('button', { name: /^Home$/i })) {
+      await user.click(screen.getByRole('button', { name: /^Home$/i }))
+    }
+    await user.click(screen.getAllByRole('button', { name: /new link/i })[0])
+    await user.type(await screen.findByRole('textbox', { name: /^URL$/i }), 'https://dup-folder.example')
+    await user.click(await screen.findByRole('button', { name: /edit saved link/i }))
+    expect(await screen.findByDisplayValue('https://dup-folder.example')).toBeInTheDocument()
+    // Behind the dialog, navigation landed inside Server Local.
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /Open folder Server Local/i })).not.toBeInTheDocument())
+  })
+
+  it('loads the next entries page from the Load more button', async () => {
+    for (let i = 1; i <= 101; i++) {
+      state.links.push({
+        id: i, url: `https://l${i}.example`, title: `Link ${String(i).padStart(3, '0')}`,
+        slug: `l${i}`, click_count: 0, preview_status: 'ok', pinned: false,
+        created_at: '', updated_at: '', tags: [],
+      } as any)
+    }
+    renderWithProviders(<App />)
+    const user = userEvent.setup()
+    const more = await screen.findByRole('button', { name: /Load more links/i })
+    await user.click(more)
+    await waitFor(() => expect(screen.queryByRole('button', { name: /Load more links/i })).not.toBeInTheDocument())
+    const offsets = vi.mocked(http.get).mock.calls
+      .map(([url]) => String(url))
+      .filter((url) => url.startsWith('/api/entries?'))
+      .map((url) => new URLSearchParams(url.split('?')[1]).get('offset'))
+    expect(offsets).toContain('100')
+  })
+})
