@@ -16,7 +16,7 @@ Threat model: **an authenticated multi-tenant app.** Content is private per acco
 
 When upgrading or scaffolding, check the actual latest stable before pinning — `go.dev/dl`, `nodejs.org`, `hub.docker.com/r/oven/bun/tags`, and `npm view <pkg> version --registry=https://registry.npmjs.org/` (always public registry, never a local mirror).
 
-A tabela de pins (com o porquê de cada um e as pegadinhas de upgrade) vive em [`docs/STACK.md`](docs/STACK.md) — **consulte-a antes de mexer em `backend/go.mod` ou `web/package.json`**, e atualize-a no mesmo change de qualquer bump. Verifique com `go list -m all` / `bun pm ls`. Bump direto se minor/patch; avalie breaking changes se major. Package manager: **bun ≥ 1.3**.
+A tabela de pins (com o porquê de cada um e as pegadinhas de upgrade) vive em [`docs/STACK.md`](docs/STACK.md) — **consulte-a antes de mexer em `backend/go.mod` ou `web/package.json`**, e atualize-a no mesmo change de qualquer bump. Verifique com `go list -m all` / `bun pm ls`. Bump direto se minor/patch; avalie breaking changes se major. Package manager: **bun ≥ 1.4**.
 
 ## 2. Always write tests — coverage gate is 85%
 

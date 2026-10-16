@@ -55,9 +55,8 @@ services:
   # one-shot rustfs-init bootstrap. The Foldex backend never sees them —
   # it authenticates as the app user provisioned by rustfs-init.
   rustfs:
-    # RustFS has no GA release yet. Pin its newest non-preview release candidate
-    # by digest instead of following the mutable latest/rc/main channels.
-    image: rustfs/rustfs:1.0.0-rc.5@sha256:c36b3efea3d1e503f1a2581abd0e7611e0e5820dd30e1850a52384b3fc52bda4
+    # Pin the GA release by digest instead of following mutable channels.
+    image: rustfs/rustfs:1.0.1@sha256:1803faef57627e2d9c2e7d89d655d712ddded5389040054987163043fecb6a3c
     container_name: foldex-rustfs
     restart: unless-stopped
     logging: *default-logging
