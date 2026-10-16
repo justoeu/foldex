@@ -59,9 +59,9 @@ credenciais mesmo se alguém fizer push de uma tag antiga.
 
 | Camada       | Escolha                                                              | Por quê |
 |--------------|----------------------------------------------------------------------|---------|
-| Runtime API  | **Go 1.26** + Chi v5.3 + pgx/v5.10 + `slog`                         | Minimal router, pgxpool com tipos, log estruturado nativo. |
+| Runtime API  | **Go 1.26** + Chi v5.3 + pgx/v5.11 + `slog`                         | Minimal router, pgxpool com tipos, log estruturado nativo. |
 | DB           | **PostgreSQL 18** + `pg_trgm`                                        | Busca por substring com índice GIN, suficiente single-user. |
-| Object store | **RustFS 1.0.0-rc.2** (S3 SDK, imagem presa por digest)                | Upstream ainda não publicou GA; usamos o RC não-preview mais recente sem seguir tags móveis. Backup/screenshots/uploads vivem fora do Postgres; bucket único, prefixos `screenshots/`/`images/`. |
+| Object store | **RustFS 1.0.1** (S3 SDK, imagem presa por digest)                | Pin por digest imutável, sem seguir tags móveis. Backup/screenshots/uploads vivem fora do Postgres; bucket único, prefixos `screenshots/`/`images/`. |
 | Migrations   | `golang-migrate` (`000NNN_*.up/down.sql`)                            | Reversível por padrão; mesma convenção compartilhada. |
 | Workers      | Goroutine pools in-process (preview, changecheck) + buffered channels | Zero dependência operacional (sem Redis/queue). |
 | Web Push     | `github.com/SherClockHolmes/webpush-go v1.4.0` + VAPID auto-gen      | RFC 8030. VAPID key persistida em `/data/vapid.json` (volume `foldex-data`), 0o600. |

@@ -18,7 +18,7 @@ import (
 )
 
 // Pin must stay in lockstep with docker-compose.services.yml (CLAUDE.md §1).
-const rustfsImage = "rustfs/rustfs:1.0.0-rc.5@sha256:c36b3efea3d1e503f1a2581abd0e7611e0e5820dd30e1850a52384b3fc52bda4"
+const rustfsImage = "rustfs/rustfs:1.0.1@sha256:1803faef57627e2d9c2e7d89d655d712ddded5389040054987163043fecb6a3c"
 
 const (
 	rustfsUser = "rustfsadmin"
