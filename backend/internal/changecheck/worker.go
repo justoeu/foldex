@@ -30,8 +30,12 @@ type Sender interface {
 type Notification struct {
 	LinkID int64  `json:"link_id"`
 	Title  string `json:"title"`
-	URL    string `json:"url"`
-	Kind   string `json:"kind"` // "change_detected"
+	// URL is the in-app click target (/r/{slug}, which records the click and
+	// marks the change seen), never the external page URL: the SW navigates
+	// same-origin and must not be sent off-origin by a payload field.
+	URL  string `json:"url"`
+	Slug string `json:"slug"`
+	Kind string `json:"kind"` // "change_detected"
 	// UserID scopes delivery: the notification goes only to the link owner's
 	// push subscriptions. Without it a multi-tenant install would broadcast one
 	// user's page-change (title and URL included) to everyone subscribed.
@@ -137,15 +141,20 @@ func (w *Worker) Stop() {
 	})
 	w.wg.Wait()
 	// Drain leftover buffered work so racing producers do not retain payloads
-	// after all consumers have exited.
+	// after all consumers have exited. Buffered jobs were already claimed
+	// (last_checked_at stamped), so release their claims or they would not
+	// be re-checked until the next interval.
+	var drained []links.DueLink
 drainJobs:
 	for {
 		select {
-		case <-w.jobs:
+		case job := <-w.jobs:
+			drained = append(drained, job)
 		default:
 			break drainJobs
 		}
 	}
+	w.releaseClaims(context.Background(), drained)
 drainPush:
 	for {
 		select {
@@ -335,7 +344,8 @@ func (w *Worker) process(ctx context.Context, job links.DueLink) {
 		notification := Notification{
 			LinkID: id,
 			Title:  job.Title,
-			URL:    job.URL,
+			URL:    "/r/" + job.Slug,
+			Slug:   job.Slug,
 			Kind:   "change_detected",
 			UserID: job.UserID,
 		}

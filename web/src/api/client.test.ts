@@ -51,6 +51,21 @@ describe('CSRF double-submit', () => {
     expect((cfg.headers as Record<string, string>)[CSRF_HEADER]).toBeUndefined()
   })
 
+  it('overwrites the stale header on a retried request after refresh rotated the cookie', async () => {
+    document.cookie = 'fx_csrf=old-token; path=/'
+    const first = await runRequestInterceptor({ method: 'patch', url: '/api/links/1', headers: {} })
+    expect((first.headers as Record<string, string>)[CSRF_HEADER]).toBe('old-token')
+
+    document.cookie = 'fx_csrf=new-token; path=/'
+    const retried = await runRequestInterceptor({
+      method: 'patch',
+      url: '/api/links/1',
+      headers: first.headers,
+      _retried: true,
+    })
+    expect((retried.headers as Record<string, string>)[CSRF_HEADER]).toBe('new-token')
+  })
+
   it('never overwrites a header the caller set explicitly', async () => {
     document.cookie = 'fx_csrf=cookie-token; path=/'
     const cfg = await runRequestInterceptor({

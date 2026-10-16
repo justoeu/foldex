@@ -24,6 +24,7 @@ type Options = {
   image: ImageState
   setSaveError: (message: string | null) => void
   onClose: () => void
+  onPersisted?: (link: Link) => void
 }
 
 export function useLinkDialogSubmit(options: Options) {
@@ -43,17 +44,22 @@ export function useLinkDialogSubmit(options: Options) {
 
   const persist = async (): Promise<number | null> => {
     if (options.link) {
-      await update.mutateAsync({
+      const saved = await update.mutateAsync({
         id: options.link.id,
         body: buildLinkUpdatePayload(options.link, options.values, options.selected),
       })
+      if (saved) options.onPersisted?.(saved)
       return options.link.id
     }
     if (created) {
-      await update.mutateAsync({
+      const saved = await update.mutateAsync({
         id: created.id,
         body: buildLinkUpdatePayload(created, options.values, options.selected),
       })
+      if (saved) {
+        setCreated(saved)
+        options.onPersisted?.(saved)
+      }
       return created.id
     }
     const link = await create.mutateAsync(buildLinkCreatePayload(options.values, options.selected))

@@ -11,6 +11,6 @@ import (
 // ────────────────────────────────────────────────────────────────────────────
 // Skip mode.
 
-func restoreSkip(ctx context.Context, tx pgx.Tx, uid authctx.UserID, snap *Snapshot) (Counts, Counts, idMapping, error) {
+func restoreSkip(ctx context.Context, tx pgx.Tx, uid authctx.UserID, snap *Snapshot) (Counts, Counts, []string, idMapping, error) {
 	return restoreSkipStaged(ctx, tx, uid, snap)
 }

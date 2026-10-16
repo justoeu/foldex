@@ -182,6 +182,16 @@ func (c *Client) Ping(ctx context.Context) error {
 	return nil
 }
 
+// invalidateStatsCache drops the cached bucket listing after a mutation, so
+// Stats/ExistingObjects do not serve a pre-write view for the rest of the TTL.
+func (c *Client) invalidateStatsCache() {
+	c.listMu.Lock()
+	c.listItems = nil
+	c.listErr = nil
+	c.listAt = time.Time{}
+	c.listMu.Unlock()
+}
+
 // Upload stores data at key inside the configured bucket.
 // contentType should be a MIME type like "image/png".
 func (c *Client) Upload(ctx context.Context, key string, data []byte, contentType string) error {
@@ -190,6 +200,7 @@ func (c *Client) Upload(ctx context.Context, key string, data []byte, contentTyp
 	if err != nil {
 		return fmt.Errorf("storage: upload %q: %w", key, err)
 	}
+	c.invalidateStatsCache()
 	c.logger.Info("storage: uploaded object")
 	return nil
 }
@@ -312,22 +323,37 @@ func (c *Client) cachedListing(ctx context.Context) ([]listedObject, error) {
 	c.listCall = call
 	c.listMu.Unlock()
 
-	items, err := c.collectListing(ctx)
+	// The flight leader's request may go away while waiters remain: run the
+	// listing detached (bounded) so one cancelled caller does not fail the
+	// shared result for everyone. The leader then waits like any waiter, so
+	// its own cancellation still returns promptly.
+	go func() {
+		listCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
+		items, err := c.collectListing(listCtx)
+		cancel()
 
-	c.listMu.Lock()
-	call.items, call.err = items, err
-	if err == nil {
-		c.listItems = items
-		c.listErr = nil
-		c.listAt = time.Now()
+		c.listMu.Lock()
+		call.items, call.err = items, err
+		if err == nil {
+			c.listItems = items
+			c.listErr = nil
+			c.listAt = time.Now()
+		}
+		c.listCall = nil
+		close(call.done)
+		c.listMu.Unlock()
+	}()
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-call.done:
+		return call.items, call.err
 	}
-	c.listCall = nil
-	close(call.done)
-	c.listMu.Unlock()
-	return items, err
 }
 
 func (c *Client) collectListing(ctx context.Context) ([]listedObject, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel() // an early error return must stop the producer goroutine
 	var items []listedObject
 	for obj := range c.eachObject(ctx) {
 		if obj.Err != nil {
@@ -420,6 +446,7 @@ func (c *Client) PutObjectStream(ctx context.Context, key string, r io.Reader, s
 	if err != nil {
 		return fmt.Errorf("storage: put stream %q: %w", key, err)
 	}
+	c.invalidateStatsCache()
 	c.logger.Info("storage: uploaded object (stream)")
 	return nil
 }
@@ -489,6 +516,7 @@ func (c *Client) DeleteObject(ctx context.Context, key string) error {
 		}
 		return fmt.Errorf("storage: delete %q: %w", key, err)
 	}
+	c.invalidateStatsCache()
 	return nil
 }
 
@@ -531,19 +559,28 @@ func (c *Client) DeleteObjects(ctx context.Context, keys []string) error {
 	if firstErr == nil {
 		firstErr = ctx.Err()
 	}
+	if firstErr == nil {
+		c.invalidateStatsCache()
+	}
 	return firstErr
 }
 
 // DeleteObjectsPrefix removes every object under `prefix`. Used by
 // restore-wipe to clear the bucket before re-uploading.
 func (c *Client) DeleteObjectsPrefix(ctx context.Context, prefix string) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	keysCh := make(chan minio.ObjectInfo)
+	listErr := make(chan error, 1)
 	go func() {
 		defer close(keysCh)
 		listCh := c.mc.ListObjects(ctx, c.bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: true})
 		for obj := range listCh {
 			if obj.Err != nil {
-				continue
+				// A listing error means the delete set is incomplete;
+				// surface it instead of reporting a partial wipe as done.
+				listErr <- obj.Err
+				return
 			}
 			// ctx-aware send so we don't leak this goroutine if RemoveObjects
 			// returns early (cancellation, partial failure) and stops draining
@@ -561,5 +598,11 @@ func (c *Client) DeleteObjectsPrefix(ctx context.Context, prefix string) error {
 			return fmt.Errorf("storage: delete prefix %q (%s): %w", prefix, e.ObjectName, e.Err)
 		}
 	}
+	select {
+	case err := <-listErr:
+		return fmt.Errorf("storage: list prefix %q: %w", prefix, err)
+	default:
+	}
+	c.invalidateStatsCache()
 	return nil
 }

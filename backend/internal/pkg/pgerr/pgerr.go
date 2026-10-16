@@ -18,3 +18,11 @@ func UniqueConstraint(err error) string {
 	}
 	return pgErr.ConstraintName
 }
+
+// IsUndefinedTable reports a Postgres 42P01 (undefined_table) — the one
+// schema-gap error a reader may legitimately degrade past; every other SQL
+// failure must surface instead of being mistaken for an absent table.
+func IsUndefinedTable(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "42P01"
+}

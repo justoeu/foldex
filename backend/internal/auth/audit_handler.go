@@ -417,7 +417,7 @@ func (h *Handler) ListOwnActivity(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("limit must be a number between 0 and %d", maxAuditPageSize)))
 		return
 	}
-	entries, err := h.repo.ListOwnActivity(r.Context(), int64(caller.UserID), before, int(limit))
+	entries, err := h.repo.ListOwnActivity(r.Context(), caller.UserID, before, int(limit))
 	if err != nil {
 		h.logger.Error("own activity", "err", err)
 		httperr.Write(w, httperr.ErrInternal)

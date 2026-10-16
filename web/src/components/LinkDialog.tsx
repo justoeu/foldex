@@ -38,15 +38,17 @@ export function LinkDialog({ open, link, initialUrl, focus = 'url', defaultFolde
   const slugState = useSlugFieldState(open, formState.title, link?.slug, link?.id ?? null)
   const form = { ...formState, ...slugState }
   const tags = useTagPicker(open, link?.tags)
-  const image = useLinkDialogImage(open, link)
+  const baselineLink = form.baseline ?? link
+  const image = useLinkDialogImage(open, baselineLink, form.refreshBaseline)
   const save = useLinkDialogSubmit({
     open,
-    link,
+    link: baselineLink,
     values: form,
     selected: tags.selected,
     image,
     setSaveError: form.setSaveError,
     onClose,
+    onPersisted: form.refreshBaseline,
   })
   const { existing } = useExistingLinkByURL(
     form.url,

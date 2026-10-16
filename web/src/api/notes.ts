@@ -23,7 +23,8 @@ export function useCreateNote() {
       const { data } = await http.post<Note>('/api/notes', body)
       return data
     },
-    onSuccess: () => {
+    onSuccess: (note) => {
+      qc.setQueriesData<Note>({ queryKey: ['notes', note.id] }, note)
       // Notes have no ['links'] cache presence — entries/tags/folders/counts
       // is the deliberate reach here (see invalidateLibrary).
       invalidateLibrary(qc, { entries: true, tags: true, folders: true, counts: true })
@@ -44,6 +45,10 @@ export function useUpdateNote() {
       previousFolderId: 'folder_id' in body ? cachedEntryFolderId(qc, 'note', id) : undefined,
     }),
     onSuccess: (data, vars, context) => {
+      // Freshen the single-note cache in place: a dialog that reopens
+      // within staleTime must see the new updated_at, or its next save
+      // 409s against the very write it just made.
+      qc.setQueriesData<Note>({ queryKey: ['notes', data.id] }, data)
       if (vars.body.tag_ids !== undefined || vars.body.pending_tags !== undefined) {
         qc.invalidateQueries({ queryKey: ['tags'] })
       }
@@ -63,7 +68,10 @@ export function useDeleteNote() {
     mutationFn: async (id: number) => {
       await http.delete(`/api/notes/${id}`, { headers: entityUnlockHeaders(qc, 'note', id) })
     },
-    onSuccess: () => invalidateLibrary(qc, { entries: true, tags: true, folders: true, counts: true }),
+    onSuccess: (_data, id) => {
+      qc.removeQueries({ queryKey: ['notes', id] })
+      invalidateLibrary(qc, { entries: true, tags: true, folders: true, counts: true })
+    },
   })
 }
 

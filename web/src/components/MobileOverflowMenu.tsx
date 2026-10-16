@@ -4,6 +4,7 @@ import { Icon, I } from './icons'
 import { SUPPORTED_LOCALES, type LocaleCode } from '../i18n'
 import { useLocaleChoice } from '../i18n/useLocaleChoice'
 import type { Sort, ViewMode } from '../lib/viewPrefs'
+import { useEscape } from '../hooks/useEscape'
 
 type View = 'home' | 'import' | 'stats' | 'settings'
 
@@ -61,21 +62,14 @@ export function MobileOverflowMenu({
         setLangOpen(false)
       }
     }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setOpen(false)
-        setLangOpen(false)
-      }
-    }
     window.addEventListener('mousedown', onDown)
-    window.addEventListener('keydown', onKey)
     return () => {
       window.removeEventListener('mousedown', onDown)
-      window.removeEventListener('keydown', onKey)
     }
   }, [open])
 
   const closeAll = () => { setOpen(false); setLangOpen(false) }
+  useEscape(closeAll, open)
 
   const pickLocale = (code: LocaleCode) => {
     // Same write-through as the topbar LocalePicker: a direct

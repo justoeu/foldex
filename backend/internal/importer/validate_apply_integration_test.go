@@ -225,6 +225,69 @@ func TestApply_SkipMode_Default(t *testing.T) {
 	assert.Equal(t, 0, out.Wiped)
 }
 
+// A skipped (pre-existing) link keeps its curated tags: the import must
+// not wipe and replace them with the file's tag set. Also: exclude_folders
+// repeated fields keep comma-bearing names intact and filter JSON seeds.
+func TestApply_SkipKeepsExistingTagsAndExcludesCommaFolder(t *testing.T) {
+	pool := testdb.Shared(t)
+	require.NoError(t, testdb.Reset(context.Background(), pool))
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
+	ctx := context.Background()
+
+	tag, err := tags.NewRepository(pool).Create(ctx, uid, tags.CreateInput{Name: "keep", Color: "#abc"})
+	require.NoError(t, err)
+	existing, err := links.NewRepository(pool).Create(ctx, uid,
+		links.CreateInput{URL: "https://dup.example", Title: "Old", TagIDs: []int64{tag.ID}})
+	require.NoError(t, err)
+
+	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(uid))
+	importer.NewHandler(importer.NewStager(pool), &fakeEnqueuer{}).Mount(r)
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+
+	payload := `{"version":2,
+		"tags":[{"name":"other","color":"#def"}],
+		"folders":[{"name":"Trips, 2026","color":"#abc"},{"name":"KeepMe","color":"#abc"}],
+		"links":[
+			{"url":"https://dup.example","title":"New","tags":["other"]},
+			{"url":"https://in-excluded.example","title":"X","folder":"Trips, 2026"},
+			{"url":"https://in-kept.example","title":"Y","folder":"KeepMe"}
+		]}`
+	body := &bytes.Buffer{}
+	mw := multipart.NewWriter(body)
+	require.NoError(t, mw.WriteField("format", "json"))
+	require.NoError(t, mw.WriteField("mode", "skip"))
+	require.NoError(t, mw.WriteField("exclude_folders", "Trips, 2026"))
+	require.NoError(t, mw.WriteField("exclude_folders_v2", "1"))
+	fw, err := mw.CreateFormFile("file", "b.json")
+	require.NoError(t, err)
+	_, err = fw.Write([]byte(payload))
+	require.NoError(t, err)
+	require.NoError(t, mw.Close())
+
+	resp, err := http.Post(srv.URL+"/apply", mw.FormDataContentType(), body)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	got, err := links.NewRepository(pool).Get(ctx, uid, existing.ID)
+	require.NoError(t, err)
+	require.Len(t, got.Tags, 1, "skipped link tags must not be replaced")
+	assert.Equal(t, "keep", got.Tags[0].Name)
+
+	var excludedFolderCount, keptFolderCount, excludedLinkCount int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*) FROM folder WHERE user_id = $1 AND name = 'Trips, 2026'`, int64(uid)).Scan(&excludedFolderCount))
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*) FROM folder WHERE user_id = $1 AND name = 'KeepMe'`, int64(uid)).Scan(&keptFolderCount))
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*) FROM link WHERE user_id = $1 AND url = 'https://in-excluded.example'`, int64(uid)).Scan(&excludedLinkCount))
+	assert.Zero(t, excludedFolderCount, "excluded seed folder must not be recreated")
+	assert.Zero(t, excludedLinkCount)
+	assert.Equal(t, 1, keptFolderCount)
+}
+
 func TestApply_WipeMode(t *testing.T) {
 	pool := testdb.Shared(t)
 

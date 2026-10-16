@@ -1710,6 +1710,37 @@ func TestInvite_ReinvitingSupersedesTheOpenOne(t *testing.T) {
 		h.client(t).do(http.MethodPost, "/api/auth/invites/lookup", map[string]string{"token": second}).Code)
 }
 
+// Concurrent invites for the same email must serialize on the advisory
+// lock: every caller gets a working link, and exactly one invite stays open.
+func TestInvite_ConcurrentCreatesSerialize(t *testing.T) {
+	pool := testdb.Shared(t)
+	require.NoError(t, testdb.Reset(context.Background(), pool))
+	repo := auth.NewRepository(pool)
+	admin := testdb.SeedUser(t, pool, "admin@example.com", "admin")
+
+	const n = 8
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	for i := range errs {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			_, _, err := repo.CreateInvite(context.Background(), "new@example.com",
+				authctx.RoleEditor, admin, time.Hour, auth.MailDraft{})
+			errs[idx] = err
+		}(i)
+	}
+	wg.Wait()
+	for i, err := range errs {
+		require.NoError(t, err, "concurrent invite %d", i)
+	}
+	var open int
+	require.NoError(t, pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM invite WHERE email_normalized = 'new@example.com'
+		   AND accepted_at IS NULL AND revoked_at IS NULL`).Scan(&open))
+	assert.Equal(t, 1, open)
+}
+
 func TestInvite_RefusedForAnExistingAccount(t *testing.T) {
 	h := newHarness(t)
 	admin := h.bootstrapAdmin(t, "admin@example.com", "a good password")

@@ -488,7 +488,7 @@ describe('buildImageUploadHandler', () => {
       state: {
         selection: { from: 0, to: 0 },
         schema: { nodes: { image: { create: vi.fn().mockReturnValue(imageNode) } } },
-        tr: { replaceWith: vi.fn().mockReturnValue('final-tr') },
+        tr: { replaceSelectionWith: vi.fn().mockReturnValue('final-tr') },
       },
       dispatch,
     } as any
@@ -520,7 +520,7 @@ describe('buildImageUploadHandler', () => {
     expect(view.dispatch).not.toHaveBeenCalled()
   })
 
-  it('inserts at the captured selection after the caret moves', async () => {
+  it('inserts at the current selection after the caret moves during upload', async () => {
     let resolveUpload!: (value: { url: string }) => void
     const uploadFn = vi.fn(
       () =>
@@ -557,9 +557,11 @@ describe('buildImageUploadHandler', () => {
       resolveUpload({ url: '/api/files/notes/abc.jpg' })
     })
 
-    expect(replaceWith).toHaveBeenCalledWith(4, 4, imageNode)
-    expect(dispatch).toHaveBeenCalledWith('captured-tr')
-    expect(dispatch).not.toHaveBeenCalledWith('moved-sel-tr')
+    // Stale pre-upload coordinates must never overwrite text typed meanwhile:
+    // insertion follows the caret as it is when the upload resolves.
+    expect(replaceWith).not.toHaveBeenCalled()
+    expect(dispatch).toHaveBeenCalledWith('moved-sel-tr')
+    expect(dispatch).not.toHaveBeenCalledWith('captured-tr')
   })
 
   it('does not dispatch into a destroyed editor', async () => {

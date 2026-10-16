@@ -30,4 +30,14 @@ describe('LinkCard interaction contracts', () => {
     expect(hasUnseenChange({ ...link, change_seen_at: '2026-05-31T10:00:00Z' })).toBe(false)
     expect(hasUnseenChange({ ...link, last_change_detected_at: null })).toBe(false)
   })
+
+  it('compares timestamps numerically across timezone offsets', () => {
+    // 2026-01-01T00:30+02:00 == 2025-12-31T22:30Z, which is BEFORE the
+    // detection at 23:00Z; a lexicographic compare would call it seen.
+    const link = {
+      last_change_detected_at: '2025-12-31T23:00:00Z',
+      change_seen_at: '2026-01-01T00:30:00+02:00',
+    } as Link
+    expect(hasUnseenChange(link)).toBe(true)
+  })
 })

@@ -1,11 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
-import { captureLinkScreenshot } from '../api/links'
+import { captureLinkScreenshot, fetchLink } from '../api/links'
 import { apiErrorCode } from '../lib/apiError'
 import type { Link } from '../api/types'
 
-export function useLinkDialogImage(open: boolean, link: Link | null) {
+export function useLinkDialogImage(
+  open: boolean,
+  link: Link | null,
+  onBaselineRefreshed?: (link: Link) => void,
+) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [uploadError, setUploadError] = useState<string | null>(null)
@@ -93,6 +97,15 @@ export function useLinkDialogImage(open: boolean, link: Link | null) {
       queryClient.invalidateQueries({ queryKey: ['links'] })
       queryClient.invalidateQueries({ queryKey: ['entries'] })
       queryClient.invalidateQueries({ queryKey: ['folders'] })
+      // Capture bumped updated_at server-side; hand the dialog the fresh
+      // row so Save's if_match_updated_at is not instantly stale. Best
+      // effort: a failed refetch leaves the old baseline and the normal
+      // conflict surface handles it.
+      try {
+        onBaselineRefreshed?.(await fetchLink(link.id, link.folder_id))
+      } catch {
+        // Baseline refresh only; the capture itself succeeded.
+      }
       return true
     } catch (error) {
       setCaptureWarning(screenshotErrorMessage(error, t))

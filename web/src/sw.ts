@@ -260,7 +260,21 @@ interface PushPayload {
   link_id: number
   title: string
   url: string
+  slug?: string
   kind: 'change_detected' | 'test'
+}
+
+// safeNotificationPath accepts only same-origin paths from a push payload:
+// the click handler navigates an existing tab, so an absolute or external
+// URL in the payload must never become the navigation target.
+function safeNotificationPath(raw: string | undefined): string | undefined {
+  if (!raw) return undefined
+  try {
+    const u = new URL(raw, self.location.origin)
+    return u.origin === self.location.origin ? u.pathname + u.search : undefined
+  } catch {
+    return undefined
+  }
 }
 
 function isPushPayload(value: unknown): value is PushPayload {
@@ -309,16 +323,20 @@ self.addEventListener('push', (event) => {
       // instead of stacking — avoids a wall of "X updated" for one link
       // that flickers between two states across multiple checks.
       tag: `foldex-link-${payload.link_id || 'misc'}`,
-      data: { link_id: payload.link_id, url: payload.url, kind: payload.kind },
+      data: { link_id: payload.link_id, url: payload.url, slug: payload.slug, kind: payload.kind },
     }),
   )
 })
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
-  const data = (event.notification.data ?? {}) as { link_id?: number; url?: string; kind?: string }
-  // For tests, just focus or open the SPA root.
-  const target = data.kind === 'test' || !data.link_id ? '/' : `/go/${data.link_id}`
+  const data = (event.notification.data ?? {}) as { link_id?: number; url?: string; slug?: string; kind?: string }
+  // For tests, just focus or open the SPA root. Change notifications carry
+  // the /r/{slug} redirect (records the click, marks the change seen);
+  // older payloads fall back to the id form.
+  const target = data.kind === 'test' || !data.link_id
+    ? '/'
+    : safeNotificationPath(data.url) ?? (data.slug ? `/r/${data.slug}` : `/go/${data.link_id}`)
   event.waitUntil(
     (async () => {
       const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })

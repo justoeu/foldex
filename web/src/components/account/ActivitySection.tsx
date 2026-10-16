@@ -41,15 +41,17 @@ const KIND_BY_ACTION: Record<string, Kind> = {
   'login.succeeded': 'logins',
   'login.failed': 'logins',
   'link.clicked': 'clicks',
+  'backup.restored': 'backups',
 }
 
 /** The dot color classes by action prefix — create/edit/delete/other. */
 function dotClass(action: string): string {
-  if (action.startsWith('create')) return 'fx-acc2-act-dot-create'
+  // Actions are <entity>.<verb> (link.created), so match the verb suffix.
+  if (action.endsWith('.created')) return 'fx-acc2-act-dot-create'
   if (action === 'link.clicked') return 'fx-acc2-act-dot-click'
   if (action.startsWith('login.')) return 'fx-acc2-act-dot-login'
-  if (action.startsWith('update') || action.startsWith('edit')) return 'fx-acc2-act-dot-edit'
-  if (action.startsWith('delete')) return 'fx-acc2-act-dot-delete'
+  if (action.endsWith('.updated')) return 'fx-acc2-act-dot-edit'
+  if (action.endsWith('.deleted')) return 'fx-acc2-act-dot-delete'
   return 'fx-acc2-act-dot-other'
 }
 
@@ -87,7 +89,7 @@ function dayIsRecent(key: string): boolean {
  * id, so next and previous do not accumulate rows on screen.
  */
 export function ActivitySection() {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const [query, setQuery] = useState('')
   const [kind, setKind] = useState<Kind>('all')
   const [pageSize, setPageSize] = useState<PageSize>(readPageSize)
@@ -116,7 +118,7 @@ export function ActivitySection() {
   // "load more" that adds older rows never re-slices the window.
   const chart = useMemo(() => {
     const days: { key: string; label: string; count: number }[] = []
-    const fmtDay = new Intl.DateTimeFormat(i18nLocale(), { day: 'numeric' })
+    const fmtDay = new Intl.DateTimeFormat(i18nLocale(i18n.language), { day: 'numeric' })
     for (let i = CHART_DAYS - 1; i >= 0; i--) {
       const d = new Date()
       d.setHours(12, 0, 0, 0)
@@ -129,7 +131,7 @@ export function ActivitySection() {
       if (bucket) bucket.count++
     }
     return days
-  }, [chartEntries])
+  }, [chartEntries, i18n.language])
 
   const q = query.trim().toLowerCase()
   const filtered = useMemo(
@@ -150,12 +152,12 @@ export function ActivitySection() {
       if (list) list.push(e)
       else map.set(k, [e])
     }
-    const fmtDay = new Intl.DateTimeFormat(i18nLocale(), {
+    const fmtDay = new Intl.DateTimeFormat(i18nLocale(i18n.language), {
       weekday: 'long',
       day: 'numeric',
       month: 'long',
     })
-    const fmtTime = new Intl.DateTimeFormat(i18nLocale(), { hour: '2-digit', minute: '2-digit' })
+    const fmtTime = new Intl.DateTimeFormat(i18nLocale(i18n.language), { hour: '2-digit', minute: '2-digit' })
     return [...map.entries()]
       .sort((a, b) => (a[0] < b[0] ? 1 : -1))
       .map(([key, items]) => ({
@@ -171,7 +173,7 @@ export function ActivitySection() {
           ip: e.ip ?? '',
         })),
       }))
-  }, [filtered, t])
+  }, [filtered, t, i18n.language])
 
   const maxCount = Math.max(...chart.map((c) => c.count), 1)
   const hasNext = entries.length === pageSize
@@ -230,8 +232,8 @@ export function ActivitySection() {
                   className="fx-acc2-chart-col"
                   key={c.key}
                   role="img"
-                  aria-label={t('account.activity_day_tip_aria', { day: c.label, count: c.count })}
-                  data-tooltip={t('account.activity_day_tip_other', { day: c.label, count: c.count })}
+                  aria-label={t('account.activity_day_tip', { day: c.label, count: c.count })}
+                  data-tooltip={t('account.activity_day_tip', { day: c.label, count: c.count })}
                   data-tooltip-side="top"
                 >
                   <div
@@ -359,8 +361,7 @@ function DayGroup({ day }: Readonly<{ day: DayGroupModel }>) {
   )
 }
 
-function i18nLocale(): string | undefined {
-  const loc = typeof document !== 'undefined' ? document.documentElement.lang : ''
-  return loc || undefined
+function i18nLocale(language: string): string | undefined {
+  return language || undefined
 }
 

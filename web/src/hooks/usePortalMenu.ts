@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEscape } from './useEscape'
 
 export type MenuPos = { top: number; right: number }
 
@@ -28,20 +29,15 @@ export function usePortalMenu() {
       setOpen(false)
     }
     const close = () => setOpen(false)
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false)
-    }
     window.addEventListener('mousedown', onDown)
     // The fixed-positioned portal goes stale on scroll/resize — close rather
     // than track the anchor (a click away reopens it in the right place).
     window.addEventListener('scroll', close, true)
     window.addEventListener('resize', close)
-    window.addEventListener('keydown', onKey)
     return () => {
       window.removeEventListener('mousedown', onDown)
       window.removeEventListener('scroll', close, true)
       window.removeEventListener('resize', close)
-      window.removeEventListener('keydown', onKey)
     }
   }, [open])
 
@@ -56,6 +52,9 @@ export function usePortalMenu() {
   }, [])
 
   const close = useCallback(() => setOpen(false), [])
+  // Through the escape stack, so Esc closes ONLY this menu instead of also
+  // popping the folder underneath.
+  useEscape(close, open)
 
   return { open, pos, btnRef, menuRef, toggle, close, setOpen }
 }

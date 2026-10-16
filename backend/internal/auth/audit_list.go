@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"foldex/internal/auth/auditpkg"
+	"foldex/internal/pkg/authctx"
+	"foldex/internal/pkg/pgerr"
 )
 
 // AuditFilter narrows one page of the trail.
@@ -212,11 +214,11 @@ func (r *Repository) ListAudit(ctx context.Context, f AuditFilter) ([]AuditEntry
 // click_log so the trail reads like the user's session history. Administrative
 // acts performed ON the account (role changes, disables) stay excluded — they
 // are not activity BY the account.
-func (r *Repository) ListOwnActivity(ctx context.Context, uid int64, beforeID int64, limit int) ([]AuditEntry, error) {
+func (r *Repository) ListOwnActivity(ctx context.Context, uid authctx.UserID, beforeID int64, limit int) ([]AuditEntry, error) {
 	if limit <= 0 || limit > maxAuditPageSize {
 		limit = 50
 	}
-	args := []any{uid, auditpkg.OwnActivityActions()}
+	args := []any{int64(uid), auditpkg.OwnActivityActions()}
 	cursor := ""
 	if beforeID > 0 {
 		args = append(args, beforeID)
@@ -251,13 +253,13 @@ func (r *Repository) ListOwnActivity(ctx context.Context, uid int64, beforeID in
 
 	// Clicks live in their own table, not audit_log. Merged here rather than
 	// in a SQL UNION so the audit query stays self-contained in test schemas
-	// that don't carry the links table.
-	clicks, clickErr := r.ownClicks(ctx, uid, limit)
-	if clickErr != nil {
-		// A schema gap degrades the feed, it does not break it: the audit
-		// entries above are still the user's activity.
-		// Schema gap degrades to audit-only; not worth a hard failure.
-	} else {
+	// that don't carry the link table. Only that one schema gap (42P01)
+	// degrades the feed; a real SQL failure must surface — swallowing every
+	// error here is what hid a nonexistent-table join in production.
+	clicks, clickErr := r.ownClicks(ctx, uid, beforeID, limit)
+	if clickErr != nil && !pgerr.IsUndefinedTable(clickErr) {
+		return nil, fmt.Errorf("list own activity clicks: %w", clickErr)
+	} else if clickErr == nil {
 		out = append(out, clicks...)
 		sort.Slice(out, func(i, j int) bool {
 			if out[i].CreatedAt.Equal(out[j].CreatedAt) {
@@ -273,14 +275,24 @@ func (r *Repository) ListOwnActivity(ctx context.Context, uid int64, beforeID in
 }
 
 // ownClicks reads the caller's link clicks, mapped onto the AuditEntry shape
-// so the feed is one homogeneous list downstream.
-func (r *Repository) ownClicks(ctx context.Context, uid int64, limit int) ([]AuditEntry, error) {
-	rows, err := r.pool.Query(ctx, `
-		SELECT c.id, COALESCE(l.title, ''), c.clicked_at
+// so the feed is one homogeneous list downstream. The audit cursor
+// (beforeID, an audit_log id) bounds the window by that row's timestamp so
+// later pages do not re-merge the same recent clicks.
+func (r *Repository) ownClicks(ctx context.Context, uid authctx.UserID, beforeID int64, limit int) ([]AuditEntry, error) {
+	args := []any{int64(uid)}
+	window := ""
+	if beforeID > 0 {
+		args = append(args, beforeID)
+		window = fmt.Sprintf(` AND (c.clicked_at, c.id) < (
+			SELECT created_at, id FROM audit_log WHERE id = $%d)`, len(args))
+	}
+	args = append(args, limit)
+	rows, err := r.pool.Query(ctx, fmt.Sprintf(`
+		SELECT c.id, c.entity_id, COALESCE(l.title, ''), c.clicked_at
 		FROM click_log c
-		LEFT JOIN links l ON l.id = c.entity_id AND l.user_id = $1
-		WHERE c.user_id = $1 AND c.entity_kind = 'link'
-		ORDER BY c.clicked_at DESC LIMIT $2`, uid, limit)
+		LEFT JOIN link l ON l.id = c.entity_id AND l.user_id = $1
+		WHERE c.user_id = $1 AND c.entity_kind = 'link'%s
+		ORDER BY c.clicked_at DESC LIMIT $%d`, window, len(args)), args...)
 	if err != nil {
 		return nil, fmt.Errorf("own clicks: %w", err)
 	}
@@ -293,9 +305,11 @@ func (r *Repository) ownClicks(ctx context.Context, uid int64, limit int) ([]Aud
 		e.Severity = auditpkg.SeverityInfo
 		kind := "link"
 		e.EntityKind = &kind
-		if err := rows.Scan(&e.ID, &e.Subject, &e.CreatedAt); err != nil {
+		var subject string
+		if err := rows.Scan(&e.ID, &e.EntityID, &subject, &e.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan own clicks: %w", err)
 		}
+		e.Subject = &subject
 		out = append(out, e)
 	}
 	return out, rows.Err()

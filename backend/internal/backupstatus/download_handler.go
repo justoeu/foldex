@@ -8,6 +8,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -150,6 +151,10 @@ func (h *Handler) openReservedArtifact(w http.ResponseWriter, r *http.Request, r
 }
 
 func (h *Handler) streamDownload(w http.ResponseWriter, r *http.Request, key string, body io.Reader, reservation int64) {
+	// The server's WriteTimeout is 2m; an artifact stream may legitimately
+	// run artifactStreamTimeout. Without this, large dumps truncate at 2m
+	// and still burn one of the lifetime download slots.
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(artifactStreamTimeout + time.Minute))
 	if h.auditDownload != nil {
 		h.auditDownload(r, key)
 	}

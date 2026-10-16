@@ -55,7 +55,10 @@ http.interceptors.request.use((config) => {
   const headers = (config.headers ?? {}) as Record<string, string>
 
   const csrf = csrfTokenFor(config.method)
-  if (csrf && !headers[CSRF_HEADER]) headers[CSRF_HEADER] = csrf
+  // A retried request re-enters here after the refresh rotated fx_csrf: its
+  // captured header is the STALE token the 401 already rejected, so overwrite
+  // it. A first attempt's explicit header is never touched.
+  if (csrf && (authConfig._retried || !headers[CSRF_HEADER])) headers[CSRF_HEADER] = csrf
   // The instance default is application/json. FormData must carry its own
   // multipart boundary; a hardcoded multipart/form-data header (or the JSON
   // default) makes the backend reject the body.

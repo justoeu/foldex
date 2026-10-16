@@ -158,12 +158,14 @@ func (h *Handler) apply(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "bad_mode", "mode must be skip, wipe, or duplicate"))
 		return
 	}
-	excluded := parseExcludedFolders(r.FormValue("exclude_folders"))
+	excluded := excludedFolders(r)
 	items := up.items
+	seed := up.seed
 	if len(excluded) > 0 {
 		items = filterByFolder(items, excluded)
+		seed = filterSeedFolders(seed, excluded)
 	}
-	imp, skipped, wiped, warnings, err := h.importItemsWithMode(r.Context(), authctx.MustUser(r.Context()), items, mode, up.seed)
+	imp, skipped, wiped, warnings, err := h.importItemsWithMode(r.Context(), authctx.MustUser(r.Context()), items, mode, seed)
 	if err != nil {
 		httperr.Write(w, err)
 		return
@@ -302,6 +304,40 @@ func jsonToItems(f JSONFile) []Item {
 			}
 		}
 		out = append(out, it)
+	}
+	return out
+}
+
+// excludedFolders reads the excluded folder paths from the upload form.
+// Repeated fields carry one folder per field (so a name containing a comma
+// survives); a single field keeps the legacy comma-separated parsing.
+func excludedFolders(r *http.Request) map[string]struct{} {
+	if r.MultipartForm != nil && r.FormValue("exclude_folders_v2") == "1" {
+		if values := r.MultipartForm.Value["exclude_folders"]; len(values) > 0 {
+			out := map[string]struct{}{}
+			for _, v := range values {
+				if v = strings.TrimSpace(v); v != "" {
+					out[v] = struct{}{}
+				}
+			}
+			return out
+		}
+	}
+	return parseExcludedFolders(r.FormValue("exclude_folders"))
+}
+
+// filterSeedFolders drops JSON seed folders the caller excluded, so an
+// excluded folder is not recreated empty by the seed pass.
+func filterSeedFolders(seed *jsonSeed, excluded map[string]struct{}) *jsonSeed {
+	if seed == nil {
+		return nil
+	}
+	out := &jsonSeed{tags: seed.tags, folders: make([]JSONFolder, 0, len(seed.folders))}
+	for _, f := range seed.folders {
+		if _, skip := excluded[strings.TrimSpace(f.Name)]; skip {
+			continue
+		}
+		out.folders = append(out.folders, f)
 	}
 	return out
 }

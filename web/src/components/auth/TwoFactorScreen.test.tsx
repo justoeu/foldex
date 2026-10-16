@@ -220,6 +220,29 @@ describe('the entry window (60s countdown)', () => {
     expect(screen.getByText(/expires in 58s/i)).toBeInTheDocument()
   })
 
+  // A verification in flight owns the screen: the window closing under it
+  // must not swap in the expired panel mid-submit.
+  it('does not expire while a verification is in flight', async () => {
+    let resolveVerify!: (v: unknown) => void
+    vi.spyOn(http, 'post').mockImplementation(
+      () => new Promise((r) => { resolveVerify = r }) as never,
+    )
+    renderWithProbe({ methods: ['totp', 'recovery_code'] })
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    await user.paste('123456')
+
+    act(() => { vi.advanceTimersByTime(60_000) })
+    expect(screen.queryByText(/window has closed|código acabou/i)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /verify/i })).toBeInTheDocument()
+
+    await act(async () => {
+      resolveVerify({ data: { status: 'authenticated', user: { id: 1 }, features: {} } })
+    })
+    await waitFor(() =>
+      expect(screen.getByTestId('session-status')).toHaveTextContent('authenticated'),
+    )
+  })
+
   // App mode (no email asked): expiry says so and returns to the login form —
   // the signOut path, so the pre-auth cookie dies with the screen.
   it('expires to login when no email was requested', async () => {

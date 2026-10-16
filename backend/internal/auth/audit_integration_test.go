@@ -116,13 +116,40 @@ func TestAudit_OwnFeedReturnsTheSubject(t *testing.T) {
 		Subject: "My private bookmark title", EntityKind: "link", EntityID: ptr(int64(42)),
 	})
 
-	entries, err := repo.ListOwnActivity(context.Background(), int64(member.ID), 0, 50)
+	entries, err := repo.ListOwnActivity(context.Background(), member.ID, 0, 50)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	require.NotNil(t, entries[0].Subject)
 	assert.Equal(t, "My private bookmark title", *entries[0].Subject)
 	require.NotNil(t, entries[0].EntityID)
 	assert.Equal(t, int64(42), *entries[0].EntityID)
+}
+
+// The merged click half of the feed must actually reach the caller: this
+// pins the join against the table that exists (link, not links) and the
+// entity id the ActivitySection glyphs key off.
+func TestAudit_OwnFeedIncludesLinkClicks(t *testing.T) {
+	repo, pool, _, member := auditFixture(t)
+	ctx := context.Background()
+
+	var linkID int64
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO link (user_id, url, title, slug)
+		VALUES ($1, 'https://clicked.example', 'Clicked bookmark', 'clicked-bookmark-test')
+		RETURNING id`, int64(member.ID)).Scan(&linkID))
+	_, err := pool.Exec(ctx, `
+		INSERT INTO click_log (user_id, entity_kind, entity_id, clicked_at)
+		VALUES ($1, 'link', $2, now())`, int64(member.ID), linkID)
+	require.NoError(t, err)
+
+	entries, err := repo.ListOwnActivity(ctx, member.ID, 0, 50)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "link.clicked", entries[0].Action)
+	require.NotNil(t, entries[0].Subject)
+	assert.Equal(t, "Clicked bookmark", *entries[0].Subject)
+	require.NotNil(t, entries[0].EntityID)
+	assert.Equal(t, linkID, *entries[0].EntityID)
 }
 
 // INV-001's explicit-uid rule applied to a table that is otherwise
@@ -137,7 +164,7 @@ func TestCrossUser_OwnActivityNeverReturnsAnotherAccountsRows(t *testing.T) {
 		Action: auth.AuditLinkCreated, ActorID: &member.ID, Subject: "the member's own",
 	})
 
-	entries, err := repo.ListOwnActivity(context.Background(), int64(member.ID), 0, 50)
+	entries, err := repo.ListOwnActivity(context.Background(), member.ID, 0, 50)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	assert.Equal(t, "the member's own", *entries[0].Subject)
@@ -157,7 +184,7 @@ func TestAudit_OwnFeedIncludesLoginsExcludesAdminOnYou(t *testing.T) {
 		Action: auth.AuditNoteUpdated, ActorID: &member.ID, Subject: "a note",
 	})
 
-	entries, err := repo.ListOwnActivity(context.Background(), int64(member.ID), 0, 50)
+	entries, err := repo.ListOwnActivity(context.Background(), member.ID, 0, 50)
 	require.NoError(t, err)
 	// The login is the member's OWN action — it belongs. The role change was
 	// done TO the member by the admin — it does not.

@@ -22,19 +22,23 @@ import {
 export function buildImageUploadHandler(
   uploadFn: (file: File) => Promise<{ url: string }>,
   onError: (error: unknown) => void,
+  track?: (delta: 1 | -1) => void,
 ) {
   return (view: EditorView, file: File) => {
-    const { from, to } = view.state.selection
+    track?.(1)
     uploadFn(file)
       .then(({ url }) => {
         if (view.isDestroyed) return
         const node = view.state.schema.nodes.image.create({ src: url })
-        view.dispatch(view.state.tr.replaceWith(from, to, node))
+        // Insert at the CURRENT selection: coordinates captured before the
+        // async upload would land in whatever the user typed meanwhile.
+        view.dispatch(view.state.tr.replaceSelectionWith(node))
       })
       .catch((error: unknown) => {
         if (view.isDestroyed) return
         onError(error)
       })
+      .finally(() => track?.(-1))
   }
 }
 
@@ -95,9 +99,15 @@ export function useNoteDialogController({ note, defaultFolderId, onClose }: Cont
   const [saveError, setSaveError] = useState<string | null>(null)
   const createNote = useCreateNote()
   const updateNote = useUpdateNote()
+  const [uploading, setUploading] = useState(0)
 
   const handleUpload = useMemo(
-    () => buildImageUploadHandler(uploadNoteImage, (error) => setImgUploadError(noteImageErrorMessage(error, t))),
+    () =>
+      buildImageUploadHandler(
+        uploadNoteImage,
+        (error) => setImgUploadError(noteImageErrorMessage(error, t)),
+        (delta) => setUploading((n) => Math.max(0, n + delta)),
+      ),
     [t],
   )
   const editor = useEditor(
@@ -127,7 +137,9 @@ export function useNoteDialogController({ note, defaultFolderId, onClose }: Cont
   })
 
   const submit = async () => {
-    if (!title.trim()) return
+    // Never save mid-upload: the image node is not in the document yet, so
+    // the saved HTML would silently drop the pasted image.
+    if (!title.trim() || uploading > 0) return
     setSaveError(null)
     try {
       const bodyHtml = editor?.getHTML() ?? ''
@@ -164,7 +176,7 @@ export function useNoteDialogController({ note, defaultFolderId, onClose }: Cont
     tagPicker,
     imgUploadError,
     saveError,
-    busy: createNote.isPending || updateNote.isPending,
+    busy: createNote.isPending || updateNote.isPending || uploading > 0,
     isEdit: baselineNote != null,
     submit,
   }

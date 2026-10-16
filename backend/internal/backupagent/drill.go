@@ -265,6 +265,11 @@ func (j *DrillJob) prepareDump(ctx context.Context, src *backupjobs.DumpRunRef, 
 	if err != nil {
 		return "", backupjobs.ReasonDrillDecryptFailed, err
 	}
+	if dumpPath != spoolPath {
+		// The encrypted spool has served its purpose; keeping it alongside
+		// restore.dump and the extracted data/ triples peak disk in /tmp.
+		_ = os.Remove(spoolPath)
+	}
 	return dumpPath, "", nil
 }
 

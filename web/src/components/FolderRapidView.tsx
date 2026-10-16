@@ -6,6 +6,7 @@ import { Icon, I } from './icons'
 import { primaryColor } from '../lib/tagColor'
 import { safeImageUrl } from '../lib/url'
 import type { Folder } from '../api/types'
+import { useEscape } from '../hooks/useEscape'
 
 const MAX_ITEMS = 10
 const SHOW_DELAY_MS = 220
@@ -47,18 +48,15 @@ export function FolderRapidView({ folder, children, enabled }: Props) {
     const onScroll = () => {
       if (wrapRef.current) setRect(wrapRef.current.getBoundingClientRect())
     }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false)
-    }
     window.addEventListener('scroll', onScroll, true)
     window.addEventListener('resize', onScroll)
-    window.addEventListener('keydown', onKey)
     return () => {
       window.removeEventListener('scroll', onScroll, true)
       window.removeEventListener('resize', onScroll)
-      window.removeEventListener('keydown', onKey)
     }
   }, [open])
+
+  useEscape(() => setOpen(false), open)
 
   const total = folder.preview_folders.length + folder.preview_links.length
   const hasContent = total > 0

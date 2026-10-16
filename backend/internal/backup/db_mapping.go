@@ -18,15 +18,24 @@ type idMapping struct {
 	linkMap   map[int64]int64
 	noteMap   map[int64]int64
 	noteFiles map[string]string
+	// insertedLinks holds the NEW ids of links this restore actually
+	// inserted. linkMap deliberately also resolves skipped links to the
+	// surviving live row (tags and clicks merge onto it by contract), but
+	// file bytes must never follow that resolution: in duplicate mode a
+	// collided link keeps its live screenshot. Key 0 is the authoritative
+	// marker: present once loadInsertedLinkIDs ran (ids are positive), so
+	// an authoritative EMPTY set differs from never-loaded.
+	insertedLinks map[int64]bool
 }
 
 func newIDMapping() idMapping {
 	return idMapping{
-		tagMap:    make(map[int64]int64),
-		folderMap: make(map[int64]int64),
-		linkMap:   make(map[int64]int64),
-		noteMap:   make(map[int64]int64),
-		noteFiles: make(map[string]string),
+		insertedLinks: make(map[int64]bool),
+		tagMap:        make(map[int64]int64),
+		folderMap:     make(map[int64]int64),
+		linkMap:       make(map[int64]int64),
+		noteMap:       make(map[int64]int64),
+		noteFiles:     make(map[string]string),
 	}
 }
 
@@ -95,6 +104,9 @@ func (m idMapping) remapFileKey(key string) (string, bool) {
 	}
 	newID, mapped := m.linkMap[oldID]
 	if !mapped {
+		return key, false
+	}
+	if m.insertedLinks[0] && !m.insertedLinks[newID] {
 		return key, false
 	}
 	return prefix + strconv.FormatInt(newID, 10) + suffix, true

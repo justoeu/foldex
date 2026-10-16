@@ -1,10 +1,21 @@
 package backup
 
 import (
+	"errors"
+	"fmt"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 )
+
+func TestIsRestoreSlugRace_MatchesOnlySlugConstraints(t *testing.T) {
+	slugErr := &pgconn.PgError{Code: "23505", ConstraintName: "note_slug_unique"}
+	assert.True(t, isRestoreSlugRace(fmt.Errorf("insert staged: %w", slugErr)))
+	assert.True(t, isRestoreSlugRace(&pgconn.PgError{Code: "23505", ConstraintName: "link_slug_unique"}))
+	assert.False(t, isRestoreSlugRace(&pgconn.PgError{Code: "23505", ConstraintName: "link_url_unique"}))
+	assert.False(t, isRestoreSlugRace(errors.New("boom")))
+}
 
 func TestLinkObjectID_SuffixGrammarBlocksTraversal(t *testing.T) {
 	// The suffix lands verbatim in an object KEY that the operational mirror

@@ -19,10 +19,16 @@ export function useLinkDialogForm(
   const [autofillPending, setAutofillPending] = useState(false)
   const [ogPreview, setOgPreview] = useState<string | undefined>(undefined)
   const [saveError, setSaveError] = useState<string | null>(null)
+  // The optimistic-lock baseline: the row as last known on the server.
+  // Screenshot capture and a partial save both advance updated_at behind
+  // the dialog's back; without refreshing this, the next Save 409s against
+  // the dialog's own earlier write.
+  const [baseline, setBaseline] = useState<Link | null>(link)
   const urlInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     if (!open) return
+    setBaseline(link)
     setUrl(link?.url ?? initialUrl ?? '')
     setTitle(link?.title ?? '')
     setDescription(link?.description ?? '')
@@ -59,6 +65,8 @@ export function useLinkDialogForm(
   }
   return {
     ...values,
+    baseline,
+    refreshBaseline: setBaseline,
     autofillFailed,
     autofillPending,
     ogPreview,
