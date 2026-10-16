@@ -5,28 +5,13 @@ package settings_test
 import (
 	"context"
 	"testing"
-	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"foldex/internal/settings"
 	"foldex/internal/testdb"
 )
-
-func waitForBlockedSQLCount(t *testing.T, pool *pgxpool.Pool, fragment string, want int) {
-	t.Helper()
-	require.Eventually(t, func() bool {
-		var blocked int
-		err := pool.QueryRow(context.Background(), `
-			SELECT count(*) FROM pg_stat_activity
-			WHERE datname = current_database() AND wait_event_type = 'Lock'
-			  AND query LIKE '%' || $1 || '%'`, fragment).Scan(&blocked)
-		return err == nil && blocked >= want
-	}, 3*time.Second, 10*time.Millisecond,
-		"%d queries did not block on the expected row lock: %s", want, fragment)
-}
 
 func TestRepository_MasterPassword_Lifecycle(t *testing.T) {
 	pool := testdb.Shared(t)
@@ -151,7 +136,7 @@ func TestSetMasterPassword_HintEqualityRunsUnderTheRowLock(t *testing.T) {
 	original := "original-pass"
 	resB := make(chan error, 1)
 	go func() { resB <- repo.SetMasterPassword(ctx, uid, "other-pass", &original, &hint) }()
-	waitForBlockedSQLCount(t, pool, "FOR NO KEY UPDATE", 1)
+	testdb.WaitForBlockedSQLCount(t, pool, "FOR NO KEY UPDATE", 1)
 
 	// Queued second: rotates the password TO target-pass with a nil hint
 	// ("leave the existing hint untouched"), proving the password the
@@ -159,7 +144,7 @@ func TestSetMasterPassword_HintEqualityRunsUnderTheRowLock(t *testing.T) {
 	other := "other-pass"
 	resA := make(chan error, 1)
 	go func() { resA <- repo.SetMasterPassword(ctx, uid, "target-pass", &other, nil) }()
-	waitForBlockedSQLCount(t, pool, "FOR NO KEY UPDATE", 2)
+	testdb.WaitForBlockedSQLCount(t, pool, "FOR NO KEY UPDATE", 2)
 
 	require.NoError(t, blocker.Commit(ctx))
 	require.NoError(t, <-resB)

@@ -272,6 +272,18 @@ async function runAuthErrorInterceptor(error: unknown) {
   return rejected!(error)
 }
 
+/** A content request 401s and the refresh it triggers also 401s — the exact
+ *  pair the session-lost handler exists for. Returns the original error so
+ *  callers can pin that the interceptor surfaces THAT, not the refresh one. */
+async function fire401WithDeadRefresh() {
+  const originalError = {
+    response: { status: 401 },
+    config: { url: '/api/links', method: 'get', headers: {} },
+  }
+  await expect(runAuthErrorInterceptor(originalError)).rejects.toBe(originalError)
+  expect(http.post).toHaveBeenCalledWith('/api/auth/refresh', null, expect.anything())
+}
+
 beforeEach(() => localStorage.clear())
 
 afterEach(() => {
@@ -511,6 +523,59 @@ describe('AuthProvider', () => {
     await expect(staleRequest).rejects.toBe(originalError)
     expect(retry).not.toHaveBeenCalled()
     expect(screen.getByTestId('status')).toHaveTextContent('anonymous')
+  })
+
+  // The pair that pins the session-lost guard from both sides. During a
+  // second factor, authenticated queries 401 on every poll and each one
+  // rides a refresh that also 401s — none of that is a lost session, and
+  // flipping to anonymous on the first would bounce the code screen to the
+  // login form. Booted AUTHENTICATED, the identical pair IS a lost session
+  // and must land on anonymous. Either test alone would pass with the guard
+  // simply deleted or simply unconditional; together they do not.
+  it('keeps two_factor_required when a 401 and its refresh both fail during the challenge', async () => {
+    vi.spyOn(http, 'get').mockResolvedValue({
+      data: {
+        status: 'two_factor_required',
+        purpose: 'totp',
+        email: 'a••@b.test',
+        methods: ['totp'],
+        expires_in: 300,
+        max_attempts: 5,
+        features,
+      },
+    } as never)
+    vi.spyOn(http, 'post').mockRejectedValue({ response: { status: 401 } })
+    const retry = vi.spyOn(http, 'request').mockResolvedValue({ status: 200 } as never)
+    renderProbe()
+
+    await waitFor(() =>
+      expect(screen.getByTestId('status')).toHaveTextContent('two_factor_required'),
+    )
+    await fire401WithDeadRefresh()
+
+    expect(retry).not.toHaveBeenCalled()
+    expect(screen.getByTestId('status')).toHaveTextContent('two_factor_required')
+  })
+
+  it('drops a booted authenticated session to anonymous when a 401 and its refresh both fail', async () => {
+    vi.spyOn(http, 'get').mockResolvedValue({
+      data: {
+        status: 'authenticated',
+        user: testAdminUser,
+        csrf_token: 'csrf',
+        features,
+      },
+    } as never)
+    vi.spyOn(http, 'post').mockRejectedValue({ response: { status: 401 } })
+    const retry = vi.spyOn(http, 'request').mockResolvedValue({ status: 200 } as never)
+    renderProbe()
+
+    await waitFor(() => expect(screen.getByTestId('status')).toHaveTextContent('authenticated'))
+    await fire401WithDeadRefresh()
+
+    expect(retry).not.toHaveBeenCalled()
+    await waitFor(() => expect(screen.getByTestId('status')).toHaveTextContent('anonymous'))
+    expect(screen.getByTestId('email')).toHaveTextContent('—')
   })
 
   // The user asked to be forgotten. Leaving them apparently signed in because

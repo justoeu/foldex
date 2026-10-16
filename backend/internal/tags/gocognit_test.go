@@ -1,7 +1,11 @@
 package tags
 
-import "testing"
+import (
+	"testing"
+
+	"foldex/internal/testsupport"
+)
 
 func TestS3776_SetEntityTagsWithPendingAtMost15(t *testing.T) {
-	assertCognitAtMost(t, cognitScores(t), "SetEntityTagsWithPending", 15)
+	testsupport.AssertCognitAtMost(t, testsupport.CognitScores(t), "SetEntityTagsWithPending", 15)
 }

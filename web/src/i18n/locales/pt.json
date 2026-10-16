@@ -1776,7 +1776,9 @@
     "addon_step1": "Baixe o .zip e extraia.",
     "addon_step3": "Ative o Developer mode e escolha “Load unpacked”, apontando para a pasta extraída.",
     "addon_permissions": "Permissões: activeTab, storage, scripting e alarms, além do acesso à origem deste servidor — a origem só é pedida quando você salva um endereço de servidor.",
-    "action_link_clicked": "Link aberto"
+    "action_link_clicked": "Link aberto",
+    "action_backup_downloaded": "Backup baixado",
+    "action_auth_rate_limited": "Limite de tentativas de login"
   },
   "profile": {
     "name_label": "Nome de exibição",

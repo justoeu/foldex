@@ -23,8 +23,18 @@ import (
 const touchInterval = time.Minute
 
 // Middleware resolves the principal and enforces CSRF and RBAC.
+// sessionLookup is the narrow slice of the auth repository the middleware
+// resolves credentials through.
+type sessionLookup interface {
+	ResolveAccess(ctx context.Context, rawToken string) (resolved, error)
+	ResolveAPIToken(ctx context.Context, presented string) (authctx.Principal, error)
+	TouchSession(ctx context.Context, id int64)
+	TouchAPIToken(ctx context.Context, id int64)
+	HasConfirmedSecondFactor(ctx context.Context, uid authctx.UserID, totpOnly bool) (bool, error)
+}
+
 type Middleware struct {
-	repo                *Repository
+	repo                sessionLookup
 	cookies             CookieOptions
 	logger              *slog.Logger
 	require2FAForAdmins bool
@@ -63,7 +73,7 @@ type touchKey struct {
 	id  int64
 }
 
-func NewMiddleware(repo *Repository, cookies CookieOptions, logger *slog.Logger,
+func NewMiddleware(repo sessionLookup, cookies CookieOptions, logger *slog.Logger,
 	require2FAForAdmins bool, opts ...MiddlewareOption) *Middleware {
 
 	m := &Middleware{

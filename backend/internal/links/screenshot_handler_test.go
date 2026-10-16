@@ -318,17 +318,19 @@ func allowAllPolicy(_ context.Context, _ string) bool { return true }
 
 // buildRouter mounts the real ScreenshotHandler methods backed by fakes —
 // no inlined closures, so production code paths (including imageopt) run.
-func buildRouter(t *testing.T, sc Screenshotter, up Uploader, repo screenshotRepo) (*chi.Mux, *fakeUploader, *fakeRepo) {
+func buildRouter(t *testing.T, sc Screenshotter, up ports.Uploader, repo screenshotRepo) (*chi.Mux, *fakeUploader, *fakeRepo) {
 	t.Helper()
 	fakeUp, _ := up.(*fakeUploader)
 	fakeRp, _ := repo.(*fakeRepo)
 
 	sh := &ScreenshotHandler{
-		repo:          repo,
+		FileHandler: &FileHandler{
+			repo:    repo,
+			storage: up,
+			logger:  newTestLogger(),
+		},
 		screenshotter: sc,
-		storage:       up,
 		urlPolicy:     allowAllPolicy,
-		logger:        newTestLogger(),
 		captureSem:    make(chan struct{}, maxCaptureInFlight),
 		captureUsers:  make(map[authctx.UserID]int),
 	}
@@ -560,11 +562,13 @@ func TestCaptureAndStore_RejectsNonPublicTarget(t *testing.T) {
 		return false
 	}
 	sh := &ScreenshotHandler{
-		repo:          repo,
+		FileHandler: &FileHandler{
+			repo:    repo,
+			storage: up,
+			logger:  newTestLogger(),
+		},
 		screenshotter: sc,
-		storage:       up,
 		urlPolicy:     denyPolicy,
-		logger:        newTestLogger(),
 	}
 	r := chi.NewRouter()
 	r.Use(authctxtest.Middleware(authctxtest.DefaultUser))
@@ -590,9 +594,12 @@ func TestCaptureAndStore_RejectsRFC6598WithProductionPolicy(t *testing.T) {
 	repo := newFakeRepo()
 	repo.links[1] = Link{ID: 1, URL: "http://100.64.0.1/carrier-internal"}
 	sh := &ScreenshotHandler{
-		repo: repo, screenshotter: sc, storage: up,
-		urlPolicy: netpolicy.IsPublicURL, logger: newTestLogger(),
-		captureSem: make(chan struct{}, maxCaptureInFlight),
+		FileHandler: &FileHandler{
+			repo: repo, storage: up, logger: newTestLogger(),
+		},
+		screenshotter: sc,
+		urlPolicy:     netpolicy.IsPublicURL,
+		captureSem:    make(chan struct{}, maxCaptureInFlight),
 	}
 	r := chi.NewRouter()
 	r.Use(authctxtest.Middleware(authctxtest.DefaultUser))
@@ -616,7 +623,11 @@ func TestCaptureAndStore_PolicyUsesBoundedContextOnce(t *testing.T) {
 	var calls int
 	var remaining time.Duration
 	sh := &ScreenshotHandler{
-		repo: repo, screenshotter: sc, storage: up,
+		FileHandler: &FileHandler{
+			repo: repo, storage: up, logger: newTestLogger(),
+		},
+		screenshotter: sc,
+		captureSem:    make(chan struct{}, maxCaptureInFlight),
 		urlPolicy: func(ctx context.Context, _ string) bool {
 			calls++
 			deadline, ok := ctx.Deadline()
@@ -624,7 +635,6 @@ func TestCaptureAndStore_PolicyUsesBoundedContextOnce(t *testing.T) {
 			remaining = time.Until(deadline)
 			return true
 		},
-		logger: newTestLogger(), captureSem: make(chan struct{}, maxCaptureInFlight),
 	}
 	r := chi.NewRouter()
 	r.Use(authctxtest.Middleware(authctxtest.DefaultUser))
@@ -654,11 +664,13 @@ func TestCaptureAndStore_NilPolicyFailsClosed(t *testing.T) {
 	repo.links[1] = Link{ID: 1, URL: "https://example.com"}
 
 	sh := &ScreenshotHandler{
-		repo:          repo,
+		FileHandler: &FileHandler{
+			repo:    repo,
+			storage: up,
+			logger:  newTestLogger(),
+		},
 		screenshotter: sc,
-		storage:       up,
 		urlPolicy:     nil, // simulates a misconfigured deploy
-		logger:        newTestLogger(),
 	}
 	r := chi.NewRouter()
 	r.Use(authctxtest.Middleware(authctxtest.DefaultUser))
@@ -799,9 +811,12 @@ func TestCaptureAndStore_Returns429WhenSaturated(t *testing.T) {
 	const secondUser = authctx.UserID(authctxtest.DefaultUser + 1)
 	repo.ownedBy(2, secondUser, Link{ID: 2, URL: "https://example.org"})
 	sh := &ScreenshotHandler{
-		repo: repo, screenshotter: sc, storage: up,
-		urlPolicy: allowAllPolicy, logger: newTestLogger(),
-		captureSem: make(chan struct{}, maxCaptureInFlight),
+		FileHandler: &FileHandler{
+			repo: repo, storage: up, logger: newTestLogger(),
+		},
+		screenshotter: sc,
+		urlPolicy:     allowAllPolicy,
+		captureSem:    make(chan struct{}, maxCaptureInFlight),
 	}
 	r1 := chi.NewRouter()
 	r1.Use(authctxtest.Middleware(authctxtest.DefaultUser))
@@ -1226,7 +1241,7 @@ func TestDeleteImage_Success(t *testing.T) {
 	up := newFakeUploader()
 	repo := newFakeRepo()
 	repo.links[8] = Link{ID: 8, URL: "https://x.example"}
-	sh := &ScreenshotHandler{repo: repo, storage: up, logger: newTestLogger()}
+	sh := &ScreenshotHandler{FileHandler: &FileHandler{repo: repo, storage: up, logger: newTestLogger()}}
 	r := chi.NewRouter()
 	r.Use(authctxtest.Middleware(authctxtest.DefaultUser))
 	r.Delete("/api/links/{id}/image", sh.DeleteImage)
@@ -1251,7 +1266,7 @@ func TestDeleteImage_LockedFolderRequiresUnlock(t *testing.T) {
 	repo.links[8] = Link{ID: 8, URL: "https://x.example", FolderID: &folderID}
 	hash := "folder-hash"
 	unlockKey := []byte("01234567890123456789012345678901")
-	sh := (&ScreenshotHandler{repo: repo, storage: newFakeUploader(), logger: newTestLogger()}).
+	sh := (&ScreenshotHandler{FileHandler: &FileHandler{repo: repo, storage: newFakeUploader(), logger: newTestLogger()}}).
 		WithFolderGate(stubFolderHashLookup{hash: &hash}, unlockKey)
 	r := chi.NewRouter()
 	r.Use(authctxtest.Middleware(authctxtest.DefaultUser))
@@ -1272,7 +1287,7 @@ func TestDeleteImage_LockedFolderRequiresUnlock(t *testing.T) {
 }
 
 func TestDeleteImage_InvalidID(t *testing.T) {
-	sh := &ScreenshotHandler{repo: newFakeRepo(), storage: newFakeUploader(), logger: newTestLogger()}
+	sh := &ScreenshotHandler{FileHandler: &FileHandler{repo: newFakeRepo(), storage: newFakeUploader(), logger: newTestLogger()}}
 	r := chi.NewRouter()
 	r.Use(authctxtest.Middleware(authctxtest.DefaultUser))
 	r.Delete("/api/links/{id}/image", sh.DeleteImage)
@@ -1285,7 +1300,7 @@ func TestDeleteImage_InvalidID(t *testing.T) {
 func TestDeleteImage_RepoError(t *testing.T) {
 	repo := newFakeRepo()
 	repo.clearErr = errors.New("db")
-	sh := &ScreenshotHandler{repo: repo, storage: newFakeUploader(), logger: newTestLogger()}
+	sh := &ScreenshotHandler{FileHandler: &FileHandler{repo: repo, storage: newFakeUploader(), logger: newTestLogger()}}
 	r := chi.NewRouter()
 	r.Use(authctxtest.Middleware(authctxtest.DefaultUser))
 	r.Delete("/api/links/{id}/image", sh.DeleteImage)
@@ -1449,10 +1464,12 @@ func buildHealRouter(t *testing.T, up *fakeUploader, repo *fakeRepo) (http.Handl
 	t.Helper()
 	enq := &fakeEnqueuer{}
 	sh := (&ScreenshotHandler{
-		repo:         repo,
-		storage:      up,
+		FileHandler: &FileHandler{
+			repo:    repo,
+			storage: up,
+			logger:  newTestLogger(),
+		},
 		urlPolicy:    allowAllPolicy,
-		logger:       newTestLogger(),
 		captureSem:   make(chan struct{}, maxCaptureInFlight),
 		captureUsers: make(map[authctx.UserID]int),
 	}).WithEnqueuer(enq)

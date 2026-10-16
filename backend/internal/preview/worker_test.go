@@ -261,7 +261,7 @@ func TestWorker_ScreenshotFallbackPersistsOptimizedPublicCapture(t *testing.T) {
 		nextUpdatedAt: captureAt,
 	}
 	source := workerTestPNG(t)
-	expected, err := imageopt.Optimize(source, imageopt.Options{MaxDim: screenshotMaxDim, Quality: screenshotQuality})
+	expected, err := imageopt.OptimizeForStore(source)
 	require.NoError(t, err)
 	require.True(t, expected.Reencoded, "PNG fixture must take the optimization path")
 	require.Equal(t, "image/jpeg", expected.ContentType)
@@ -321,7 +321,7 @@ func TestWorker_ScreenshotFallbackRejectsDecodeBombWithoutPublication(t *testing
 		nextUpdatedAt: captureAt,
 	}
 	bomb := testsupport.BombPNG(t)
-	_, err := imageopt.Optimize(bomb, imageopt.Options{MaxDim: screenshotMaxDim, Quality: screenshotQuality})
+	_, err := imageopt.OptimizeForStore(bomb)
 	require.ErrorIs(t, err, imageopt.ErrTooLarge)
 	shot := &fakeScreenshotter{payload: bomb}
 	uploader := &fakeUploader{}

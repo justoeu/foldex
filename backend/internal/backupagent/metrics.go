@@ -1,13 +1,13 @@
 package backupagent
 
 import (
-	"crypto/subtle"
 	"net/http"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	"foldex/internal/metrics"
 )
 
 // Metrics is the agent's own registry, served on BACKUP_METRICS_ADDR.
@@ -85,23 +85,5 @@ func (m *Metrics) SeedLastSuccess(job string, at time.Time) {
 // Handler serves /metrics behind the same bearer token contract the backend
 // uses: empty token ⇒ 503, no anonymous mode (INV-mirroring internal/metrics).
 func (m *Metrics) Handler(token string) http.Handler {
-	inner := promhttp.HandlerFor(m.registry, promhttp.HandlerOpts{
-		MaxRequestsInFlight: 1,
-		Timeout:             10 * time.Second,
-	})
-	// The guard mirrors internal/metrics.Handler byte for byte (same bodies,
-	// same WWW-Authenticate) — one operator, one scrape contract; two subtly
-	// different copies of a security check age badly.
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if token == "" {
-			http.Error(w, "metrics disabled", http.StatusServiceUnavailable)
-			return
-		}
-		if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+token)) != 1 {
-			w.Header().Set("WWW-Authenticate", "Bearer")
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		inner.ServeHTTP(w, r)
-	})
+	return metrics.PromHandler(m.registry, token)
 }

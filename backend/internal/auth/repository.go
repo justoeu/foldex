@@ -422,8 +422,8 @@ func (r *Repository) Bootstrap(ctx context.Context, email, name, password string
 // SetPassword adds a password only while the caller's session, credential epoch
 // and optional TOTP proof are still current. The credential write and required
 // revocation of every other session commit together.
-func (r *Repository) SetPassword(ctx context.Context, id authctx.UserID, keepSession int64,
-	tokenVersion int, password string, proof SecondFactorProof) error {
+func (r *Repository) SetPassword(ctx context.Context, sp SessionProof,
+	password string, proof SecondFactorProof) error {
 
 	hash, err := pwhash.Hash(password)
 	if err != nil {
@@ -435,10 +435,10 @@ func (r *Repository) SetPassword(ctx context.Context, id authctx.UserID, keepSes
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	if err := lockPasswordSetTx(ctx, tx, id, keepSession, tokenVersion); err != nil {
+	if err := lockPasswordSetTx(ctx, tx, sp); err != nil {
 		return err
 	}
-	if err := consumeFactorIfPresentTx(ctx, tx, id, proof); err != nil {
+	if err := consumeFactorIfPresentTx(ctx, tx, sp.UserID, proof); err != nil {
 		return err
 	}
 
@@ -446,7 +446,7 @@ func (r *Repository) SetPassword(ctx context.Context, id authctx.UserID, keepSes
 		UPDATE app_user
 		SET password_hash = $2, token_version = token_version + 1, updated_at = now()
 		WHERE id = $1 AND status = 'active' AND token_version = $3 AND password_hash IS NULL`,
-		int64(id), hash, tokenVersion)
+		int64(sp.UserID), hash, sp.TokenVersion)
 	if err != nil {
 		return fmt.Errorf("set password: %w", err)
 	}
@@ -456,7 +456,7 @@ func (r *Repository) SetPassword(ctx context.Context, id authctx.UserID, keepSes
 	if _, err := tx.Exec(ctx, `
 		UPDATE session SET revoked_at = now(), revoked_reason = $3
 		WHERE user_id = $1 AND id <> $2 AND revoked_at IS NULL`,
-		int64(id), keepSession, ReasonPasswordChanged); err != nil {
+		int64(sp.UserID), sp.SessionID, ReasonPasswordChanged); err != nil {
 		return fmt.Errorf("set password revoke: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -465,26 +465,26 @@ func (r *Repository) SetPassword(ctx context.Context, id authctx.UserID, keepSes
 	return nil
 }
 
-func lockPasswordSetTx(ctx context.Context, tx pgx.Tx, id authctx.UserID, keepSession int64, tokenVersion int) error {
+func lockPasswordSetTx(ctx context.Context, tx pgx.Tx, sp SessionProof) error {
 	var currentHash *string
 	var liveVersion int
 	var status string
 	if err := tx.QueryRow(ctx, `
 		SELECT password_hash, token_version, status
-		FROM app_user WHERE id = $1 FOR NO KEY UPDATE`, int64(id)).
+		FROM app_user WHERE id = $1 FOR NO KEY UPDATE`, int64(sp.UserID)).
 		Scan(&currentHash, &liveVersion, &status); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNoUser
 		}
 		return fmt.Errorf("set password lock user: %w", err)
 	}
-	if status != StatusActive || liveVersion != tokenVersion {
+	if status != StatusActive || liveVersion != sp.TokenVersion {
 		return ErrSessionInvalid
 	}
 	if currentHash != nil {
 		return ErrPasswordExists
 	}
-	return requireLiveSessionTx(ctx, tx, id, keepSession)
+	return requireLiveSessionTx(ctx, tx, sp.UserID, sp.SessionID)
 }
 
 func consumeFactorIfPresentTx(ctx context.Context, tx pgx.Tx, id authctx.UserID, proof SecondFactorProof) error {

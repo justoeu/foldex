@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 
@@ -659,9 +658,9 @@ func (h *AdminHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	// Same bound the profile path applies to a name the user picks themselves.
 	// The column is TEXT, so without this the only limit is the 64 KiB body cap
 	// — and this name renders in the administration table.
-	if utf8.RuneCountInString(strings.TrimSpace(in.Name)) > maxProfileNameRunes {
-		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_name",
-			fmt.Sprintf("name must be at most %d characters", maxProfileNameRunes)))
+	name, err := validateProfileName(in.Name)
+	if err != nil {
+		httperr.Write(w, err)
 		return
 	}
 	role := in.Role
@@ -678,7 +677,7 @@ func (h *AdminHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	u, err := h.repo.AdminCreateUser(r.Context(), NewUser{
-		Email: in.Email, Name: in.Name, Password: in.Password, Role: role,
+		Email: in.Email, Name: name, Password: in.Password, Role: role,
 	})
 	switch {
 	case errors.Is(err, ErrEmailTaken):

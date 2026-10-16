@@ -108,7 +108,7 @@ export function useLinkDialogImage(
       }
       return true
     } catch (error) {
-      setCaptureWarning(screenshotErrorMessage(error, t))
+      setCaptureWarning(linkImageErrorMessage(error, t, 'link_dialog.image_error_screenshot'))
       return false
     } finally {
       setBusy(false)
@@ -137,9 +137,10 @@ export function useLinkDialogImage(
   }
 }
 
-function screenshotErrorMessage(
+export function linkImageErrorMessage(
   error: unknown,
   t: (key: string) => string,
+  fallbackKey = 'link_dialog.image_error_generic',
 ): string {
   const code = apiErrorCode(error)
   if (code === 'storage_unavailable') return t('link_dialog.image_error_storage')
@@ -147,6 +148,7 @@ function screenshotErrorMessage(
     return t('link_dialog.image_error_screenshot')
   }
   const value = error as { response?: { data?: { error?: { message?: string } }; status?: number } }
+  // Chi's empty 404 (route omitted) has no envelope; a JSON not_found is INV-050.
   if (value.response?.status === 404 && !code) return t('link_dialog.image_error_storage')
-  return value.response?.data?.error?.message ?? t('link_dialog.image_error_screenshot')
+  return value.response?.data?.error?.message ?? t(fallbackKey)
 }

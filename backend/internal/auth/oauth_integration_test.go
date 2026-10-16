@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"foldex/internal/auth"
+	"foldex/internal/auth/twofa"
 	"foldex/internal/mailer"
 	"foldex/internal/oauthgoogle"
 	"foldex/internal/pkg/authctx"
@@ -869,7 +870,7 @@ func TestOAuth_ConversionChallengeCannotSurvivePasswordReset(t *testing.T) {
 		_, err := h.repo.ConsumePasswordReset(ctx, reset, "the reset password")
 		resetResult <- err
 	}()
-	waitForBlockedSQL(t, h.pool, "SELECT status, token_version FROM app_user WHERE id = $1 FOR NO KEY UPDATE")
+	testdb.WaitForBlockedSQL(t, h.pool, "SELECT status, token_version FROM app_user WHERE id = $1 FOR NO KEY UPDATE")
 
 	convertResult := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
@@ -919,7 +920,7 @@ func TestOAuth_ReplacedConversionChallengeCannotMutateCredentials(t *testing.T) 
 		outcome, failure := replacement.callback(t, state, "auth-code")
 		replacementResult <- [2]string{outcome, failure}
 	}()
-	waitForBlockedSQL(t, h.pool, "SELECT id, token_version FROM app_user")
+	testdb.WaitForBlockedSQL(t, h.pool, "SELECT id, token_version FROM app_user")
 
 	convertResult := make(chan error, 1)
 	go func() {
@@ -1216,7 +1217,7 @@ func TestLinkIdentityDoesNotDeadlockWithSessionRotation(t *testing.T) {
 		linkResult <- h.repo.LinkIdentity(ctx, state, c.cookies[auth.CookieAccess],
 			auth.ProviderGoogle, "google-sub", "google@example.com", time.Minute)
 	}()
-	waitForBlockedSQL(t, h.pool, "SELECT id FROM session")
+	testdb.WaitForBlockedSQL(t, h.pool, "SELECT id FROM session")
 
 	var siblingID int64
 	require.NoError(t, rotation.QueryRow(ctx, `
@@ -1322,10 +1323,10 @@ func TestSetPassword_RepositoryRefusalsAreTyped(t *testing.T) {
 		SELECT id FROM session WHERE access_token_hash = $1`,
 		secrets.Hash(c.cookies[auth.CookieAccess])).Scan(&sid))
 
-	err = h.repo.SetPassword(context.Background(), user.ID, sid, user.TokenVersion,
+	err = h.repo.SetPassword(context.Background(), auth.SessionProof{UserID: user.ID, SessionID: sid, TokenVersion: user.TokenVersion},
 		"a different password", auth.SecondFactorProof{})
 	assert.ErrorIs(t, err, auth.ErrPasswordExists)
-	err = h.repo.SetPassword(context.Background(), authctx.UserID(999_999), sid, 0,
+	err = h.repo.SetPassword(context.Background(), auth.SessionProof{UserID: authctx.UserID(999_999), SessionID: sid, TokenVersion: 0},
 		"a different password", auth.SecondFactorProof{})
 	assert.ErrorIs(t, err, auth.ErrNoUser)
 
@@ -1333,9 +1334,9 @@ func TestSetPassword_RepositoryRefusalsAreTyped(t *testing.T) {
 	testdb.ConvertToGoogleOnly(t, h.pool, user.ID, "admin@example.com", "google-sub")
 	current, err := h.repo.GetUser(context.Background(), user.ID)
 	require.NoError(t, err)
-	err = h.repo.SetPassword(context.Background(), user.ID, sid, current.TokenVersion,
+	err = h.repo.SetPassword(context.Background(), auth.SessionProof{UserID: user.ID, SessionID: sid, TokenVersion: current.TokenVersion},
 		"a different password", auth.SecondFactorProof{})
-	assert.ErrorIs(t, err, auth.ErrTOTPReplay)
+	assert.ErrorIs(t, err, twofa.ErrReplay)
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1655,7 +1656,7 @@ func TestAdminRecoverySupersedingAConcurrentResetCannotApplyTheOldToken(t *testi
 		_, err := h.repo.ConsumePasswordReset(context.Background(), oldToken, "an attacker password")
 		resetErr <- err
 	}()
-	waitForBlockedSQL(t, h.pool, "SELECT status, token_version FROM app_user WHERE id = $1 FOR NO KEY UPDATE")
+	testdb.WaitForBlockedSQL(t, h.pool, "SELECT status, token_version FROM app_user WHERE id = $1 FOR NO KEY UPDATE")
 	release()
 	require.NoError(t, <-recoveryErr)
 	assert.ErrorIs(t, <-resetErr, auth.ErrResetInvalid)
@@ -1962,14 +1963,14 @@ func TestOAuth_UnlinkCannotUsePasswordProofAfterConcurrentPasswordChange(t *test
 		changeResult <- h.repo.ChangePassword(ctx, user.ID, 1,
 			"correct horse battery", "a changed password")
 	}()
-	waitForBlockedSQL(t, h.pool, "SELECT password_hash FROM app_user WHERE id = $1 FOR NO KEY UPDATE")
+	testdb.WaitForBlockedSQL(t, h.pool, "SELECT password_hash FROM app_user WHERE id = $1 FOR NO KEY UPDATE")
 
 	unlinkResult := make(chan error, 1)
 	go func() {
-		unlinkResult <- h.repo.UnlinkIdentity(ctx, user.ID, 1, user.TokenVersion,
+		unlinkResult <- h.repo.UnlinkIdentity(ctx, auth.SessionProof{UserID: user.ID, SessionID: 1, TokenVersion: user.TokenVersion},
 			auth.ProviderGoogle, "correct horse battery")
 	}()
-	waitForBlockedSQL(t, h.pool, "SELECT password_hash,")
+	testdb.WaitForBlockedSQL(t, h.pool, "SELECT password_hash,")
 
 	require.NoError(t, blocker.Commit(ctx))
 	require.NoError(t, <-changeResult)
@@ -2181,7 +2182,7 @@ func TestSetPassword_RefusesTOTPProofFromAStaleCredentialEpoch(t *testing.T) {
 		secrets.Hash(e.client.cookies[auth.CookieAccess])).Scan(&sid))
 
 	require.NoError(t, h.repo.RevokeAllForUser(context.Background(), user.ID, auth.ReasonLogoutAll))
-	err = h.repo.SetPassword(context.Background(), user.ID, sid, user.TokenVersion,
+	err = h.repo.SetPassword(context.Background(), auth.SessionProof{UserID: user.ID, SessionID: sid, TokenVersion: user.TokenVersion},
 		"a brand new password", auth.SecondFactorProof{
 			Method: auth.MethodTOTP,
 			TOTP: &auth.TOTPProof{
@@ -2248,7 +2249,7 @@ func TestOAuthRepository_SurfacesDatabaseErrors(t *testing.T) {
 			"sub", "a@b.test", time.Minute))
 		_, _, err = h.repo.ConvertToProvider(ctx, 1, "password")
 		assert.Error(t, err)
-		assert.Error(t, h.repo.UnlinkIdentity(ctx, uid, 1, 0, auth.ProviderGoogle, "password"))
+		assert.Error(t, h.repo.UnlinkIdentity(ctx, auth.SessionProof{UserID: uid, SessionID: 1, TokenVersion: 0}, auth.ProviderGoogle, "password"))
 		// TouchIdentity is deliberately silent — a failed "last used" write must
 		// never fail the login it belongs to — so the only thing to assert is
 		// that it does not panic.

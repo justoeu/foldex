@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"foldex/internal/auth"
+	"foldex/internal/auth/twofa"
 	"foldex/internal/mailer"
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/secrets"
@@ -203,14 +204,14 @@ func TestPasswordResetCannotCommitAfterConcurrentCredentialEpochBump(t *testing.
 
 	revokeResult := make(chan error, 1)
 	go func() { revokeResult <- h.repo.RevokeAllForUser(ctx, uid, auth.ReasonLogoutAll) }()
-	waitForBlockedSQL(t, h.pool, "UPDATE app_user SET token_version = token_version + 1")
+	testdb.WaitForBlockedSQL(t, h.pool, "UPDATE app_user SET token_version = token_version + 1")
 
 	resetResult := make(chan error, 1)
 	go func() {
 		_, err := h.repo.ConsumePasswordReset(ctx, token, "a stale reset password")
 		resetResult <- err
 	}()
-	waitForBlockedSQL(t, h.pool, "SELECT status, token_version FROM app_user WHERE id = $1 FOR NO KEY UPDATE")
+	testdb.WaitForBlockedSQL(t, h.pool, "SELECT status, token_version FROM app_user WHERE id = $1 FOR NO KEY UPDATE")
 
 	require.NoError(t, blocker.Commit(ctx))
 	require.NoError(t, <-revokeResult)
@@ -288,7 +289,7 @@ func TestConcurrentPasswordResetCreationLeavesExactlyOneLiveToken(t *testing.T) 
 			results <- result{token: token, err: err}
 		}()
 	}
-	waitForBlockedSQLCount(t, h.pool, "FROM app_user WHERE id = $1 FOR NO KEY UPDATE", 2)
+	testdb.WaitForBlockedSQLCount(t, h.pool, "FROM app_user WHERE id = $1 FOR NO KEY UPDATE", 2)
 	require.NoError(t, blocker.Commit(ctx))
 
 	tokens := make([]string, 0, 2)
@@ -835,7 +836,7 @@ func TestTwoFactorRepository_SurfacesDatabaseErrors(t *testing.T) {
 	})
 
 	t.Run("totp", func(t *testing.T) {
-		assert.Error(t, h.repo.StartTOTPEnrollment(ctx, uid, 0, 0, []byte("x"), []byte("y")))
+		assert.Error(t, h.repo.StartTOTPEnrollment(ctx, auth.SessionProof{UserID: uid, SessionID: 0, TokenVersion: 0}, []byte("x"), []byte("y")))
 		_, err := h.repo.LoadTOTPSecret(ctx, uid)
 		assert.Error(t, err)
 		_, _, err = h.repo.CompleteTOTPEnrollment(ctx, auth.EnrollmentComplete{
@@ -845,22 +846,22 @@ func TestTwoFactorRepository_SurfacesDatabaseErrors(t *testing.T) {
 		assert.Error(t, err)
 		assert.Error(t, h.repo.ConsumeSecondFactor(ctx, uid,
 			auth.SecondFactorProof{Method: auth.MethodTOTP, TOTP: &auth.TOTPProof{Counter: 1}}))
-		assert.Error(t, h.repo.DisableTOTP(ctx, uid, 1, 0, "password", auth.SecondFactorProof{}))
+		assert.Error(t, h.repo.DisableTOTP(ctx, auth.SessionProof{UserID: uid, SessionID: 1, TokenVersion: 0}, "password", auth.SecondFactorProof{}))
 	})
 
 	// ADR-37's e-mail factor. Same purpose as its neighbours: every one of these
 	// methods wraps its database errors, and a wrapped error nobody ever
 	// provokes is a branch that first runs in production.
 	t.Run("email factor", func(t *testing.T) {
-		assert.Error(t, h.repo.StartEmailFactorEnrollment(ctx, uid, 0, 0,
+		assert.Error(t, h.repo.StartEmailFactorEnrollment(ctx, auth.SessionProof{UserID: uid, SessionID: 0, TokenVersion: 0},
 			auth.EmailOTPMint{Digest: []byte("hash"), TTL: time.Minute, Cooldown: time.Minute}))
 		_, _, err := h.repo.CompleteEmailFactorEnrollment(ctx, auth.EnrollmentComplete{
 			UID: uid, TokenVersion: 0, RecoveryHashes: [][]byte{[]byte("h")},
 			Session: auth.LiveSession{ID: 0},
 		}, []byte("hash"))
 		assert.Error(t, err)
-		assert.Error(t, h.repo.DisableEmailFactor(ctx, uid, 1, 0, auth.SecondFactorProof{}))
-		assert.Error(t, h.repo.CreateStepUpEmailOTP(ctx, uid, 1, 0,
+		assert.Error(t, h.repo.DisableEmailFactor(ctx, auth.SessionProof{UserID: uid, SessionID: 1, TokenVersion: 0}, auth.SecondFactorProof{}))
+		assert.Error(t, h.repo.CreateStepUpEmailOTP(ctx, auth.SessionProof{UserID: uid, SessionID: 1, TokenVersion: 0},
 			auth.EmailOTPMint{Digest: []byte("hash"), TTL: time.Minute, Cooldown: time.Minute}))
 		_, err = h.repo.StepUpEmailOTPIsLive(ctx, uid, []byte("hash"))
 		assert.Error(t, err)
@@ -871,7 +872,7 @@ func TestTwoFactorRepository_SurfacesDatabaseErrors(t *testing.T) {
 	})
 
 	t.Run("recovery codes", func(t *testing.T) {
-		assert.Error(t, h.repo.RegenerateRecoveryCodes(ctx, uid, 1, 0, "password",
+		assert.Error(t, h.repo.RegenerateRecoveryCodes(ctx, auth.SessionProof{UserID: uid, SessionID: 1, TokenVersion: 0}, "password",
 			auth.SecondFactorProof{}, [][]byte{[]byte("h")}))
 		assert.Error(t, h.repo.ConsumeSecondFactor(ctx, uid,
 			auth.SecondFactorProof{Method: auth.MethodRecovery, Digest: []byte("h")}))
@@ -919,7 +920,7 @@ func TestTwoFactorRepository_NotFoundIsTyped(t *testing.T) {
 	}, auth.TOTPProof{Counter: 1, Ciphertext: []byte("x"), Nonce: []byte("y")})
 	assert.ErrorIs(t, err, auth.ErrNoTOTP)
 	assert.ErrorIs(t, h.repo.ConsumeSecondFactor(ctx, uid,
-		auth.SecondFactorProof{Method: auth.MethodTOTP, TOTP: &auth.TOTPProof{Counter: 1}}), auth.ErrTOTPReplay)
+		auth.SecondFactorProof{Method: auth.MethodTOTP, TOTP: &auth.TOTPProof{Counter: 1}}), twofa.ErrReplay)
 	assert.ErrorIs(t, h.repo.ConsumeSecondFactor(ctx, uid,
 		auth.SecondFactorProof{Method: auth.MethodRecovery, Digest: []byte("nope")}), auth.ErrBadCredentials)
 	assert.ErrorIs(t, h.repo.ConsumeSecondFactor(ctx, uid,

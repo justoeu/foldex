@@ -1,5 +1,7 @@
 package auditpkg
 
+import "slices"
+
 const (
 	AuditLoginSucceeded        = "login.succeeded"
 	AuditLoginFailed           = "login.failed"
@@ -189,9 +191,7 @@ var auditActionOrder = []string{
 }
 
 func AuditActions() []string {
-	out := make([]string, len(auditActionOrder))
-	copy(out, auditActionOrder)
-	return out
+	return slices.Clone(auditActionOrder)
 }
 
 func KnownAuditAction(action string) bool {

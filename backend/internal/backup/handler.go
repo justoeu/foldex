@@ -162,20 +162,36 @@ func (h *Handler) logExportOK(filename string, rep ExportReport) {
 // ────────────────────────────────────────────────────────────────────────────
 // POST /api/backup/validate
 
-func (h *Handler) validate(w http.ResponseWriter, r *http.Request) {
+// openUploadedArchive admits the request into the single archive slot,
+// stretches the stream deadlines, and spools the uploaded ZIP to a temp file.
+// On failure it has already written the error response and released the slot;
+// the caller just returns. The returned cleanup removes the temp file and
+// then releases the slot, in that order.
+func (h *Handler) openUploadedArchive(w http.ResponseWriter, r *http.Request) (*zip.Reader, func(), bool) {
 	release, ok := h.admitArchive(w)
 	if !ok {
-		return
+		return nil, unusedCleanup, false
 	}
-	defer release()
 	extendArchiveDeadlines(w)
 	zr, cleanup, err := readZipFromRequest(w, r, h.createTemp)
 	if err != nil {
+		release()
 		if errors.Is(err, ErrPayloadTooLarge) {
 			httperr.Write(w, httperr.New(http.StatusRequestEntityTooLarge, "payload_too_large", err.Error()))
-			return
+			return nil, unusedCleanup, false
 		}
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "bad_zip", err.Error()))
+		return nil, unusedCleanup, false
+	}
+	return zr, func() {
+		cleanup()
+		release()
+	}, true
+}
+
+func (h *Handler) validate(w http.ResponseWriter, r *http.Request) {
+	zr, cleanup, ok := h.openUploadedArchive(w, r)
+	if !ok {
 		return
 	}
 	defer cleanup()
@@ -201,19 +217,8 @@ func (h *Handler) restore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	release, ok := h.admitArchive(w)
+	zr, cleanup, ok := h.openUploadedArchive(w, r)
 	if !ok {
-		return
-	}
-	defer release()
-	extendArchiveDeadlines(w)
-	zr, cleanup, err := readZipFromRequest(w, r, h.createTemp)
-	if err != nil {
-		if errors.Is(err, ErrPayloadTooLarge) {
-			httperr.Write(w, httperr.New(http.StatusRequestEntityTooLarge, "payload_too_large", err.Error()))
-			return
-		}
-		httperr.Write(w, httperr.New(http.StatusBadRequest, "bad_zip", err.Error()))
 		return
 	}
 	defer cleanup()

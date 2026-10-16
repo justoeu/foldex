@@ -66,7 +66,7 @@ func (h *Handler) StartEmailFactor(w http.ResponseWriter, r *http.Request) {
 	// The digest is bound to (user, purpose) with no challenge id: enrollment
 	// from Settings has no challenge, and binding to one would make the
 	// pre-auth and session paths need different digests for the same code.
-	err = h.repo.StartEmailFactorEnrollment(r.Context(), uid, tokenVersion, sessionID, EmailOTPMint{
+	err = h.repo.StartEmailFactorEnrollment(r.Context(), SessionProof{UserID: uid, SessionID: sessionID, TokenVersion: tokenVersion}, EmailOTPMint{
 		Digest:   h.codeMAC.EmailOTPDigest(uid, OTPPurposeEnrollEmail2FA, nil, code),
 		TTL:      ttl,
 		Cooldown: h.otpCooldown(r.Context()),
@@ -271,7 +271,7 @@ func (h *Handler) SendStepUpEmailOTP(w http.ResponseWriter, r *http.Request) {
 	draft := MailDraft{Locale: localeFor(user.Locale, r), Build: func(string) mailer.Envelope {
 		return mailer.StepUpCodeMessage(email, code, int(ttl.Minutes()))
 	}}
-	err = h.repo.CreateStepUpEmailOTP(r.Context(), p.UserID, p.SessionID, user.TokenVersion, EmailOTPMint{
+	err = h.repo.CreateStepUpEmailOTP(r.Context(), SessionProof{UserID: p.UserID, SessionID: p.SessionID, TokenVersion: user.TokenVersion}, EmailOTPMint{
 		Digest:   h.codeMAC.EmailOTPDigest(p.UserID, OTPPurposeStepUp2FA, nil, code),
 		TTL:      ttl,
 		Cooldown: h.otpCooldown(r.Context()),
@@ -342,7 +342,7 @@ func (h *Handler) DisableEmailFactor(w http.ResponseWriter, r *http.Request) {
 	var proof SecondFactorProof
 	if !h.withStepUp(w, r, p.UserID, user, in.Code, func(p2 SecondFactorProof) error {
 		proof = p2
-		err = h.repo.DisableEmailFactor(r.Context(), p.UserID, p.SessionID, tokenVersion, proof)
+		err = h.repo.DisableEmailFactor(r.Context(), SessionProof{UserID: p.UserID, SessionID: p.SessionID, TokenVersion: tokenVersion}, proof)
 		return err
 	}) {
 		return

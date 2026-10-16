@@ -10,6 +10,7 @@ import {
 } from '../api/backup'
 import { unreachableResources, useDepStatus } from '../api/status'
 import { apiErrorText } from '../lib/apiError'
+import { formatBytes } from '../lib/formatBytes'
 import { BackupRestoreDialog } from './BackupRestoreDialog'
 
 type Props = Readonly<{
@@ -185,18 +186,6 @@ function formatDate(iso: string): string {
   } catch {
     return iso
   }
-}
-
-function formatBytes(b: number): string {
-  if (b < 1024) return `${b} B`
-  const units = ['KB', 'MB', 'GB']
-  let n = b / 1024
-  let i = 0
-  while (n >= 1024 && i < units.length - 1) {
-    n /= 1024
-    i++
-  }
-  return `${n.toFixed(n >= 10 ? 0 : 1)} ${units[i]}`
 }
 
 function formatDuration(ms: number, t: TFunction): string {

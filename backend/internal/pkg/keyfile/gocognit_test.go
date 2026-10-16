@@ -1,7 +1,11 @@
 package keyfile
 
-import "testing"
+import (
+	"testing"
+
+	"foldex/internal/testsupport"
+)
 
 func TestS3776_LoadAtMost15(t *testing.T) {
-	assertCognitAtMost(t, cognitScores(t), "Load", 15)
+	testsupport.AssertCognitAtMost(t, testsupport.CognitScores(t), "Load", 15)
 }

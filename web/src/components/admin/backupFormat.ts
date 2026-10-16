@@ -1,5 +1,8 @@
 import type { TFunction } from 'i18next'
 import type { BackupRun, BackupRunStatus } from '../../api/admin'
+import { formatBytes } from '../../lib/formatBytes'
+
+export { formatBytes } from '../../lib/formatBytes'
 
 /**
  * Pure presentation helpers for the instance-backup screen. They live outside
@@ -120,19 +123,6 @@ export function backupErrorBlurb(t: TFunction, token: string | null): string | n
   const text = t(key)
   return text === key ? null : text
 }
-
-export function formatBytes(b: number): string {
-  if (b < 1024) return `${b} B`
-  const units = ['KB', 'MB', 'GB', 'TB']
-  let n = b / 1024
-  let i = 0
-  while (n >= 1024 && i < units.length - 1) {
-    n /= 1024
-    i++
-  }
-  return `${n.toFixed(n >= 10 ? 0 : 1)} ${units[i]}`
-}
-
 
 /**
  * The meta counters the details panel renders, in display order.

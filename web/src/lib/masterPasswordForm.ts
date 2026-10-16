@@ -1,4 +1,4 @@
-import { MIN_PASSWORD_LEN } from '../auth/types'
+import { MAX_PASSWORD_BYTES, MIN_PASSWORD_LEN } from '../auth/types'
 import { hintEqualsPassword } from './hintEqualsPassword'
 
 export type MasterFormInput = {
@@ -23,7 +23,7 @@ export function validateMasterForm(input: MasterFormInput): MasterFormResult {
   if (input.next.length < MIN_PASSWORD_LEN) {
     return { ok: false, errorKey: 'settings.master_too_short' }
   }
-  if (new TextEncoder().encode(input.next).length > 72) {
+  if (new TextEncoder().encode(input.next).length > MAX_PASSWORD_BYTES) {
     return { ok: false, errorKey: 'settings.master_too_long' }
   }
   if (input.next !== input.confirm) {

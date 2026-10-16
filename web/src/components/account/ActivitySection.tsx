@@ -3,7 +3,7 @@ import { formatLocalYMD } from '../../lib/time'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { activityQueryKey, fetchOwnActivity, type ActivityCursor, type AuditEntry } from '../../api/admin'
-import { actionLabel } from '../../lib/auditLabels'
+import { actionCategory, actionLabel } from '../../lib/auditLabels'
 
 /** Page sizes the account feed offers. 50 is the default the server already uses. */
 const PAGE_SIZES = [25, 50, 100] as const
@@ -44,15 +44,9 @@ const KIND_BY_ACTION: Record<string, Kind> = {
   'backup.restored': 'backups',
 }
 
-/** The dot color classes by action prefix — create/edit/delete/other. */
+/** The dot color classes by action category — see auditLabels. */
 function dotClass(action: string): string {
-  // Actions are <entity>.<verb> (link.created), so match the verb suffix.
-  if (action.endsWith('.created')) return 'fx-acc2-act-dot-create'
-  if (action === 'link.clicked') return 'fx-acc2-act-dot-click'
-  if (action.startsWith('login.')) return 'fx-acc2-act-dot-login'
-  if (action.endsWith('.updated')) return 'fx-acc2-act-dot-edit'
-  if (action.endsWith('.deleted')) return 'fx-acc2-act-dot-delete'
-  return 'fx-acc2-act-dot-other'
+  return `fx-acc2-act-dot-${actionCategory(action)}`
 }
 
 function entryKind(e: AuditEntry): Kind {

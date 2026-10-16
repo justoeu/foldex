@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -157,9 +158,9 @@ func New(d Deps) http.Handler {
 
 	linksRepo := links.NewRepository(d.Pool)
 	notesRepo := notes.NewRepository(d.Pool).WithStorage(d.Storage).WithLogger(d.Logger)
-	fileHandler := newFileHandler(d, linksRepo)
+	fileHandler, shotHandler := newFileHandlers(d, linksRepo)
 	publicShareRoutes(r, d, linksRepo, notesRepo, fileHandler)
-	mountAPI(r, d, grants, linksRepo, notesRepo, fileHandler)
+	mountAPI(r, d, grants, linksRepo, notesRepo, fileHandler, shotHandler)
 	return r
 }
 
@@ -247,12 +248,7 @@ func isLoopbackBind(addr string) bool {
 }
 
 func containsWildcard(origins []string) bool {
-	for _, o := range origins {
-		if o == "*" {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(origins, "*")
 }
 
 func statusHandler(c *depstatus.Checker) http.HandlerFunc {

@@ -109,11 +109,16 @@ describe('LinkCard', () => {
   })
 
   it('shows retry button when preview failed and triggers mutation', async () => {
-    state.links.push({ ...baseLink, preview_status: 'failed' })
-    const failed = { ...baseLink, preview_status: 'failed' as const }
-    renderWithProviders(<LinkCard link={failed} {...noopCardProps} />)
-    const buttons = screen.getAllByRole('button')
-    expect(buttons.length).toBeGreaterThan(2)
+    const onRefreshPreview = vi.fn()
+    const onAddImage = vi.fn()
+    const failed = { ...baseLink, id: 42, preview_status: 'failed' as const, og_image_url: null }
+    renderWithProviders(
+      <LinkCard link={failed} {...noopCardProps} onRefreshPreview={onRefreshPreview} onAddImage={onAddImage} />,
+    )
+    await userEvent.click(screen.getByRole('button', { name: /recapture preview/i }))
+    expect(onRefreshPreview).toHaveBeenCalledTimes(1)
+    expect(onRefreshPreview).toHaveBeenCalledWith(42)
+    expect(onAddImage).not.toHaveBeenCalled()
   })
 
   it('calls onEdit when edit button is clicked', async () => {

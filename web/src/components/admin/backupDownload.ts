@@ -1,4 +1,5 @@
 import { downloadBackupArtifact } from '../../api/admin'
+import { streamResponseToPickedFile, type SaveFilePicker } from '../../lib/streamResponseToPickedFile'
 
 /**
  * A dump can be gigabytes. Buffering one as a Blob holds the whole thing in
@@ -12,17 +13,6 @@ import { downloadBackupArtifact } from '../../api/admin'
  * reasoning, as `generateBackup` in api/backup.ts.
  */
 const ARTIFACT_TIMEOUT_MS = 30 * 60_000
-
-type ArtifactWriter = {
-  write: (chunk: Uint8Array) => Promise<void>
-  close: () => Promise<void>
-  abort: (reason?: unknown) => Promise<void>
-}
-
-type SaveFilePicker = (options: {
-  suggestedName: string
-  types: { description: string; accept: Record<string, string[]> }[]
-}) => Promise<{ createWritable: () => Promise<{ getWriter: () => ArtifactWriter }> }>
 
 export type BackupDownloadDeps = {
   downloadArtifact?: typeof downloadBackupArtifact
@@ -86,34 +76,18 @@ async function streamArtifactToFile(
   name: string,
   deps: BackupDownloadDeps,
 ): Promise<void> {
-  /* The picker opens BEFORE the request. A file dialog is a user gesture, and
-     browsers refuse one that arrives after an await on the network — and the
-     request would already have spent a download from the budget by then. */
-  const handle = await picker.call(window, {
+  /* The shared pump opens the picker before the request and aborts both
+     sides on failure: a half-written file left on disk would look like a
+     backup, and age's chunk authentication makes a truncated one unopenable
+     rather than silently short — but the file should not be there at all. */
+  await streamResponseToPickedFile({
+    picker,
     suggestedName: name,
     types: [{ description: 'age-encrypted archive', accept: { 'application/octet-stream': ['.age'] } }],
+    fetchResponse: () => requestArtifact(runID, password, deps),
+    responseError: artifactError,
+    notStreamableMessage: 'artifact response is not streamable',
   })
-  const writer = (await handle.createWritable()).getWriter()
-  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null
-  try {
-    const response = await requestArtifact(runID, password, deps)
-    if (!response.ok) throw await artifactError(response)
-    if (!response.body) throw new Error('artifact response is not streamable')
-    reader = response.body.getReader()
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-      await writer.write(value)
-    }
-    await writer.close()
-  } catch (error) {
-    /* Both sides, and neither failure hides the original: a half-written file
-       left open would sit on disk looking like a backup. age's chunk
-       authentication makes a truncated one unopenable rather than silently
-       short, but the file should not be there at all. */
-    await Promise.allSettled([reader?.cancel(error), writer.abort(error)])
-    throw error
-  }
 }
 
 /**

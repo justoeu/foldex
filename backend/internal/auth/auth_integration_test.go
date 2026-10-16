@@ -33,6 +33,7 @@ import (
 
 	"foldex/internal/abusepolicy"
 	"foldex/internal/auth"
+	"foldex/internal/auth/ipblock"
 	"foldex/internal/mailer"
 	"foldex/internal/mailoutbox"
 	"foldex/internal/pkg/authctx"
@@ -324,7 +325,7 @@ func newHarnessWith(t *testing.T, pool *pgxpool.Pool, opts harnessOpts) *harness
 	// consult (ADR-46). Wired here rather than left nil so the HTTP tests
 	// exercise the SAME refusals production does — a nil blocklist would skip
 	// the invalidation and a nil predicate would silently pass the proxy rail.
-	admin.WithBlocklist(auth.NewBlocklist(repo.BlockedIPs), func(ip string) bool {
+	admin.WithBlocklist(ipblock.NewBlocklist(repo.BlockedIPs), func(ip string) bool {
 		return ip == testTrustedProxyIP
 	})
 
@@ -515,23 +516,6 @@ func errCode(t *testing.T, rec *httptest.ResponseRecorder) string {
 	return e["code"].(string)
 }
 
-func waitForBlockedSQL(t *testing.T, pool *pgxpool.Pool, fragment string) {
-	waitForBlockedSQLCount(t, pool, fragment, 1)
-}
-
-func waitForBlockedSQLCount(t *testing.T, pool *pgxpool.Pool, fragment string, want int) {
-	t.Helper()
-	require.Eventually(t, func() bool {
-		var blocked int
-		err := pool.QueryRow(context.Background(), `
-			SELECT count(*) FROM pg_stat_activity
-			WHERE datname = current_database() AND wait_event_type = 'Lock'
-			  AND query LIKE '%' || $1 || '%'`, fragment).Scan(&blocked)
-		return err == nil && blocked >= want
-	}, 3*time.Second, 10*time.Millisecond,
-		"%d queries did not block on the expected row lock: %s", want, fragment)
-}
-
 // bootstrapAdmin claims the placeholder admin and returns a signed-in client.
 func (h *harness) bootstrapAdmin(t *testing.T, email, password string) *client {
 	t.Helper()
@@ -672,6 +656,28 @@ func TestBootstrap_RejectsWeakPasswordAndBadEmail(t *testing.T) {
 	})
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 	assert.Equal(t, "invalid_email", errCode(t, rec))
+}
+
+// Bootstrap and invite acceptance write a display name too, so they cross the
+// same rune cap the profile and admin-create paths enforce — otherwise the
+// two unauthenticated name writers were the only ones able to store a
+// body-cap-sized "name".
+func TestBootstrapAndAcceptInvite_RejectOverLongName(t *testing.T) {
+	h := newHarness(t)
+	c := h.client(t)
+	overLong := strings.Repeat("é", 121) // one rune past the 120 cap
+
+	rec := c.do(http.MethodPost, "/api/auth/bootstrap", map[string]string{
+		"email": "admin@example.com", "name": overLong, "password": "long enough password",
+	})
+	assert.Equal(t, http.StatusBadRequest, rec.Code, "body: %s", rec.Body.String())
+	assert.Equal(t, "invalid_name", errCode(t, rec))
+
+	rec = c.do(http.MethodPost, "/api/auth/invites/accept", map[string]string{
+		"token": "bogus", "name": overLong, "password": "long enough password",
+	})
+	assert.Equal(t, http.StatusBadRequest, rec.Code, "body: %s", rec.Body.String())
+	assert.Equal(t, "invalid_name", errCode(t, rec))
 }
 
 // bcrypt silently truncates at 72 bytes. Accepting a longer passphrase and
@@ -1114,7 +1120,7 @@ func TestRefresh_ExactlyConcurrentRequestsBothReachGraceSemantics(t *testing.T) 
 			results <- tab.do(http.MethodPost, "/api/auth/refresh", nil)
 		}(tab)
 	}
-	waitForBlockedSQLCount(t, h.pool, "FOR UPDATE OF s", len(tabs))
+	testdb.WaitForBlockedSQLCount(t, h.pool, "FOR UPDATE OF s", len(tabs))
 	require.NoError(t, blocker.Commit(ctx))
 
 	for range tabs {
@@ -3074,15 +3080,23 @@ func TestMe_AnOrphanedTOTPChallengeIsNotReplayed(t *testing.T) {
 	_, err := h.pool.Exec(context.Background(), `DELETE FROM totp_secret WHERE user_id = $1`, uid)
 	require.NoError(t, err)
 
+	orphanedToken := c.cookies[auth.CookiePreAuth]
+	require.NotEmpty(t, orphanedToken)
+
 	rec = c.do(http.MethodGet, "/api/auth/me", nil)
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	assert.NotEqual(t, "two_factor_required", decode(t, rec)["status"],
 		"a challenge whose factor is gone must not put the caller back on the code screen")
 
 	pa := cookieByName(rec, auth.CookiePreAuth)
-	if pa != nil {
-		assert.Less(t, pa.MaxAge, 0, "fx_pa must be expired, not left for the next reload to replay")
-	}
+	require.NotNil(t, pa, "fx_pa must be actively expired, not merely left to lapse")
+	assert.Less(t, pa.MaxAge, 0, "fx_pa must be expired, not left for the next reload to replay")
+	assert.Empty(t, c.cookies[auth.CookiePreAuth], "the jar must drop the expired pre-auth cookie")
+
+	diag, err := h.repo.DiagnoseChallenge(context.Background(), orphanedToken)
+	require.NoError(t, err)
+	assert.True(t, diag.Found)
+	assert.True(t, diag.Consumed, "/me must spend the orphaned challenge, not just stop replaying it")
 }
 
 // The autopsy a refused challenge gets in the log must classify the four
@@ -3118,4 +3132,92 @@ func TestDiagnoseChallenge_ClassifiesTheRefusal(t *testing.T) {
 	diag, err = h.repo.DiagnoseChallenge(context.Background(), "no-such-token")
 	require.NoError(t, err)
 	assert.False(t, diag.Found)
+
+	// No cookie at all is its own classification: every flag false, no error.
+	// Without the early return this would hash the empty string and go
+	// looking for a row nobody could have minted.
+	diag, err = h.repo.DiagnoseChallenge(context.Background(), "")
+	require.NoError(t, err)
+	assert.Equal(t, auth.ChallengeRejection{}, diag)
+
+	// The remaining three liveness failures, one mutation at a time against
+	// the still-live second challenge, so each flag is pinned to its own
+	// column rather than to whichever happens to be set.
+	live := c.cookies[auth.CookiePreAuth]
+	require.NotEmpty(t, live)
+	require.NotEqual(t, pa, live)
+	var uid int64
+	require.NoError(t, h.pool.QueryRow(context.Background(),
+		`SELECT id FROM app_user WHERE email_normalized = $1`, "diag@example.com").Scan(&uid))
+
+	diag, err = h.repo.DiagnoseChallenge(context.Background(), live)
+	require.NoError(t, err)
+	assert.Equal(t, auth.ChallengeRejection{Found: true}, diag,
+		"a live challenge has no refusal to classify")
+
+	_, err = h.pool.Exec(context.Background(),
+		`UPDATE app_user SET token_version = token_version + 1 WHERE id = $1`, uid)
+	require.NoError(t, err)
+	diag, err = h.repo.DiagnoseChallenge(context.Background(), live)
+	require.NoError(t, err)
+	assert.Equal(t, auth.ChallengeRejection{Found: true, VersionSkewed: true}, diag,
+		"a credential-epoch bump must read as version skew and nothing else")
+
+	_, err = h.pool.Exec(context.Background(),
+		`UPDATE app_user SET status = $2 WHERE id = $1`, uid, auth.StatusDisabled)
+	require.NoError(t, err)
+	diag, err = h.repo.DiagnoseChallenge(context.Background(), live)
+	require.NoError(t, err)
+	assert.True(t, diag.Found)
+	assert.True(t, diag.UserInactive, "a disabled account must read as inactive")
+	assert.False(t, diag.Expired)
+	assert.False(t, diag.Consumed)
+
+	_, err = h.pool.Exec(context.Background(),
+		`UPDATE auth_challenge SET expires_at = now() - interval '1 minute'
+		 WHERE user_id = $1 AND consumed_at IS NULL`, uid)
+	require.NoError(t, err)
+	diag, err = h.repo.DiagnoseChallenge(context.Background(), live)
+	require.NoError(t, err)
+	assert.True(t, diag.Found)
+	assert.True(t, diag.Expired, "a challenge past its TTL must read as expired")
+	assert.False(t, diag.Consumed)
+}
+
+// A login that diverts into the second factor must expire the stale session
+// cookies a previous session left behind. Leaving an expired fx_at/fx_rt pair
+// in place makes authenticated queries 401 through the dead credential, which
+// the SPA escalates into session-lost and flips the code screen back to the
+// login form. The assertions are on the wire cookies, not on the jar alone:
+// a jar that simply never stored them would pass for the wrong reason.
+func TestLogin_DivertToTwoFactorClearsStaleSessionCookies(t *testing.T) {
+	h := newHarnessWith(t, testdb.Shared(t), harnessOpts{TwoFactor: true})
+	require.NoError(t, testdb.Reset(context.Background(), h.pool))
+	testdb.SeedUserWithPassword(t, h.pool, "divert@example.com", "a good password", "editor")
+	enrolUser(t, h, "divert@example.com", "a good password")
+
+	c := h.client(t)
+	c.cookies[auth.CookieAccess] = "stale-access"
+	c.cookies[auth.CookieRefresh] = "stale-refresh"
+	c.cookies[auth.CookieCSRF] = "stale-csrf"
+
+	rec := c.do(http.MethodPost, "/api/auth/login", map[string]string{
+		"email": "divert@example.com", "password": "a good password",
+	})
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Equal(t, "two_factor_required", decode(t, rec)["status"])
+
+	for _, name := range []string{auth.CookieAccess, auth.CookieRefresh, auth.CookieCSRF} {
+		ck := cookieByName(rec, name)
+		require.NotNil(t, ck, "%s must be actively expired on the divert response", name)
+		assert.Less(t, ck.MaxAge, 0, "%s must carry MaxAge<0, got %d", name, ck.MaxAge)
+		assert.Empty(t, ck.Value, "%s must be cleared empty", name)
+		assert.NotContains(t, c.cookies, name, "the jar must drop stale %s", name)
+	}
+
+	// The divert still mints its own credential: clearing the session must
+	// not take the fresh pre-auth cookie down with it.
+	assert.NotEmpty(t, c.cookies[auth.CookiePreAuth],
+		"the challenge cookie must survive the stale-session clearing")
+	assert.NotEqual(t, "stale-access", c.cookies[auth.CookiePreAuth])
 }

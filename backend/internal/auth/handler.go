@@ -449,8 +449,13 @@ func (h *Handler) Bootstrap(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
+	name, err := validateProfileName(in.Name)
+	if err != nil {
+		httperr.Write(w, err)
+		return
+	}
 
-	user, err := h.repo.Bootstrap(r.Context(), in.Email, strings.TrimSpace(in.Name), in.Password)
+	user, err := h.repo.Bootstrap(r.Context(), in.Email, name, in.Password)
 	switch {
 	case errors.Is(err, ErrAlreadySetUp):
 		h.bootstrapIP.CommitFail(bootstrapKeyPrefix + ip)
@@ -927,10 +932,9 @@ func (h *Handler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	var name *string
 	if in.Name != nil {
-		trimmed := strings.TrimSpace(*in.Name)
-		if utf8.RuneCountInString(trimmed) > maxProfileNameRunes {
-			httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_name",
-				"name must be at most 120 characters"))
+		trimmed, err := validateProfileName(*in.Name)
+		if err != nil {
+			httperr.Write(w, err)
 			return
 		}
 		name = &trimmed
@@ -1115,8 +1119,13 @@ func (h *Handler) AcceptInvite(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
+	name, err := validateProfileName(in.Name)
+	if err != nil {
+		httperr.Write(w, err)
+		return
+	}
 
-	user, err := h.repo.AcceptInvite(r.Context(), in.Token, strings.TrimSpace(in.Name), in.Password)
+	user, err := h.repo.AcceptInvite(r.Context(), in.Token, name, in.Password)
 	switch {
 	case errors.Is(err, ErrInviteInvalid):
 		h.inviteIP.CommitFail(key)
@@ -1277,6 +1286,19 @@ func validatePasswordAgainst(ctx context.Context, policy *policy.Repository, p s
 			fmt.Sprintf("password must be at most %d bytes", MaxPasswordLen))
 	}
 	return nil
+}
+
+// validateProfileName trims raw and enforces the display-name rune cap every
+// name-writing route shares (profile edit, admin create, bootstrap, invite
+// acceptance). It returns the trimmed name to store so the length that was
+// judged is the value that is persisted.
+func validateProfileName(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if utf8.RuneCountInString(trimmed) > maxProfileNameRunes {
+		return "", httperr.New(http.StatusBadRequest, "invalid_name",
+			fmt.Sprintf("name must be at most %d characters", maxProfileNameRunes))
+	}
+	return trimmed, nil
 }
 
 func validateEmail(email string) error {

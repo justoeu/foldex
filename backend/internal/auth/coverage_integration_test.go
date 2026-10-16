@@ -319,7 +319,7 @@ func TestCoverage_CancelledContextSurfacesRepoErrors(t *testing.T) {
 	require.Error(t, err)
 	_, err = h.repo.AcceptInvite(ctx, "dead", "n", "abcdefgh")
 	require.Error(t, err)
-	err = h.repo.StartTOTPEnrollment(ctx, uid, 0, 1, []byte("c"), []byte("n"))
+	err = h.repo.StartTOTPEnrollment(ctx, auth.SessionProof{UserID: uid, SessionID: 1, TokenVersion: 0}, []byte("c"), []byte("n"))
 	require.Error(t, err)
 	_, err = h.repo.CreatePasswordReset(ctx, uid, time.Hour, "127.0.0.1", auth.MailDraft{})
 	require.Error(t, err)

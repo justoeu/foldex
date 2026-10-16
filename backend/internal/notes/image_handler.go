@@ -109,8 +109,10 @@ func (h *ImageHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.storage.Upload(r.Context(), key, opt.Data, opt.ContentType); err != nil {
-		_ = h.leases.ForgetMediaLease(context.WithoutCancel(r.Context()), uid, key)
-		h.logger.Error("note image upload: storage upload failed")
+		if ferr := h.leases.ForgetMediaLease(context.WithoutCancel(r.Context()), uid, key); ferr != nil {
+			h.logger.Warn("note image upload: forget media lease failed", "err", ferr)
+		}
+		h.logger.Error("note image upload: storage upload failed", "err", err)
 		httperr.Write(w, httperr.New(http.StatusInternalServerError, "upload_failed", "failed to store image"))
 		return
 	}

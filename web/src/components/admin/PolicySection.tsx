@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
+import { MAX_PASSWORD_BYTES, MIN_PASSWORD_LEN } from '../../auth/types'
 import { savePolicy, type AdminFactorMode, type InstancePolicy } from '../../api/admin'
 import { INSTANCE_POLICY_KEY, useInstancePolicy } from '../../hooks/useInstancePolicy'
 import { apiErrorCode as errCode } from '../../lib/apiError'
@@ -89,7 +90,7 @@ export function PolicySection() {
                 <label className="fx-field">
                   <span className="fx-field-label">{t('admin.policy_password_min')}</span>
                   <input
-                    className="fx-input" type="number" min={8} max={72}
+                    className="fx-input" type="number" min={MIN_PASSWORD_LEN} max={MAX_PASSWORD_BYTES}
                     value={draft.password_min_length}
                     onChange={(e) => patch({ password_min_length: Number(e.target.value) })}
                   />

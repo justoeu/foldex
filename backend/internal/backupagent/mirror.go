@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -231,12 +232,7 @@ func destSuffixKey(srcKey string, encrypted bool) string {
 
 // hasTraversal reports whether any path component of key is "..".
 func hasTraversal(key string) bool {
-	for _, part := range strings.Split(key, "/") {
-		if part == ".." {
-			return true
-		}
-	}
-	return strings.HasPrefix(key, "/")
+	return slices.Contains(strings.Split(key, "/"), "..") || strings.HasPrefix(key, "/")
 }
 
 // copyDelta streams the delta source→destination through a bounded worker
@@ -263,10 +259,7 @@ func (j *MirrorJob) copyDelta(ctx context.Context, delta []ObjectInfo) (int64, e
 }
 
 func copyWorkerCount(n int) int {
-	if n > resourcebudget.BackgroundWorkerConcurrency {
-		return resourcebudget.BackgroundWorkerConcurrency
-	}
-	return n
+	return min(n, resourcebudget.BackgroundWorkerConcurrency)
 }
 
 func (j *MirrorJob) startCopyWorkers(ctx context.Context, cancel context.CancelFunc, workers int, firstErr *error, bytesCopied *atomic.Int64) (chan ObjectInfo, *sync.WaitGroup) {

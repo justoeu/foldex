@@ -54,7 +54,7 @@ func TestExtractedHelpers_SurfaceTxFailures(t *testing.T) {
 	_, err = applyUserUpdateTx(ctx, tx, authctx.UserID(1), nil, nil, nil)
 	require.Error(t, err)
 
-	err = lockPasswordSetTx(ctx, tx, authctx.UserID(1), 0, 1)
+	err = lockPasswordSetTx(ctx, tx, SessionProof{UserID: authctx.UserID(1), SessionID: 0, TokenVersion: 1})
 	require.Error(t, err)
 
 	err = consumeFactorIfPresentTx(ctx, tx, authctx.UserID(1), SecondFactorProof{})
@@ -109,7 +109,9 @@ func TestExtractedHelpers_WalkEachTxStep(t *testing.T) {
 	})
 	walk(func(tx pgx.Tx) { _, _ = lockUserForAdminEditTx(ctx, tx, authctx.UserID(1)) })
 	walk(func(tx pgx.Tx) { _, _ = applyUserUpdateTx(ctx, tx, authctx.UserID(1), nil, nil, nil) })
-	walk(func(tx pgx.Tx) { _ = lockPasswordSetTx(ctx, tx, authctx.UserID(1), 0, 1) })
+	walk(func(tx pgx.Tx) {
+		_ = lockPasswordSetTx(ctx, tx, SessionProof{UserID: authctx.UserID(1), SessionID: 0, TokenVersion: 1})
+	})
 	walk(func(tx pgx.Tx) {
 		_ = consumeFactorIfPresentTx(ctx, tx, authctx.UserID(1), SecondFactorProof{Method: "totp"})
 	})
@@ -124,7 +126,7 @@ func TestExtractedHelpers_WalkEachTxStep(t *testing.T) {
 	walk(func(tx pgx.Tx) { _, _ = diagnoseChallengeSendTx(ctx, tx, 1, time.Minute) })
 	walk(func(tx pgx.Tx) { _ = lockChallengeUser(ctx, tx, 1) })
 	walk(func(tx pgx.Tx) {
-		_ = confirmTOTPRowTx(ctx, tx, authctx.UserID(1), 1, 1, TOTPProof{})
+		_ = confirmTOTPRowTx(ctx, tx, SessionProof{UserID: authctx.UserID(1), SessionID: 1, TokenVersion: 1}, TOTPProof{})
 	})
 	walk(func(tx pgx.Tx) { _ = consumeTOTPProofTx(ctx, tx, authctx.UserID(1), TOTPProof{}) })
 	walk(func(tx pgx.Tx) { _ = replaceRecoveryCodesTx(ctx, tx, authctx.UserID(1), [][]byte{[]byte("ab")}) })
@@ -157,8 +159,12 @@ func TestExtractedHelpers_WalkEachTxStep(t *testing.T) {
 		_ = consumeSecondFactorTx(ctx, tx, 1, SecondFactorProof{Method: MethodEmailOTP, Digest: hash})
 	})
 	walk(func(tx pgx.Tx) { _ = consumeSingleUseTx(ctx, tx, "update x", 1) })
-	walk(func(tx pgx.Tx) { _ = disableFactorTx(ctx, tx, 1, 1, 1, disableKindTOTP) })
-	walk(func(tx pgx.Tx) { _ = disableFactorTx(ctx, tx, 1, 1, 1, disableKindEmail) })
+	walk(func(tx pgx.Tx) {
+		_ = disableFactorTx(ctx, tx, SessionProof{UserID: 1, SessionID: 1, TokenVersion: 1}, disableKindTOTP)
+	})
+	walk(func(tx pgx.Tx) {
+		_ = disableFactorTx(ctx, tx, SessionProof{UserID: 1, SessionID: 1, TokenVersion: 1}, disableKindEmail)
+	})
 	walk(func(tx pgx.Tx) { _ = guardLastAdminTx(ctx, tx, 1) })
 	issue := sessionIssue{hashes: issuedSessionHashes{access: hash, refresh: hash, csrf: hash}}
 	walk(func(tx pgx.Tx) { _, _ = issueSessionTx(ctx, tx, 1, issue, "127.0.0.1", "ua") })

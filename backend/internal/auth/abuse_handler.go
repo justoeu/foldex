@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"foldex/internal/auth/anomaly"
@@ -26,11 +27,18 @@ const logAbusePolicyGet = "abuse policy get"
 // built at three call sites. It mounts INSIDE the /api/admin group, so the
 // role gate has already answered 404 to a non-administrator (INV-043) and the
 // API-token gate has already run.
+// abuseReader is the narrow slice of the auth repository this surface
+// reads: the detector queries over audit_log, nothing else.
+type abuseReader interface {
+	AbuseObservedSince(ctx context.Context) (AbuseObserved, error)
+	Anomalies(ctx context.Context, window time.Duration, th anomaly.Thresholds) ([]anomaly.Anomaly, error)
+}
+
 type AbuseHandler struct {
 	// repo reads the trail. The detector is a query over audit_log, so it
 	// belongs to the repository that owns that table rather than to a second
 	// one pointed at the same rows.
-	repo   *Repository
+	repo   abuseReader
 	policy *abusepolicy.Repository
 	// cache is the live policy every enforcement site reads. A write
 	// invalidates it so the new limits apply on the next request instead of up
@@ -45,7 +53,7 @@ type AbuseHandler struct {
 	grants authgate.Grants
 }
 
-func NewAbuseHandler(repo *Repository, policy *abusepolicy.Repository,
+func NewAbuseHandler(repo abuseReader, policy *abusepolicy.Repository,
 	cache *abusepolicy.Cache, logger *slog.Logger,
 	audit func(*http.Request, string), grants authgate.Grants) *AbuseHandler {
 	return &AbuseHandler{repo: repo, policy: policy, cache: cache,

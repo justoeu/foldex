@@ -12,8 +12,17 @@ import (
 // rotation leaves a consumed-token row, and neither is ever deleted on the hot
 // path — the reuse detector NEEDS consumed tokens to stick around, so a
 // delete-on-rotation would defeat the whole mechanism.
+// sweepStore is the narrow slice of the auth repository the sweeper prunes.
+type sweepStore interface {
+	Sweep(ctx context.Context, retain time.Duration) (int64, error)
+	SweepTwoFactor(ctx context.Context, retain time.Duration) (int64, error)
+	SweepOAuthState(ctx context.Context, retain time.Duration) (int64, error)
+	SweepAPITokens(ctx context.Context, retain time.Duration) (int64, error)
+	SweepAuditLog(ctx context.Context, retain time.Duration) (int64, error)
+}
+
 type Sweeper struct {
-	repo     *Repository
+	repo     sweepStore
 	logger   *slog.Logger
 	interval time.Duration
 	// retain is how long a dead row survives past its expiry. It is generous on
@@ -47,7 +56,7 @@ const (
 	DefaultSweepRetain   = 7 * 24 * time.Hour
 )
 
-func NewSweeper(repo *Repository, logger *slog.Logger, interval, retain time.Duration) *Sweeper {
+func NewSweeper(repo sweepStore, logger *slog.Logger, interval, retain time.Duration) *Sweeper {
 	if interval <= 0 {
 		interval = DefaultSweepInterval
 	}

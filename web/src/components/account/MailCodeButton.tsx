@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { sendStepUpCode } from '../../api/twofa'
+import { accountErrorMessage } from './accountErrors'
 
 /**
  * The "we can mail you a code instead" hint, as pure markup.
@@ -14,15 +15,17 @@ export function MailCodeHint({
   sent,
   busy,
   onSend,
+  error,
 }: Readonly<{
   sent: boolean
   busy: boolean
   onSend: () => void
+  error?: string | null
 }>) {
   const { t } = useTranslation()
   return (
     <span className="fx-field-hint" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-      {sent ? t('twofa.code_sent') : t('twofa.code_accepts_mailed')}
+      {error ?? (sent ? t('twofa.code_sent') : t('twofa.code_accepts_mailed'))}
       {/* Element-qualified class: `.fx-shell button` is (0,1,1) and out-specifies
           a bare component class, which would strip this back to plain prose. */}
       <button type="button" className="fx-field-action" disabled={busy} onClick={onSend}>
@@ -40,17 +43,24 @@ export function MailCodeHint({
  * is a lockout credential, too expensive to spend on a settings change.
  */
 export function MailCodeButton({ disabled }: Readonly<{ disabled: boolean }>) {
+  const { t } = useTranslation()
   const [sent, setSent] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   return (
     <MailCodeHint
       sent={sent}
       busy={disabled || busy}
+      error={error}
       onSend={() => {
         setBusy(true)
+        setError(null)
         sendStepUpCode()
           .then(() => setSent(true))
-          .catch(() => setSent(false))
+          .catch((err: unknown) => {
+            setSent(false)
+            setError(accountErrorMessage(err, t))
+          })
           .finally(() => setBusy(false))
       }}
     />

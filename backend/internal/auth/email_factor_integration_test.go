@@ -673,7 +673,7 @@ func TestDisableMissingFactorIsIdenticalForTotpAndEmail(t *testing.T) {
 
 		assertMissingFactorDisableLeavesEpoch(t, h, uid, c, codes[1],
 			func(sid int64, version int, proof auth.SecondFactorProof) error {
-				return h.repo.DisableTOTP(context.Background(), uid, sid, version, "a good password", proof)
+				return h.repo.DisableTOTP(context.Background(), auth.SessionProof{UserID: uid, SessionID: sid, TokenVersion: version}, "a good password", proof)
 			})
 	})
 
@@ -687,7 +687,7 @@ func TestDisableMissingFactorIsIdenticalForTotpAndEmail(t *testing.T) {
 
 		assertMissingFactorDisableLeavesEpoch(t, h, uid, e.client, e.codes[0],
 			func(sid int64, version int, proof auth.SecondFactorProof) error {
-				return h.repo.DisableEmailFactor(context.Background(), uid, sid, version, proof)
+				return h.repo.DisableEmailFactor(context.Background(), auth.SessionProof{UserID: uid, SessionID: sid, TokenVersion: version}, proof)
 			})
 	})
 }

@@ -98,8 +98,14 @@ const (
 // twice per request, and resolving inside would make that two round-trips for
 // one answer that cannot change between them.
 func (h *Handler) mayRemoveFactor(totpOnly bool, u User, removing factorKind) bool {
-	return twofa.MayRemove(h.require2FAForAdmins, totpOnly, u.Role.IsAdmin(),
-		u.Email2FAEnabled, u.TOTPEnabled, twofa.Factor(removing))
+	return twofa.MayRemove(twofa.RemovalCheck{
+		RequireForAdmins: h.require2FAForAdmins,
+		TOTPOnly:         totpOnly,
+		IsAdmin:          u.Role.IsAdmin(),
+		EmailEnabled:     u.Email2FAEnabled,
+		TOTPEnabled:      u.TOTPEnabled,
+		Removing:         twofa.Factor(removing),
+	})
 }
 
 // emailFactorAvailable reports whether a mailed code may serve as the second
@@ -490,7 +496,7 @@ func (h *Handler) StartTOTP(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
-	if err := h.repo.StartTOTPEnrollment(r.Context(), uid, tokenVersion, sessionID, ciphertext, nonce); err != nil {
+	if err := h.repo.StartTOTPEnrollment(r.Context(), SessionProof{UserID: uid, SessionID: sessionID, TokenVersion: tokenVersion}, ciphertext, nonce); err != nil {
 		if errors.Is(err, ErrTOTPAlreadyConfirmed) {
 			httperr.Write(w, httperr.New(http.StatusConflict, "totp_already_enabled",
 				"two-factor authentication is already enabled; disable it first"))
@@ -732,7 +738,7 @@ func (h *Handler) DisableTOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !h.withStepUp(w, r, p.UserID, user, in.Code, func(proof SecondFactorProof) error {
-		err = h.repo.DisableTOTP(r.Context(), p.UserID, p.SessionID, user.TokenVersion, in.Password, proof)
+		err = h.repo.DisableTOTP(r.Context(), SessionProof{UserID: p.UserID, SessionID: p.SessionID, TokenVersion: user.TokenVersion}, in.Password, proof)
 		if err == nil {
 			h.notifyIfRecovery(r, user, proof)
 		}
@@ -803,7 +809,7 @@ func (h *Handler) RegenerateRecoveryCodes(w http.ResponseWriter, r *http.Request
 		if err != nil {
 			return err
 		}
-		err = h.repo.RegenerateRecoveryCodes(r.Context(), p.UserID, p.SessionID, user.TokenVersion,
+		err = h.repo.RegenerateRecoveryCodes(r.Context(), SessionProof{UserID: p.UserID, SessionID: p.SessionID, TokenVersion: user.TokenVersion},
 			in.Password, proof, hashes)
 		if err == nil {
 			h.notifyIfRecovery(r, user, proof)

@@ -16,8 +16,6 @@ import (
 )
 
 const (
-	screenshotMaxDim         = 1024
-	screenshotQuality        = 82
 	screenshotCaptureTimeout = 70 * time.Second
 	screenshotPolicyTimeout  = 5 * time.Second
 	screenshotStorageTimeout = 10 * time.Second

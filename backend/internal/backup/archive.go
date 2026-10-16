@@ -8,7 +8,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"sort"
+	"maps"
+	"slices"
 )
 
 const (
@@ -101,11 +102,7 @@ func hashArchiveEntries(ctx context.Context, zr *zip.Reader, result *inspectedAr
 }
 
 func archiveDigest(hashes map[string]string) [sha256.Size]byte {
-	names := make([]string, 0, len(hashes))
-	for name := range hashes {
-		names = append(names, name)
-	}
-	sort.Strings(names)
+	names := slices.Sorted(maps.Keys(hashes))
 	h := sha256.New()
 	var size [8]byte
 	for _, name := range names {

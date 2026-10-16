@@ -184,6 +184,37 @@ describe('the activity filters combined', () => {
     expect(screen.getByText('Old link')).toBeInTheDocument()
   })
 
+  // Logins and Clicks are the two chips keyed by ACTION rather than by
+  // entity kind — the mapping most likely to rot, because a login row and a
+  // click row both ride on link-ish shapes. Each chip must keep exactly its
+  // own row; the other two subjects must leave the screen, not just dim.
+  it('filters to logins only, then to clicks only', async () => {
+    const now = new Date().toISOString()
+    state.activity = [
+      row(9, { subject: 'Created link row', action: 'link.created', entity_kind: 'link', created_at: now }),
+      row(8, { subject: 'Signed-in device row', action: 'login.succeeded', entity_kind: null, created_at: now }),
+      row(-7, { subject: 'Clicked bookmark row', action: 'link.clicked', entity_kind: 'link', created_at: now }),
+    ]
+    await openActivity()
+    expect(await screen.findAllByTestId('fx-activity-row')).toHaveLength(3)
+
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: /^logins$/i }))
+    expect(screen.getAllByTestId('fx-activity-row')).toHaveLength(1)
+    expect(screen.getByText('Signed-in device row')).toBeInTheDocument()
+    expect(screen.queryByText('Clicked bookmark row')).not.toBeInTheDocument()
+    expect(screen.queryByText('Created link row')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /^clicks$/i }))
+    expect(screen.getAllByTestId('fx-activity-row')).toHaveLength(1)
+    expect(screen.getByText('Clicked bookmark row')).toBeInTheDocument()
+    expect(screen.queryByText('Signed-in device row')).not.toBeInTheDocument()
+    expect(screen.queryByText('Created link row')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /^all$/i }))
+    expect(screen.getAllByTestId('fx-activity-row')).toHaveLength(3)
+  })
+
   it('distinguishes a filtered miss from an empty account', async () => {
     state.activity = [row(3, { subject: 'Only link', entity_kind: 'link', created_at: new Date().toISOString() })]
     await openActivity()

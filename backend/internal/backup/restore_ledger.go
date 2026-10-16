@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
 
 	"github.com/jackc/pgx/v5"
@@ -198,11 +200,7 @@ func saveRestoreLedger(ctx context.Context, tx pgx.Tx, uid authctx.UserID, diges
 		}
 	}
 
-	keys := make([]string, 0, len(mapping.noteFiles))
-	for sourceKey := range mapping.noteFiles {
-		keys = append(keys, sourceKey)
-	}
-	sort.Strings(keys)
+	keys := slices.Sorted(maps.Keys(mapping.noteFiles))
 	if len(keys) > 0 {
 		_, err = tx.CopyFrom(ctx, pgx.Identifier{"backup_restore_file"},
 			[]string{"user_id", "archive_digest", "mode", "source_key", "target_key"},

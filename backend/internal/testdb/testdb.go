@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	pgmod "github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -409,6 +410,29 @@ func ConvertToGoogleOnly(t *testing.T, pool *pgxpool.Pool, id authctx.UserID, go
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatalf("testdb: convert commit: %v", err)
 	}
+}
+
+// WaitForBlockedSQL waits until at least one session is blocked on a lock
+// while running a query containing fragment. Concurrency tests use it to
+// prove a goroutine is genuinely queued on the row lock before releasing the
+// holder — the deterministic alternative to sleeping and hoping.
+func WaitForBlockedSQL(t *testing.T, pool *pgxpool.Pool, fragment string) {
+	t.Helper()
+	WaitForBlockedSQLCount(t, pool, fragment, 1)
+}
+
+// WaitForBlockedSQLCount is WaitForBlockedSQL for want blocked sessions.
+func WaitForBlockedSQLCount(t *testing.T, pool *pgxpool.Pool, fragment string, want int) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		var blocked int
+		err := pool.QueryRow(context.Background(), `
+			SELECT count(*) FROM pg_stat_activity
+			WHERE datname = current_database() AND wait_event_type = 'Lock'
+			  AND query LIKE '%' || $1 || '%'`, fragment).Scan(&blocked)
+		return err == nil && blocked >= want
+	}, 3*time.Second, 10*time.Millisecond,
+		"%d queries did not block on the expected row lock: %s", want, fragment)
 }
 
 // SetUserStatus flips an account's status, so tests can exercise the disabled

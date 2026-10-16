@@ -1,7 +1,11 @@
 package links
 
-import "testing"
+import (
+	"testing"
+
+	"foldex/internal/testsupport"
+)
 
 func TestS3776_CaptureAndStoreAtMost15(t *testing.T) {
-	assertCognitAtMost(t, cognitScores(t), "(*ScreenshotHandler).CaptureAndStore", 15)
+	testsupport.AssertCognitAtMost(t, testsupport.CognitScores(t), "(*ScreenshotHandler).CaptureAndStore", 15)
 }

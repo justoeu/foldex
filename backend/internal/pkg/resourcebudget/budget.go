@@ -22,8 +22,8 @@ func HTTPHeadroom(poolMaxConns int) int {
 // Callers still floor each knob (preview ≥1, change-check default 2) before
 // this; constructors keep the per-pool clamp as defense in depth.
 func FitBackgroundWorkers(preview, changecheck, poolMaxConns int) (int, int) {
-	preview = capAt(preview, BackgroundWorkerConcurrency)
-	changecheck = capAt(changecheck, BackgroundWorkerConcurrency)
+	preview = min(preview, BackgroundWorkerConcurrency)
+	changecheck = min(changecheck, BackgroundWorkerConcurrency)
 	if preview < 1 {
 		preview = 1
 	}
@@ -45,11 +45,4 @@ func FitBackgroundWorkers(preview, changecheck, poolMaxConns int) (int, int) {
 		p = budget - 1
 	}
 	return p, c
-}
-
-func capAt(n, max int) int {
-	if n > max {
-		return max
-	}
-	return n
 }

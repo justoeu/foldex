@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"slices"
 	"sort"
 
 	"github.com/jackc/pgx/v5"
@@ -331,10 +332,8 @@ func recordLinkCandidateURLs(ogImageURL string, linkCandidates map[string][]int6
 }
 
 func appendUniqueID(ids []int64, id int64) []int64 {
-	for _, existing := range ids {
-		if existing == id {
-			return ids
-		}
+	if slices.Contains(ids, id) {
+		return ids
 	}
 	return append(ids, id)
 }

@@ -216,7 +216,7 @@ func (h *Handler) SetPassword(w http.ResponseWriter, r *http.Request) {
 	if user.HasSecondFactor() {
 		if !h.withStepUp(w, r, p.UserID, user, in.Code, func(p2 SecondFactorProof) error {
 			proof = p2
-			err = h.repo.SetPassword(r.Context(), p.UserID, p.SessionID, user.TokenVersion, in.Password, proof)
+			err = h.repo.SetPassword(r.Context(), SessionProof{UserID: p.UserID, SessionID: p.SessionID, TokenVersion: user.TokenVersion}, in.Password, proof)
 			if err == nil {
 				h.notifyIfRecovery(r, user, proof)
 			}
@@ -225,7 +225,7 @@ func (h *Handler) SetPassword(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		err = h.repo.SetPassword(r.Context(), p.UserID, p.SessionID, user.TokenVersion, in.Password, proof)
+		err = h.repo.SetPassword(r.Context(), SessionProof{UserID: p.UserID, SessionID: p.SessionID, TokenVersion: user.TokenVersion}, in.Password, proof)
 	}
 	if errors.Is(err, ErrPasswordExists) {
 		httperr.Write(w, httperr.New(http.StatusConflict, "password_exists",

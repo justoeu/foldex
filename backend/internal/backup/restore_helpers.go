@@ -180,7 +180,7 @@ func optimizeRestoredNoteMedia(ctx context.Context, entry *zip.File) (imageopt.R
 	if len(data) > maxRestoredNoteMediaBytes {
 		return imageopt.Result{}, fmt.Errorf("note media exceeds restore limit")
 	}
-	optimized, err := imageopt.Optimize(data, imageopt.Options{MaxDim: 1024, Quality: 82})
+	optimized, err := imageopt.OptimizeForStore(data)
 	if err != nil {
 		return imageopt.Result{}, err
 	}

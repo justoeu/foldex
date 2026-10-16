@@ -45,8 +45,7 @@ type EmailOTPMint struct {
 // two failures this design exists to avoid: a pending factor with no code the
 // user can ever supply, or a code charged against the cooldown for a message
 // that was never queued.
-func (r *Repository) StartEmailFactorEnrollment(ctx context.Context, uid authctx.UserID,
-	tokenVersion int, sessionID int64, mint EmailOTPMint) error {
+func (r *Repository) StartEmailFactorEnrollment(ctx context.Context, sp SessionProof, mint EmailOTPMint) error {
 
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -58,7 +57,7 @@ func (r *Repository) StartEmailFactorEnrollment(ctx context.Context, uid authctx
 	err = tx.QueryRow(ctx, `
 		SELECT id FROM app_user
 		WHERE id = $1 AND status = 'active' AND token_version = $2
-		FOR NO KEY UPDATE`, int64(uid), tokenVersion).Scan(&lockedUser)
+		FOR NO KEY UPDATE`, int64(sp.UserID), sp.TokenVersion).Scan(&lockedUser)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrChallengeInvalid
 	}
@@ -67,8 +66,8 @@ func (r *Repository) StartEmailFactorEnrollment(ctx context.Context, uid authctx
 	}
 	// Settings enrollment binds the exact session that supplied the password;
 	// the pre-auth path has no session and passes 0.
-	if sessionID != 0 {
-		if err := requireLiveSessionTx(ctx, tx, uid, sessionID); err != nil {
+	if sp.SessionID != 0 {
+		if err := requireLiveSessionTx(ctx, tx, sp.UserID, sp.SessionID); err != nil {
 			return err
 		}
 	}
@@ -78,7 +77,7 @@ func (r *Repository) StartEmailFactorEnrollment(ctx context.Context, uid authctx
 		SELECT EXISTS (
 			SELECT 1 FROM email_otp
 			WHERE user_id = $1 AND purpose = $2 AND created_at >= now() - $3::interval
-		)`, int64(uid), OTPPurposeEnrollEmail2FA, intervalArg(mint.Cooldown)).Scan(&recent); err != nil {
+		)`, int64(sp.UserID), OTPPurposeEnrollEmail2FA, intervalArg(mint.Cooldown)).Scan(&recent); err != nil {
 		return fmt.Errorf("email factor cooldown: %w", err)
 	}
 	if recent {
@@ -97,7 +96,7 @@ func (r *Repository) StartEmailFactorEnrollment(ctx context.Context, uid authctx
 		    enrollment_token_version = EXCLUDED.enrollment_token_version,
 		    enrollment_session_id    = EXCLUDED.enrollment_session_id
 		WHERE email_factor.confirmed_at IS NULL`,
-		int64(uid), tokenVersion, sessionID)
+		int64(sp.UserID), sp.TokenVersion, sp.SessionID)
 	if err != nil {
 		return fmt.Errorf("start email factor: %w", err)
 	}
@@ -111,13 +110,13 @@ func (r *Repository) StartEmailFactorEnrollment(ctx context.Context, uid authctx
 	if _, err := tx.Exec(ctx, `
 		UPDATE email_otp SET consumed_at = now()
 		WHERE user_id = $1 AND purpose = $2 AND consumed_at IS NULL`,
-		int64(uid), OTPPurposeEnrollEmail2FA); err != nil {
+		int64(sp.UserID), OTPPurposeEnrollEmail2FA); err != nil {
 		return fmt.Errorf("supersede email factor codes: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO email_otp (user_id, purpose, code_hash, expires_at)
 		VALUES ($1, $2, $3, now() + $4::interval)`,
-		int64(uid), OTPPurposeEnrollEmail2FA, mint.Digest, intervalArg(mint.TTL)); err != nil {
+		int64(sp.UserID), OTPPurposeEnrollEmail2FA, mint.Digest, intervalArg(mint.TTL)); err != nil {
 		return fmt.Errorf("insert email factor code: %w", err)
 	}
 	if err := r.enqueueDraft(ctx, tx, mint.Draft, ""); err != nil {
@@ -265,8 +264,7 @@ func finishPreAuthEnrollmentTx(ctx context.Context, tx pgx.Tx, uid authctx.UserI
 // Keeping them on an account with no second factor would leave a standing set
 // of single-use credentials guarding nothing, which is the same reason
 // disabling TOTP deletes them.
-func (r *Repository) DisableEmailFactor(ctx context.Context, uid authctx.UserID,
-	sessionID int64, tokenVersion int, proof SecondFactorProof) error {
+func (r *Repository) DisableEmailFactor(ctx context.Context, sp SessionProof, proof SecondFactorProof) error {
 
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -278,7 +276,7 @@ func (r *Repository) DisableEmailFactor(ctx context.Context, uid authctx.UserID,
 	err = tx.QueryRow(ctx, `
 		SELECT id FROM app_user
 		WHERE id = $1 AND status = 'active' AND token_version = $2
-		FOR NO KEY UPDATE`, int64(uid), tokenVersion).Scan(&lockedUser)
+		FOR NO KEY UPDATE`, int64(sp.UserID), sp.TokenVersion).Scan(&lockedUser)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// ErrSessionInvalid, not ErrChallengeInvalid: this path only ever runs
 		// with a live session, so a stale epoch here means the credentials moved
@@ -291,16 +289,16 @@ func (r *Repository) DisableEmailFactor(ctx context.Context, uid authctx.UserID,
 	if err != nil {
 		return fmt.Errorf("disable email factor lock user: %w", err)
 	}
-	if err := requireLiveSessionTx(ctx, tx, uid, sessionID); err != nil {
+	if err := requireLiveSessionTx(ctx, tx, sp.UserID, sp.SessionID); err != nil {
 		return err
 	}
 	// Spent HERE, in the transaction that removes the factor. A proof consumed
 	// before the write would be gone even when the removal failed, leaving the
 	// user to obtain another one to retry an operation that never happened.
-	if err := consumeSecondFactorTx(ctx, tx, uid, proof); err != nil {
+	if err := consumeSecondFactorTx(ctx, tx, sp.UserID, proof); err != nil {
 		return err
 	}
-	if err := disableFactorTx(ctx, tx, uid, sessionID, tokenVersion, disableKindEmail); err != nil {
+	if err := disableFactorTx(ctx, tx, sp, disableKindEmail); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -328,8 +326,7 @@ const OTPPurposeStepUp2FA = "step_up_2fa"
 // in the handler. A code minted for an account with no e-mail factor would be a
 // mailbox standing in for a factor that was never enrolled — precisely the
 // substitution the enrollment requirement exists to prevent.
-func (r *Repository) CreateStepUpEmailOTP(ctx context.Context, uid authctx.UserID,
-	sessionID int64, tokenVersion int, mint EmailOTPMint) error {
+func (r *Repository) CreateStepUpEmailOTP(ctx context.Context, sp SessionProof, mint EmailOTPMint) error {
 
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -341,7 +338,7 @@ func (r *Repository) CreateStepUpEmailOTP(ctx context.Context, uid authctx.UserI
 	err = tx.QueryRow(ctx, `
 		SELECT id FROM app_user
 		WHERE id = $1 AND status = 'active' AND token_version = $2
-		FOR NO KEY UPDATE`, int64(uid), tokenVersion).Scan(&lockedUser)
+		FOR NO KEY UPDATE`, int64(sp.UserID), sp.TokenVersion).Scan(&lockedUser)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Session-only path; see DisableEmailFactor above.
 		return ErrSessionInvalid
@@ -349,7 +346,7 @@ func (r *Repository) CreateStepUpEmailOTP(ctx context.Context, uid authctx.UserI
 	if err != nil {
 		return fmt.Errorf("step-up otp lock user: %w", err)
 	}
-	if err := requireLiveSessionTx(ctx, tx, uid, sessionID); err != nil {
+	if err := requireLiveSessionTx(ctx, tx, sp.UserID, sp.SessionID); err != nil {
 		return err
 	}
 
@@ -357,7 +354,7 @@ func (r *Repository) CreateStepUpEmailOTP(ctx context.Context, uid authctx.UserI
 	if err := tx.QueryRow(ctx, `
 		SELECT EXISTS (
 			SELECT 1 FROM email_factor WHERE user_id = $1 AND confirmed_at IS NOT NULL
-		)`, int64(uid)).Scan(&enrolled); err != nil {
+		)`, int64(sp.UserID)).Scan(&enrolled); err != nil {
 		return fmt.Errorf("step-up otp factor check: %w", err)
 	}
 	if !enrolled {
@@ -369,7 +366,7 @@ func (r *Repository) CreateStepUpEmailOTP(ctx context.Context, uid authctx.UserI
 		SELECT EXISTS (
 			SELECT 1 FROM email_otp
 			WHERE user_id = $1 AND purpose = $2 AND created_at >= now() - $3::interval
-		)`, int64(uid), OTPPurposeStepUp2FA, intervalArg(mint.Cooldown)).Scan(&recent); err != nil {
+		)`, int64(sp.UserID), OTPPurposeStepUp2FA, intervalArg(mint.Cooldown)).Scan(&recent); err != nil {
 		return fmt.Errorf("step-up otp cooldown: %w", err)
 	}
 	if recent {
@@ -382,13 +379,13 @@ func (r *Repository) CreateStepUpEmailOTP(ctx context.Context, uid authctx.UserI
 	if _, err := tx.Exec(ctx, `
 		UPDATE email_otp SET consumed_at = now()
 		WHERE user_id = $1 AND purpose = $2 AND consumed_at IS NULL`,
-		int64(uid), OTPPurposeStepUp2FA); err != nil {
+		int64(sp.UserID), OTPPurposeStepUp2FA); err != nil {
 		return fmt.Errorf("supersede step-up codes: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO email_otp (user_id, purpose, code_hash, expires_at)
 		VALUES ($1, $2, $3, now() + $4::interval)`,
-		int64(uid), OTPPurposeStepUp2FA, mint.Digest, intervalArg(mint.TTL)); err != nil {
+		int64(sp.UserID), OTPPurposeStepUp2FA, mint.Digest, intervalArg(mint.TTL)); err != nil {
 		return fmt.Errorf("insert step-up code: %w", err)
 	}
 	if err := r.enqueueDraft(ctx, tx, mint.Draft, ""); err != nil {
