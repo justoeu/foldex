@@ -1,4 +1,4 @@
-import { http } from './client'
+import { authenticatedFetch, http } from './client'
 import type { AvailabilityResponse } from './types'
 import type { AuthUser, Permission, Role } from '../auth/types'
 
@@ -453,6 +453,28 @@ export function backupDownloadBudgetKey(runID: number) {
 export async function fetchBackupDownloadBudget(runID: number): Promise<BackupDownloadBudget> {
   const { data } = await http.get<BackupDownloadBudget>(`/api/admin/backup/runs/${runID}/download-budget`)
   return data
+}
+
+/**
+ * Streams the artifact the agent re-encrypted (ADR-48) as a raw Response.
+ *
+ * Fetched through authenticatedFetch rather than the axios client so the
+ * caller can stream the body straight to disk — a dump can be gigabytes and
+ * buffering one as a Blob would hold it all in the tab's memory. The password
+ * travels in the BODY — never a query string, which would land in the access
+ * log of every hop and in the browser's history (INV-036).
+ */
+export async function downloadBackupArtifact(
+  runID: number,
+  password: string,
+  signal?: AbortSignal,
+): Promise<Response> {
+  return authenticatedFetch(`/api/admin/backup/runs/${runID}/download`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password }),
+    signal,
+  })
 }
 
 export type BackupStatusResponse = {

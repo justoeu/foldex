@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"foldex/internal/auth/ipblock"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -19,6 +20,7 @@ import (
 	"foldex/internal/pkg/authgate"
 	"foldex/internal/pkg/clampint"
 	"foldex/internal/pkg/httperr"
+	"foldex/internal/policy"
 	"foldex/internal/roleperm"
 )
 
@@ -41,7 +43,7 @@ type AdminHandler struct {
 	// policy supplies the owner-configurable password floor (ADR-35), for the
 	// one route here that accepts a password. Nil runs the compiled-in floor,
 	// matching Handler.
-	policy PolicyReader
+	policy *policy.Repository
 	// grants is the effective RBAC matrix (ADR-42) and the roleperm store the
 	// matrix screen writes through. Nil at construction means the compiled
 	// matrix, read-only — the screen then reports every role as locked rather
@@ -51,7 +53,7 @@ type AdminHandler struct {
 	// entry takes effect on the next request instead of up to a TTL later. Nil
 	// (tests, and any build without the gate mounted) simply skips the nudge —
 	// the row is written either way and the TTL still picks it up.
-	blocklist *Blocklist
+	blocklist *ipblock.Blocklist
 	// isTrustedProxy answers the rail that refuses to block the address every
 	// request would arrive from behind nginx. Supplied by the router, which
 	// owns the parsed CIDR set.
@@ -63,7 +65,7 @@ type AdminHandler struct {
 // A builder rather than two more constructor parameters, matching
 // links.Handler.WithFolderGate: NewAdminHandler already takes six, and the
 // blocklist is optional in exactly the way the others there are.
-func (h *AdminHandler) WithBlocklist(b *Blocklist, isTrustedProxy func(string) bool) *AdminHandler {
+func (h *AdminHandler) WithBlocklist(b *ipblock.Blocklist, isTrustedProxy func(string) bool) *AdminHandler {
 	h.blocklist = b
 	h.isTrustedProxy = isTrustedProxy
 	return h
@@ -84,7 +86,7 @@ func (h *AdminHandler) validatePassword(ctx context.Context, p string) error {
 // wiring in main.go broke no test. Nil is still accepted — it means "run the
 // compiled-in floor" — but now a caller has to say so.
 func NewAdminHandler(repo *Repository, m mailer.Mailer,
-	logger *slog.Logger, baseURL string, policy PolicyReader,
+	logger *slog.Logger, baseURL string, policy *policy.Repository,
 	grants *roleperm.Repository) *AdminHandler {
 	return &AdminHandler{
 		repo: repo, mailer: m, logger: logger,
@@ -181,7 +183,7 @@ func (h *AdminHandler) Mount(r chi.Router) {
 
 func (h *AdminHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	limit := clampint.Int(r.URL.Query().Get("limit"), adminListCeiling, 1, adminListCeiling)
-	users, err := h.repo.ListUsers(r.Context(), limit, parseAfterID(r.URL.Query().Get("after")))
+	users, err := h.repo.ListUsers(r.Context(), limit, admin.ParseAfterID(r.URL.Query().Get("after")))
 	if err != nil {
 		h.logger.Error("admin list users", "err", err)
 		httperr.Write(w, httperr.ErrInternal)

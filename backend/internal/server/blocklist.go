@@ -1,9 +1,9 @@
 package server
 
 import (
+	"foldex/internal/auth/ipblock"
 	"net/http"
 
-	"foldex/internal/auth"
 	"foldex/internal/pkg/httperr"
 )
 
@@ -14,7 +14,7 @@ import (
 // X-Forwarded-For when — and only when — a configured proxy vouched for it.
 // Normalizing through auth is what keeps "::ffff:1.2.3.4" from being a second
 // address that no block ever matches.
-func clientIP(r *http.Request) string { return auth.NormalizeIP(r.RemoteAddr) }
+func clientIP(r *http.Request) string { return ipblock.Normalize(r.RemoteAddr) }
 
 // blocklistGate refuses requests from a permanently blocked address — ADR-46.
 //
@@ -31,7 +31,7 @@ func clientIP(r *http.Request) string { return auth.NormalizeIP(r.RemoteAddr) }
 // The health endpoint is exempt. It is how a container orchestrator decides
 // whether this process is alive, and an instance that reports itself unhealthy
 // because someone blocked a probe's address would be restarted in a loop.
-func blocklistGate(list *auth.Blocklist) func(http.Handler) http.Handler {
+func blocklistGate(list *ipblock.Blocklist) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/healthz" || !list.Blocked(r.Context(), clientIP(r)) {

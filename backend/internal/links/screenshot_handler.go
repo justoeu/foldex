@@ -86,7 +86,7 @@ const (
 type ScreenshotHandler struct {
 	repo          screenshotRepo
 	screenshotter Screenshotter
-	storage       Uploader
+	storage       ports.Uploader
 	urlPolicy     URLPolicy
 	logger        *slog.Logger
 	folderGate    folders.ContentGate
@@ -128,7 +128,7 @@ func (h *ScreenshotHandler) gateFolder(r *http.Request, l Link) error {
 // NewScreenshotHandler creates a ScreenshotHandler. urlPolicy gates
 // CaptureAndStore — pass preview.IsPublicURL from main.go. A nil policy is
 // treated as "deny all", which fails closed.
-func NewScreenshotHandler(repo screenshotRepo, sc Screenshotter, st Uploader, urlPolicy URLPolicy, logger *slog.Logger) *ScreenshotHandler {
+func NewScreenshotHandler(repo screenshotRepo, sc Screenshotter, st ports.Uploader, urlPolicy URLPolicy, logger *slog.Logger) *ScreenshotHandler {
 	return &ScreenshotHandler{
 		repo:          repo,
 		screenshotter: sc,

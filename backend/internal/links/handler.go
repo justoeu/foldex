@@ -16,12 +16,9 @@ import (
 	"foldex/internal/ports"
 )
 
-// Enqueuer is the preview-worker port (canonical: ports.Enqueuer).
-type Enqueuer = ports.Enqueuer
-
 type Handler struct {
 	repo       *Repository
-	worker     Enqueuer
+	worker     ports.Enqueuer
 	fetcher    MetadataFetcher // optional — disables /url-metadata when nil
 	folderGate folders.ContentGate
 	unlockKey  []byte
@@ -30,7 +27,7 @@ type Handler struct {
 	metaUsers  map[authctx.UserID]int
 }
 
-func NewHandler(repo *Repository, worker Enqueuer) *Handler {
+func NewHandler(repo *Repository, worker ports.Enqueuer) *Handler {
 	return &Handler{repo: repo, worker: worker}
 }
 

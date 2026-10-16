@@ -133,7 +133,7 @@ func TestRestore_SkipRetryAfterFileFailureUsesCommittedMapping(t *testing.T) {
 		Title: "Retry note", BodyHTML: "<p>durable</p>", TagIDs: []int64{tag.ID},
 	})
 	require.NoError(t, err)
-	_, err = notes.NewRepository(pool).SystemViewAndResolve(ctx, note.Slug, uid)
+	_, err = notes.NewRepository(pool).SystemViewAndResolveBySlug(ctx, note.Slug, uid)
 	require.NoError(t, err)
 
 	var archive bytes.Buffer
@@ -338,7 +338,8 @@ func TestRestore_WipeDeletesOnlyOwnedKeysInOneBatch(t *testing.T) {
 		require.NoError(t, err)
 		key := fmt.Sprintf("images/%d.jpg", link.ID)
 		base.objs[key] = []byte("image")
-		require.NoError(t, linkRepo.UpdateOGImage(context.Background(), uid, link.ID, "/api/files/"+key))
+		_, ogErr := linkRepo.ReplaceOGImage(context.Background(), uid, link.ID, "/api/files/"+key)
+		require.NoError(t, ogErr)
 	}
 	svc := backup.NewService(pool, base, discardLogger())
 	zr := exportToReader(t, svc, uid)

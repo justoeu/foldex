@@ -48,9 +48,6 @@ var artifactPrefixes = []string{dumpKeyPrefix, userZipKeyPrefix, mirrorKeyPrefix
 // absurd case so a bug there cannot ship a trivially-openable dump.
 const minArtifactPassphrase = 12
 
-// ErrArtifactKeyRejected is returned for a key outside artifactPrefixes.
-var ErrArtifactKeyRejected = errors.New("backupagent: object key is outside the backup namespaces")
-
 type artifactRequest struct {
 	Key        string `json:"key"`
 	Passphrase string `json:"passphrase"`

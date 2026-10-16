@@ -27,7 +27,7 @@ func (h *Handler) Mount(r chi.Router) {
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	out, err := h.repo.List(r.Context(), authctx.MustUser(r.Context()))
 	if err != nil {
-		httperr.Write(w, repositoryHTTPError(err))
+		httperr.Write(w, HTTPError(err))
 		return
 	}
 	httperr.JSON(w, http.StatusOK, out)
@@ -40,7 +40,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	}
 	t, err := h.repo.Create(r.Context(), authctx.MustUser(r.Context()), in)
 	if err != nil {
-		httperr.Write(w, repositoryHTTPError(err))
+		httperr.Write(w, HTTPError(err))
 		return
 	}
 	// Names the row for the owner's own-activity feed (ADR-46). The
@@ -58,7 +58,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 	}
 	t, err := h.repo.Get(r.Context(), authctx.MustUser(r.Context()), id)
 	if err != nil {
-		httperr.Write(w, repositoryHTTPError(err))
+		httperr.Write(w, HTTPError(err))
 		return
 	}
 	httperr.JSON(w, http.StatusOK, t)
@@ -76,7 +76,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 	}
 	t, err := h.repo.Update(r.Context(), authctx.MustUser(r.Context()), id, in)
 	if err != nil {
-		httperr.Write(w, repositoryHTTPError(err))
+		httperr.Write(w, HTTPError(err))
 		return
 	}
 	// Names the row for the owner's own-activity feed (ADR-46). The
@@ -100,7 +100,7 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		name = existing.Name
 	}
 	if err := h.repo.Delete(r.Context(), authctx.MustUser(r.Context()), id); err != nil {
-		httperr.Write(w, repositoryHTTPError(err))
+		httperr.Write(w, HTTPError(err))
 		return
 	}
 	auditctx.Set(r.Context(), "tag", id, name)

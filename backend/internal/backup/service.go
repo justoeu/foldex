@@ -22,7 +22,7 @@ import (
 )
 
 // RestoreAdvisoryLockKey is the process-wide pg advisory lock for Restore so
-// two concurrent restores cannot interleave wipe/insert (RACE-HER-007). Chosen
+// two concurrent restores cannot interleave wipe/insert. Chosen
 // as a stable int64 unrelated to row ids ('FOLDXRST' as hex-ish constant).
 // Exported so integration tests can hold the lock and assert 409.
 const (

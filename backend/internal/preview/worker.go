@@ -8,8 +8,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	"foldex/internal/imageopt"
 	"foldex/internal/linkimage"
 	"foldex/internal/links"
@@ -40,7 +38,8 @@ type Uploader interface {
 	DeleteObject(ctx context.Context, key string) error
 }
 
-type previewRepository interface {
+// Repo is the narrow persistence surface the preview worker needs.
+type Repo interface {
 	SystemGetPreview(context.Context, int64) (links.PreviewWork, error)
 	SystemUpdatePreviewIfUnchanged(context.Context, int64, time.Time, int64, links.PreviewStatus, links.PreviewPatch) (bool, error)
 	SystemUpdateOGImage(context.Context, int64, string, time.Time, int64) (bool, error)
@@ -55,7 +54,7 @@ type previewJob struct {
 }
 
 type Worker struct {
-	repo       previewRepository
+	repo       Repo
 	fetcher    *Fetcher
 	jobs       chan previewJob
 	concurrent int
@@ -91,7 +90,7 @@ const (
 	recoveryEnqueue enqueueMode = false
 )
 
-func NewWorker(pool *pgxpool.Pool, concurrency int, timeout time.Duration, logger *slog.Logger) *Worker {
+func NewWorker(repo Repo, concurrency int, timeout time.Duration, logger *slog.Logger) *Worker {
 	if concurrency < 1 {
 		concurrency = 1
 	}
@@ -99,7 +98,7 @@ func NewWorker(pool *pgxpool.Pool, concurrency int, timeout time.Duration, logge
 		concurrency = resourcebudget.BackgroundWorkerConcurrency
 	}
 	return &Worker{
-		repo:    links.NewRepository(pool),
+		repo:    repo,
 		fetcher: NewFetcher(timeout),
 		// At most one successor wave waits behind the active workers. Recovery
 		// refills each drained wave, so a deeper queue adds age without throughput.

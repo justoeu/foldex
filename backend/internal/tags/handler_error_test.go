@@ -28,7 +28,7 @@ func TestRepositoryHTTPErrorMapping(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var got *httperr.Error
-			require.ErrorAs(t, repositoryHTTPError(tt.err), &got)
+			require.ErrorAs(t, HTTPError(tt.err), &got)
 			assert.Equal(t, tt.status, got.Status)
 			assert.Equal(t, tt.code, got.Code)
 			assert.Equal(t, tt.message, got.Message)
@@ -36,5 +36,5 @@ func TestRepositoryHTTPErrorMapping(t *testing.T) {
 	}
 
 	unknown := errors.New("database unavailable")
-	assert.ErrorIs(t, repositoryHTTPError(unknown), unknown)
+	assert.ErrorIs(t, HTTPError(unknown), unknown)
 }

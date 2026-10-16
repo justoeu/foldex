@@ -3,6 +3,7 @@ package auth
 import (
 	"bytes"
 	"errors"
+	"foldex/internal/auth/twofa"
 	"image/png"
 	"strings"
 	"testing"
@@ -12,8 +13,8 @@ import (
 	"github.com/pquerna/otp/hotp"
 )
 
-func pinnedParams() totpParams {
-	return totpParams{Algorithm: totpAlgorithm, Digits: totpDigits, Period: totpPeriodSeconds}
+func pinnedParams() twofa.Params {
+	return twofa.Params{Algorithm: twofa.Algorithm, Digits: twofa.Digits, Period: twofa.PeriodSeconds}
 }
 
 // codeFor produces the code for an exact counter, so the tests can address a
@@ -34,7 +35,7 @@ const testSeed = "JBSWY3DPEHPK3PXP"
 func TestVerifyTOTPAcceptsTheCurrentStepAndReturnsItsCounter(t *testing.T) {
 	t.Parallel()
 	now := time.Unix(1_800_000_000, 0)
-	want := now.Unix() / totpPeriodSeconds
+	want := now.Unix() / twofa.PeriodSeconds
 
 	got, err := verifyTOTP(testSeed, codeFor(t, testSeed, want), pinnedParams(), now)
 	if err != nil {
@@ -54,7 +55,7 @@ func TestVerifyTOTPAcceptsTheCurrentStepAndReturnsItsCounter(t *testing.T) {
 func TestVerifyTOTPSkewWindow(t *testing.T) {
 	t.Parallel()
 	now := time.Unix(1_800_000_000, 0)
-	base := now.Unix() / totpPeriodSeconds
+	base := now.Unix() / twofa.PeriodSeconds
 
 	for _, delta := range []int64{-1, 0, 1} {
 		if _, err := verifyTOTP(testSeed, codeFor(t, testSeed, base+delta), pinnedParams(), now); err != nil {
@@ -84,17 +85,17 @@ func TestVerifyTOTPRejectsWrongShapes(t *testing.T) {
 func TestVerifyTOTPRefusesUnsupportedParameters(t *testing.T) {
 	t.Parallel()
 	now := time.Unix(1_800_000_000, 0)
-	valid := codeFor(t, testSeed, now.Unix()/totpPeriodSeconds)
+	valid := codeFor(t, testSeed, now.Unix()/twofa.PeriodSeconds)
 
-	for name, p := range map[string]totpParams{
+	for name, p := range map[string]twofa.Params{
 		"sha256":    {Algorithm: "SHA256", Digits: 6, Period: 30},
 		"8 digits":  {Algorithm: "SHA1", Digits: 8, Period: 30},
 		"60s step":  {Algorithm: "SHA1", Digits: 6, Period: 60},
 		"all empty": {},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := verifyTOTP(testSeed, valid, p, now); !errors.Is(err, ErrTOTPParams) {
-				t.Fatalf("want ErrTOTPParams, got %v", err)
+			if _, err := verifyTOTP(testSeed, valid, p, now); !errors.Is(err, twofa.ErrParams) {
+				t.Fatalf("want twofa.ErrParams, got %v", err)
 			}
 		})
 	}
@@ -105,7 +106,7 @@ func TestVerifyTOTPRefusesUnsupportedParameters(t *testing.T) {
 func TestVerifyTOTPAcceptsFormattedInput(t *testing.T) {
 	t.Parallel()
 	now := time.Unix(1_800_000_000, 0)
-	raw := codeFor(t, testSeed, now.Unix()/totpPeriodSeconds)
+	raw := codeFor(t, testSeed, now.Unix()/twofa.PeriodSeconds)
 
 	for _, formatted := range []string{
 		raw,
@@ -161,9 +162,9 @@ func TestNumericOTP(t *testing.T) {
 		{"1A2B-3C4D-5EFG-6HJK", "", false},
 	}
 	for _, tc := range cases {
-		got, ok := numericOTP(tc.in)
+		got, ok := twofa.NumericOTP(tc.in)
 		if ok != tc.wantOK || got != tc.want {
-			t.Fatalf("numericOTP(%q) = (%q, %v), want (%q, %v)", tc.in, got, ok, tc.want, tc.wantOK)
+			t.Fatalf("twofa.NumericOTP(%q) = (%q, %v), want (%q, %v)", tc.in, got, ok, tc.want, tc.wantOK)
 		}
 	}
 }
@@ -173,23 +174,23 @@ func TestNormalizeRecoveryCode(t *testing.T) {
 	// Case, hyphens and whitespace all vanish, because storage and lookup both
 	// go through this function — a mismatch between them means every code fails.
 	for _, in := range []string{"1A2B3-4C5D6", "1a2b3-4c5d6", " 1a2b3 4c5d6 ", "1A2B34C5D6"} {
-		if got := normalizeRecoveryCode(in); got != "1A2B34C5D6" {
-			t.Fatalf("normalizeRecoveryCode(%q) = %q", in, got)
+		if got := twofa.NormalizeRecovery(in); got != "1A2B34C5D6" {
+			t.Fatalf("twofa.NormalizeRecovery(%q) = %q", in, got)
 		}
 	}
-	if got := normalizeRecoveryCode("---"); got != "" {
+	if got := twofa.NormalizeRecovery("---"); got != "" {
 		t.Fatalf("a separator-only input should normalize to empty, got %q", got)
 	}
 }
 
 func TestNewRecoveryCodesShape(t *testing.T) {
 	t.Parallel()
-	codes, err := newRecoveryCodes(recoveryCodeCount)
+	codes, err := twofa.NewRecoveryCodes(twofa.RecoveryCount)
 	if err != nil {
-		t.Fatalf("newRecoveryCodes: %v", err)
+		t.Fatalf("twofa.NewRecoveryCodes: %v", err)
 	}
-	if len(codes) != recoveryCodeCount {
-		t.Fatalf("got %d codes, want %d", len(codes), recoveryCodeCount)
+	if len(codes) != twofa.RecoveryCount {
+		t.Fatalf("got %d codes, want %d", len(codes), twofa.RecoveryCount)
 	}
 
 	seen := map[string]bool{}
@@ -199,23 +200,23 @@ func TestNewRecoveryCodesShape(t *testing.T) {
 		}
 		seen[c] = true
 
-		if len(c) != recoveryCodeChars+3 || c[4] != '-' || c[9] != '-' || c[14] != '-' {
+		if len(c) != twofa.CodeChars+3 || c[4] != '-' || c[9] != '-' || c[14] != '-' {
 			t.Fatalf("code %q is not grouped 4-4-4-4 with hyphens", c)
 		}
 		// The alphabet excludes I, L, O and U precisely because they are the
 		// characters people mistranscribe from paper.
 		for _, r := range strings.ReplaceAll(c, "-", "") {
-			if !strings.ContainsRune(recoveryAlphabet, r) {
+			if !strings.ContainsRune(twofa.Alphabet, r) {
 				t.Fatalf("code %q contains %q, outside the alphabet", c, r)
 			}
 		}
 		// And a code must never be mistaken for a numeric one.
-		if _, ok := numericOTP(c); ok {
+		if _, ok := twofa.NumericOTP(c); ok {
 			t.Fatalf("recovery code %q was classified as a six-digit code", c)
 		}
 	}
-	if recoveryCodeChars*5 != 80 {
-		t.Fatalf("recovery codes carry %d bits, want 80", recoveryCodeChars*5)
+	if twofa.CodeChars*5 != 80 {
+		t.Fatalf("recovery codes carry %d bits, want 80", twofa.CodeChars*5)
 	}
 }
 
@@ -223,11 +224,11 @@ func TestNewRecoveryCodesShape(t *testing.T) {
 // generator that repeats itself would hand one user another's way in.
 func TestNewRecoveryCodesAreUnpredictable(t *testing.T) {
 	t.Parallel()
-	a, err := newRecoveryCodes(recoveryCodeCount)
+	a, err := twofa.NewRecoveryCodes(twofa.RecoveryCount)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := newRecoveryCodes(recoveryCodeCount)
+	b, err := twofa.NewRecoveryCodes(twofa.RecoveryCount)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,9 +245,9 @@ func TestNewRecoveryCodesAreUnpredictable(t *testing.T) {
 
 func TestNewTOTPSecretAndQR(t *testing.T) {
 	t.Parallel()
-	key, err := newTOTPSecret("Foldex (test)", "user@example.com")
+	key, err := twofa.NewSecret("Foldex (test)", "user@example.com")
 	if err != nil {
-		t.Fatalf("newTOTPSecret: %v", err)
+		t.Fatalf("twofa.NewSecret: %v", err)
 	}
 	if key.Secret() == "" {
 		t.Fatal("empty seed")
@@ -257,9 +258,9 @@ func TestNewTOTPSecretAndQR(t *testing.T) {
 		t.Fatalf("otpauth URL does not carry the account: %s", key.URL())
 	}
 
-	img, err := totpQRPNG(key, 200)
+	img, err := twofa.QRPNG(key, 200)
 	if err != nil {
-		t.Fatalf("totpQRPNG: %v", err)
+		t.Fatalf("twofa.QRPNG: %v", err)
 	}
 	if _, err := png.Decode(bytes.NewReader(img)); err != nil {
 		t.Fatalf("QR is not a decodable PNG: %v", err)
@@ -274,7 +275,7 @@ func TestOTPAuthURLRoundTripsThroughTheKeyParser(t *testing.T) {
 	const issuer = "Foldex (test)"
 	const account = "user@example.com"
 
-	key, err := otp.NewKeyFromURL(otpauthURL(issuer, account, testSeed))
+	key, err := otp.NewKeyFromURL(twofa.URL(issuer, account, testSeed))
 	if err != nil {
 		t.Fatalf("rebuilt URL does not parse: %v", err)
 	}
@@ -288,10 +289,10 @@ func TestOTPAuthURLRoundTripsThroughTheKeyParser(t *testing.T) {
 
 func TestNormalizeOTPCodeKeepsOnlyDigits(t *testing.T) {
 	t.Parallel()
-	if got := normalizeOTPCode(" 1a2-3 4b5.6 "); got != "123456" {
-		t.Fatalf("normalizeOTPCode = %q", got)
+	if got := twofa.NormalizeOTP(" 1a2-3 4b5.6 "); got != "123456" {
+		t.Fatalf("twofa.NormalizeOTP = %q", got)
 	}
-	if got := normalizeOTPCode("abc"); got != "" {
+	if got := twofa.NormalizeOTP("abc"); got != "" {
 		t.Fatalf("expected empty, got %q", got)
 	}
 }

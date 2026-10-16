@@ -5,6 +5,7 @@ package backupagent
 import (
 	"context"
 	"filippo.io/age"
+	"foldex/internal/backupjobs"
 	"testing"
 	"time"
 
@@ -32,21 +33,21 @@ func TestAgent_SyncPicksUpScheduleRowsLive(t *testing.T) {
 	agent.Start(runCtx)
 	defer agent.Stop()
 
-	assert.Equal(t, "env", agent.timing(JobDump).Source)
-	assert.Equal(t, "03:30", agent.timing(JobDump).String())
+	assert.Equal(t, "env", agent.timing(backupjobs.JobDump).Source)
+	assert.Equal(t, "03:30", agent.timing(backupjobs.JobDump).String())
 
-	store := NewScheduleStore(pool)
-	require.NoError(t, store.Upsert(ctx, JobDump, JobConfig{
+	store := backupjobs.NewScheduleStore(pool)
+	require.NoError(t, store.Upsert(ctx, backupjobs.JobDump, backupjobs.JobConfig{
 		Mode: "times", Times: []string{"06:00", "18:00"},
 		Weekdays: []string{"mon", "tue", "wed", "thu", "fri"}}, 0))
 	require.Eventually(t, func() bool {
-		return agent.timing(JobDump).Source == "db"
+		return agent.timing(backupjobs.JobDump).Source == "db"
 	}, 15*time.Second, 100*time.Millisecond, "the sync loop must adopt the row without a restart")
-	assert.Equal(t, "06:00, 18:00 · mon, tue, wed, thu, fri", agent.timing(JobDump).String())
+	assert.Equal(t, "06:00, 18:00 · mon, tue, wed, thu, fri", agent.timing(backupjobs.JobDump).String())
 
-	require.NoError(t, store.Delete(ctx, JobDump))
+	require.NoError(t, store.Delete(ctx, backupjobs.JobDump))
 	require.Eventually(t, func() bool {
-		return agent.timing(JobDump).Source == "env"
+		return agent.timing(backupjobs.JobDump).Source == "env"
 	}, 15*time.Second, 100*time.Millisecond, "deleting the row must fall the agenda back to env")
 
 	// The heartbeat is written by the same loop — the band's "agent last
@@ -54,8 +55,8 @@ func TestAgent_SyncPicksUpScheduleRowsLive(t *testing.T) {
 	state, seen, err := store.AgentSeen(ctx)
 	require.NoError(t, err)
 	require.True(t, seen)
-	assert.True(t, state.Jobs[JobDump].Capable)
-	assert.Equal(t, "env", state.Jobs[JobDump].Source)
+	assert.True(t, state.Jobs[backupjobs.JobDump].Capable)
+	assert.Equal(t, "env", state.Jobs[backupjobs.JobDump].Source)
 }
 
 // The heartbeat is where the admin form learns the ENV agenda. Without the
@@ -77,15 +78,15 @@ func TestAgent_HeartbeatCarriesTheEnvBaseline(t *testing.T) {
 	agent.Start(runCtx)
 	defer agent.Stop()
 
-	state, seen, err := NewScheduleStore(pool).AgentSeen(ctx)
+	state, seen, err := backupjobs.NewScheduleStore(pool).AgentSeen(ctx)
 	require.NoError(t, err)
 	require.True(t, seen)
 
-	baseline := state.Jobs[JobDump].Baseline
+	baseline := state.Jobs[backupjobs.JobDump].Baseline
 	assert.Equal(t, "times", baseline.Mode)
 	assert.Equal(t, []string{"03:30"}, baseline.Times)
 	assert.Equal(t, allDays(), baseline.Weekdays)
-	assert.NoError(t, ValidateJobConfig(JobDump, baseline),
+	assert.NoError(t, backupjobs.ValidateJobConfig(backupjobs.JobDump, baseline),
 		"the form opens on this document and saves it back — it has to pass the floors")
 }
 
@@ -109,7 +110,7 @@ func TestAgent_HeartbeatCarriesTheJanitorThreshold(t *testing.T) {
 	agent.Start(runCtx)
 	defer agent.Stop()
 
-	state, seen, err := NewScheduleStore(pool).AgentSeen(ctx)
+	state, seen, err := backupjobs.NewScheduleStore(pool).AgentSeen(ctx)
 	require.NoError(t, err)
 	require.True(t, seen)
 	assert.Equal(t, 137, state.StaleRunMin,
@@ -138,15 +139,15 @@ func TestAgent_HeartbeatNamesTheExternalDestination(t *testing.T) {
 	agent.Start(runCtx)
 	defer agent.Stop()
 
-	state, seen, err := NewScheduleStore(pool).AgentSeen(ctx)
+	state, seen, err := backupjobs.NewScheduleStore(pool).AgentSeen(ctx)
 	require.NoError(t, err)
 	require.True(t, seen)
 
 	for job, prefix := range map[string]string{
-		JobDump:    "backups/dump/",
-		JobDrill:   "backups/dump/",
-		JobMirror:  "backups/rustfs/",
-		JobUserZip: "backups/users/",
+		backupjobs.JobDump:    "backups/dump/",
+		backupjobs.JobDrill:   "backups/dump/",
+		backupjobs.JobMirror:  "backups/rustfs/",
+		backupjobs.JobUserZip: "backups/users/",
 	} {
 		dest := state.Jobs[job].Destination
 		require.NotNil(t, dest, "job %s writes to or reads from the external bucket", job)
@@ -213,12 +214,12 @@ func TestScheduleLoop_WakesAJobEnabledAfterStart(t *testing.T) {
 	// minutes inside a 10s test — the exact flake CI caught.
 	agent.catchUpJitter = func() time.Duration { return 0 }
 	executed := make(chan struct{}, 4)
-	agent.jobs = []jobSpec{{name: JobDump, run: func(context.Context, int64) (*Artifact, map[string]any, string, error) {
+	agent.jobs = []jobSpec{{name: backupjobs.JobDump, run: func(context.Context, int64) (*backupjobs.Artifact, map[string]any, string, error) {
 		select {
 		case executed <- struct{}{}:
 		default:
 		}
-		return &Artifact{Key: "woken", Bytes: 1, SHA256: "aa"}, nil, "", nil
+		return &backupjobs.Artifact{Key: "woken", Bytes: 1, SHA256: "aa"}, nil, "", nil
 	}}}
 
 	runCtx, cancel := context.WithCancel(ctx)
@@ -226,8 +227,8 @@ func TestScheduleLoop_WakesAJobEnabledAfterStart(t *testing.T) {
 	agent.Start(runCtx)
 	defer agent.Stop()
 
-	require.False(t, agent.timing(JobDump).Enabled(), "precondition: the job starts with no schedule")
-	agent.forceTiming(JobDump, Timing{Interval: 60 * time.Millisecond, Source: "env"})
+	require.False(t, agent.timing(backupjobs.JobDump).Enabled(), "precondition: the job starts with no schedule")
+	agent.forceTiming(backupjobs.JobDump, backupjobs.Timing{Interval: 60 * time.Millisecond, Source: "env"})
 
 	select {
 	case <-executed:
@@ -248,14 +249,14 @@ func TestBootCatchUp_RunsANeverSucceededJob(t *testing.T) {
 	agent.skewWarning = nil
 	agent.catchUpJitter = func() time.Duration { return 0 }
 	executed := make(chan struct{}, 4)
-	agent.jobs = []jobSpec{{name: JobDump, run: func(context.Context, int64) (*Artifact, map[string]any, string, error) {
+	agent.jobs = []jobSpec{{name: backupjobs.JobDump, run: func(context.Context, int64) (*backupjobs.Artifact, map[string]any, string, error) {
 		select {
 		case executed <- struct{}{}:
 		default:
 		}
-		return &Artifact{Key: "catchup", Bytes: 1, SHA256: "aa"}, nil, "", nil
+		return &backupjobs.Artifact{Key: "catchup", Bytes: 1, SHA256: "aa"}, nil, "", nil
 	}}}
-	agent.forceTiming(JobDump, Timing{Interval: time.Hour, Source: "env"})
+	agent.forceTiming(backupjobs.JobDump, backupjobs.Timing{Interval: time.Hour, Source: "env"})
 
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()

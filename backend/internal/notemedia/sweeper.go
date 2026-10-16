@@ -16,14 +16,20 @@ type Sweeper struct {
 	logger   *slog.Logger
 	interval time.Duration
 	limit    int
+	done     chan struct{}
 }
 
 func NewSweeper(pool *pgxpool.Pool, storage ObjectDeleter, logger *slog.Logger) *Sweeper {
-	return &Sweeper{pool: pool, storage: storage, logger: logger, interval: defaultSweepInterval, limit: DeleteBatchMax}
+	return &Sweeper{pool: pool, storage: storage, logger: logger, interval: defaultSweepInterval, limit: DeleteBatchMax, done: make(chan struct{})}
 }
+
+// Wait blocks until the sweep goroutine exits (context cancelled). Safe
+// before Start only if Start is never called — callers gate on non-nil.
+func (s *Sweeper) Wait() { <-s.done }
 
 func (s *Sweeper) Start(ctx context.Context) {
 	go func() {
+		defer close(s.done)
 		ticker := time.NewTicker(s.interval)
 		defer ticker.Stop()
 		for {

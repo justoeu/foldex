@@ -30,6 +30,7 @@ import (
 	"foldex/internal/pkg/httperr"
 	"foldex/internal/pkg/logsafe"
 	"foldex/internal/policy"
+	"foldex/internal/ports"
 	"foldex/internal/push"
 	"foldex/internal/roleperm"
 	"foldex/internal/settings"
@@ -57,11 +58,11 @@ const (
 // pulling in the preview package's Docker-bound dependencies.
 type Deps struct {
 	Pool           *pgxpool.Pool
-	Worker         links.Enqueuer
+	Worker         ports.Enqueuer
 	Logger         *slog.Logger
 	Config         config.Config
 	Screenshotter  links.Screenshotter  // optional — nil disables the endpoint
-	Storage        links.Uploader       // optional — nil disables the endpoint
+	Storage        ports.Uploader       // optional — nil disables the endpoint
 	ScreenshotURL  links.URLPolicy      // required iff Screenshotter is set — gates the SSRF surface
 	StorageStatter stats.StorageStatter // optional — surfaces bucket usage on /stats/storage
 	StorageBucket  backup.StorageBucket // optional — nil keeps /api/backup/* mounted as 503 storage_unavailable

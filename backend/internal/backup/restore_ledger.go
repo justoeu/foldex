@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 
@@ -38,7 +39,7 @@ func loadRestoreLedger(ctx context.Context, db restoreLedgerQuerier, uid authctx
 		int64(uid), digest[:], string(mode)).Scan(
 		&insertedJSON, &skippedJSON, &warningsJSON, &filesJSON, &ledger.complete)
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return ledger, false, nil
 		}
 		return ledger, false, fmt.Errorf("load restore ledger: %w", err)

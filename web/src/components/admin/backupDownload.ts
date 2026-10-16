@@ -1,4 +1,4 @@
-import { authenticatedFetch } from '../../api/client'
+import { downloadBackupArtifact } from '../../api/admin'
 
 /**
  * A dump can be gigabytes. Buffering one as a Blob holds the whole thing in
@@ -25,7 +25,7 @@ type SaveFilePicker = (options: {
 }) => Promise<{ createWritable: () => Promise<{ getWriter: () => ArtifactWriter }> }>
 
 export type BackupDownloadDeps = {
-  fetchImpl?: typeof authenticatedFetch
+  downloadArtifact?: typeof downloadBackupArtifact
   picker?: SaveFilePicker
   createObjectURL?: (blob: Blob) => string
   revokeObjectURL?: (url: string) => void
@@ -45,10 +45,8 @@ function encryptedName(filename: string): string {
 }
 
 /**
- * Saves the artifact the agent re-encrypted (ADR-48).
- *
- * The password travels in the BODY — never a query string, which would land in
- * the access log of every hop and in the browser's history (INV-036).
+ * Saves the artifact the agent re-encrypted (ADR-48), fetched via
+ * downloadBackupArtifact in api/admin (body-carried password, INV-036).
  */
 export async function saveBackupArtifact(
   runID: number,
@@ -70,13 +68,8 @@ function requestArtifact(
   password: string,
   deps: BackupDownloadDeps,
 ): Promise<Response> {
-  const fetchImpl = deps.fetchImpl ?? authenticatedFetch
-  return fetchImpl(`/api/admin/backup/runs/${runID}/download`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ password }),
-    signal: AbortSignal.timeout(ARTIFACT_TIMEOUT_MS),
-  })
+  const downloadArtifact = deps.downloadArtifact ?? downloadBackupArtifact
+  return downloadArtifact(runID, password, AbortSignal.timeout(ARTIFACT_TIMEOUT_MS))
 }
 
 async function artifactError(response: Response): Promise<Error> {

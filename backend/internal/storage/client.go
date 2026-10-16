@@ -454,18 +454,6 @@ func (c *Client) PutObjectStream(ctx context.Context, key string, r io.Reader, s
 	return nil
 }
 
-// ObjectExists returns true if `key` is present in the bucket.
-func (c *Client) ObjectExists(ctx context.Context, key string) (bool, error) {
-	_, err := c.mc.StatObject(ctx, c.bucket, key, minio.StatObjectOptions{})
-	if err == nil {
-		return true, nil
-	}
-	if minio.ToErrorResponse(err).Code == "NoSuchKey" {
-		return false, nil
-	}
-	return false, fmt.Errorf("storage: stat %q: %w", key, err)
-}
-
 // ExistingObjects resolves an explicit key set with one paginated LIST per
 // top-level namespace instead of one HEAD request per key. Only exact requested
 // keys are returned; listing a shared flat namespace never grants ownership.
@@ -566,46 +554,4 @@ func (c *Client) DeleteObjects(ctx context.Context, keys []string) error {
 		c.invalidateStatsCache()
 	}
 	return firstErr
-}
-
-// DeleteObjectsPrefix removes every object under `prefix`. Used by
-// restore-wipe to clear the bucket before re-uploading.
-func (c *Client) DeleteObjectsPrefix(ctx context.Context, prefix string) error {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	keysCh := make(chan minio.ObjectInfo)
-	listErr := make(chan error, 1)
-	go func() {
-		defer close(keysCh)
-		listCh := c.mc.ListObjects(ctx, c.bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: true})
-		for obj := range listCh {
-			if obj.Err != nil {
-				// A listing error means the delete set is incomplete;
-				// surface it instead of reporting a partial wipe as done.
-				listErr <- obj.Err
-				return
-			}
-			// ctx-aware send so we don't leak this goroutine if RemoveObjects
-			// returns early (cancellation, partial failure) and stops draining
-			// keysCh.
-			select {
-			case keysCh <- obj:
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-	errCh := c.mc.RemoveObjects(ctx, c.bucket, keysCh, minio.RemoveObjectsOptions{})
-	for e := range errCh {
-		if e.Err != nil {
-			return fmt.Errorf("storage: delete prefix %q (%s): %w", prefix, e.ObjectName, e.Err)
-		}
-	}
-	select {
-	case err := <-listErr:
-		return fmt.Errorf("storage: list prefix %q: %w", prefix, err)
-	default:
-	}
-	c.invalidateStatsCache()
-	return nil
 }

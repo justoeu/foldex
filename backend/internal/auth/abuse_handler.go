@@ -3,6 +3,7 @@ package auth
 import (
 	"encoding/json"
 	"fmt"
+	"foldex/internal/auth/anomaly"
 	"log/slog"
 	"net/http"
 	"time"
@@ -179,13 +180,13 @@ func (h *AbuseHandler) Anomalies(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
-	window, label, ok := anomalyWindow(r.URL.Query().Get("window"), p.AnomalyWindowMinutes)
+	window, label, ok := anomaly.Window(r.URL.Query().Get("window"), p.AnomalyWindowMinutes)
 	if !ok {
 		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_window",
 			"window must be 15m, 1h, 24h or 7d"))
 		return
 	}
-	th := AnomalyThresholds{
+	th := anomaly.Thresholds{
 		SprayAccounts:  p.AnomalySprayAccounts,
 		HammerFailures: p.AnomalyHammerFailures,
 		WindowMinutes:  int(window / time.Minute),
@@ -198,9 +199,9 @@ func (h *AbuseHandler) Anomalies(w http.ResponseWriter, r *http.Request) {
 	}
 	// Never nil: the screen renders a list, and `null` would make it render
 	// nothing rather than its quiet state.
-	rows := rankAnomalies(found, maxAnomalyRows, h.logger)
+	rows := anomaly.Rank(found, anomaly.MaxRows, h.logger)
 	if rows == nil {
-		rows = []Anomaly{}
+		rows = []anomaly.Anomaly{}
 	}
 	httperr.JSON(w, http.StatusOK, map[string]any{
 		"window":     label,

@@ -74,7 +74,7 @@ const (
 	// Installing and removing permanent IP blocks (ADR-46). Owner-only and
 	// LOCKED, for a reason the other two do not have: this is the only
 	// permission whose misuse can make the instance unreachable — including to
-	// the person holding it. The rails in auth.ValidateBlockIP refuse the
+	// the person holding it. The rails in ipblock.ValidateBlockIP refuse the
 	// addresses that would do it by accident; keeping the grant on the seat
 	// that cannot be locked out of its own instance is what covers the rest.
 	PermInstanceIPBlock Permission = "instance.ip_block"

@@ -36,6 +36,42 @@ func TestOrchestrationDoesNotImportHTTPDelivery(t *testing.T) {
 	}
 }
 
+// hasPoolCall reports whether the file calls Exec/Query/QueryRow/Begin on a
+// receiver chain containing a `.pool` selector.
+func hasPoolCall(f *ast.File) bool {
+	found := false
+	ast.Inspect(f, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		switch sel.Sel.Name {
+		case "Exec", "Query", "QueryRow", "Begin", "BeginTx":
+		default:
+			return true
+		}
+		for x := sel.X; ; {
+			inner, ok := x.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			if inner.Sel.Name == "pool" {
+				found = true
+				return false
+			}
+			x = inner.X
+		}
+	})
+	return found
+}
+
 func persistenceHTTPHits(root string, skip func(rel string) bool) ([]string, error) {
 	forbidden := map[string]struct{}{
 		"net/http":                    {},
@@ -77,7 +113,17 @@ func persistenceHTTPHits(root string, skip func(rel string) bool) ([]string, err
 			}
 		}
 		if !usesPGX {
-			return nil
+			// A file can run SQL through a pool typed in a sibling file
+			// without importing pgx itself (auth/audit.go did exactly
+			// that). Detect persistence by AST pool calls and by the
+			// repository* filename as well.
+			full, perr := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+			if perr != nil {
+				return perr
+			}
+			if !hasPoolCall(full) && !strings.HasPrefix(filepath.Base(path), "repository") {
+				return nil
+			}
 		}
 		for p := range forbidden {
 			if _, found := imports[p]; found {
@@ -118,6 +164,17 @@ func TestPersistenceScanFlagsAFileNotNamedRepository(t *testing.T) {
 	hits, err := persistenceHTTPHits(dir, nil)
 	require.NoError(t, err)
 	require.NotEmpty(t, hits, "a pgx+net/http file not named repository* must fail the scan")
+}
+
+func TestPersistenceScanFlagsPoolCallWithoutPGXImport(t *testing.T) {
+	dir := t.TempDir()
+	src := "package p\nimport (\n\t\"context\"\n\t\"net/http\"\n)\n" +
+		"type Repository struct{ pool interface{ Exec(context.Context, string) error } }\n" +
+		"func (r *Repository) Touch(ctx context.Context) error { var _ *http.Request; return r.pool.Exec(ctx, \"DELETE FROM t\") }\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "audit.go"), []byte(src), 0o644))
+	hits, err := persistenceHTTPHits(dir, nil)
+	require.NoError(t, err)
+	require.NotEmpty(t, hits, "a pool-calling file without a pgx import must fail the scan")
 }
 
 func TestDeliveryDoesNotImportStorageAdapters(t *testing.T) {

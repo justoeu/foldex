@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"foldex/internal/auth/anomaly"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -32,10 +33,10 @@ func TestGodPackageSplit_AnomalyAndIPBlockAreSubpackages(t *testing.T) {
 }
 
 func TestAnomalySeverityMatchesTrailVocab(t *testing.T) {
-	if AnomalySeverityCritical != SeverityCritical {
-		t.Fatalf("critical %q != trail %q", AnomalySeverityCritical, SeverityCritical)
+	if anomaly.SeverityCritical != SeverityCritical {
+		t.Fatalf("critical %q != trail %q", anomaly.SeverityCritical, SeverityCritical)
 	}
-	if AnomalySeverityWarn != SeverityWarning {
-		t.Fatalf("warn %q != trail %q", AnomalySeverityWarn, SeverityWarning)
+	if anomaly.SeverityWarning != SeverityWarning {
+		t.Fatalf("warn %q != trail %q", anomaly.SeverityWarning, SeverityWarning)
 	}
 }

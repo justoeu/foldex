@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
-import { act, fireEvent, screen, waitFor } from '@testing-library/react'
+import { act, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { TwoFactorScreen } from './TwoFactorScreen'
 import { renderWithProviders } from '../../test/renderWithProviders'

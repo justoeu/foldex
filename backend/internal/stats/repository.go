@@ -223,7 +223,7 @@ func (r *Repository) Summary(ctx context.Context, uid authctx.UserID) (Summary, 
 
 	// Top host: pre-aggregate clicks per entity once, then join link and
 	// run regexp_replace once per link (not once per click_log row) —
-	// N1-NEX-007. lower(l.url) folds scheme AND host case: url.Parse
+	// lower(l.url) folds scheme AND host case: url.Parse
 	// lowercases only the scheme, so mixed-case spellings of the same
 	// site reach the aggregation and would otherwise split into their
 	// own "host" buckets (the whole URL surfacing as top_host).

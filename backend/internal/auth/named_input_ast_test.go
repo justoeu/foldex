@@ -39,23 +39,23 @@ func TestEnrollmentCompleteTakesNamedInput(t *testing.T) {
 	totp := mustFindMethod(t, "Repository", "CompleteTOTPEnrollment")
 	email := mustFindMethod(t, "Repository", "CompleteEmailFactorEnrollment")
 
-	totpParams := flattenParamTypes(totp.Type.Params)
+	totpPs := flattenParamTypes(totp.Type.Params)
 	emailParams := flattenParamTypes(email.Type.Params)
-	require.GreaterOrEqual(t, len(totpParams), 2)
+	require.GreaterOrEqual(t, len(totpPs), 2)
 	require.GreaterOrEqual(t, len(emailParams), 2)
 
-	require.LessOrEqual(t, len(totpParams), 3,
-		"CompleteTOTPEnrollment must take named input, not a positional clump: %v", typeNames(totpParams))
+	require.LessOrEqual(t, len(totpPs), 3,
+		"CompleteTOTPEnrollment must take named input, not a positional clump: %v", typeNames(totpPs))
 	require.LessOrEqual(t, len(emailParams), 3,
 		"CompleteEmailFactorEnrollment must take named input, not a positional clump: %v", typeNames(emailParams))
-	require.Equal(t, 0, maxAdjacentStrings(totpParams),
-		"CompleteTOTPEnrollment must not take adjacent strings: %v", typeNames(totpParams))
+	require.Equal(t, 0, maxAdjacentStrings(totpPs),
+		"CompleteTOTPEnrollment must not take adjacent strings: %v", typeNames(totpPs))
 	require.Equal(t, 0, maxAdjacentStrings(emailParams),
 		"CompleteEmailFactorEnrollment must not take adjacent strings: %v", typeNames(emailParams))
 
-	totpIn := sharedStructParam(totpParams)
+	totpIn := sharedStructParam(totpPs)
 	emailIn := sharedStructParam(emailParams)
-	require.NotEmpty(t, totpIn, "CompleteTOTPEnrollment has no named struct param: %v", typeNames(totpParams))
+	require.NotEmpty(t, totpIn, "CompleteTOTPEnrollment has no named struct param: %v", typeNames(totpPs))
 	require.Equal(t, totpIn, emailIn,
 		"TOTP and e-mail enrollment must share one named input, got %q vs %q", totpIn, emailIn)
 	require.Equal(t, "EnrollmentComplete", totpIn)

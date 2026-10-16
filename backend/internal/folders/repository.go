@@ -19,7 +19,7 @@ import (
 )
 
 // maxSerializationRetries bounds SERIALIZABLE update retries on SQLSTATE 40001
-// (RACE-HER-008). Concurrent nest moves under load surface as transparent
+//. Concurrent nest moves under load surface as transparent
 // retries instead of 500 to the client.
 const maxSerializationRetries = 3
 
@@ -87,7 +87,7 @@ func (r *Repository) PasswordHashFor(ctx context.Context, uid authctx.UserID, id
 //	ParentID = &N         → only folders whose parent_id = N
 //	both zero/false       → no scoping, flat list
 //	Slim = true           → skip preview LATERALs (and counts); metadata only
-//	                        for pickers / flat tree consumers (N1-NEX-006)
+//	                        for pickers / flat tree consumers
 type ListQuery struct {
 	RootOnly bool
 	ParentID *int64
@@ -542,7 +542,7 @@ func checkHintNotPassword(ctx context.Context, tx pgx.Tx, uid authctx.UserID, id
 }
 
 // ResetPasswordByMaster clears a folder's password AND hint after re-proving
-// the master under the user-row lock (RACE-HER-002). The handler may have
+// the master under the user-row lock. The handler may have
 // already bcrypt'd; this CAS is what stops a proof of hash H1 from clearing
 // folders after a concurrent rotation to H2. The unlock-token HMAC input
 // includes password_hash, so nulling it invalidates outstanding tokens.
@@ -665,20 +665,16 @@ func (e *descendantProtectedError) Unwrap() error {
 	return ErrDescendantProtected
 }
 
-// DeleteCascade removes the folder AND every link AND note inside it —
+// deleteCascade removes the folder AND every link AND note inside it —
 // recursively through any subfolder tree. Wrapped in a transaction so a
 // failure on any step rolls back together. `link_tag` and `click_log` rows
 // for the deleted entities are purged explicitly — migration 000014
 // polymorphized both tables and DROPPED their FKs, so cleanup is app-level
 // (same as links.Repository.Delete / notes.Repository.Delete).
 //
-// Subtree ids are materialized once into a temp table (N1-NEX-008) so the
-// recursive walk is not recomputed for every DML statement.
-func (r *Repository) DeleteCascade(ctx context.Context, uid authctx.UserID, id int64, unlockKey []byte, unlockToken string) error {
-	_, err := r.deleteCascade(ctx, uid, id, unlockKey, unlockToken)
-	return err
-}
-
+// Subtree ids are materialized once into a temp table so the recursive walk
+// is not recomputed for every DML statement. Returns the deleted folder ids
+// so the handler can forget their unlock-attempt budgets.
 func (r *Repository) deleteCascade(ctx context.Context, uid authctx.UserID, id int64, unlockKey []byte, unlockToken string) ([]int64, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {

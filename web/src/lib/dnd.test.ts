@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { isSameEntry, wouldCreateFolderCycle } from './AppDnd'
-import type { Folder } from './api/types'
+import { isSameEntry, wouldCreateFolderCycle } from './dnd'
+import type { Folder } from '../api/types'
 
 const folders = [
   { id: 1, parent_id: null },

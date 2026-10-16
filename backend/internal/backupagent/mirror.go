@@ -62,7 +62,7 @@ type MirrorJob struct {
 	recipients []age.Recipient
 	spoolDir   string
 
-	// lastSuccess and restoreBusy are seams over RunStore/lock probing so the
+	// lastSuccess and restoreBusy are seams over backupjobs.RunStore/lock probing so the
 	// diff-and-copy pipeline is provable without a database.
 	lastSuccess func(context.Context) (time.Time, error)
 	restoreBusy func(context.Context) (bool, error)
@@ -146,7 +146,7 @@ func (j *MirrorJob) Run(ctx context.Context) (*backupjobs.Artifact, map[string]a
 		return nil, nil, backupjobs.ReasonMirrorCopyFailed, err
 	}
 
-	stats := &MirrorStats{
+	stats := &backupjobs.MirrorStats{
 		ObjectsScanned: int64(len(src)),
 		ObjectsCopied:  int64(len(delta)),
 		BytesCopied:    bytesCopied,

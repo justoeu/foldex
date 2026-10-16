@@ -347,13 +347,13 @@ func (h *Handler) challengeProof(ctx context.Context, u User, code string,
 	// all. A recovery code is sixteen symbols once its hyphens are removed, so
 	// length separates them cleanly while still accepting "123 456" and
 	// "123-456" as a numeric code.
-	if digits, ok := numericOTP(code); ok {
+	if digits, ok := twofa.NumericOTP(code); ok {
 		return challengeProof{
 			totp:        h.verifyTOTPProof(ctx, u.ID, digits),
 			emailDigest: h.codeMAC.EmailOTPDigest(u.ID, OTPPurposeLogin2FA, challengeID, digits),
 		}
 	}
-	normalized := normalizeRecoveryCode(code)
+	normalized := twofa.NormalizeRecovery(code)
 	if normalized == "" {
 		return challengeProof{}
 	}
@@ -380,7 +380,7 @@ func (h *Handler) verifyTOTPProof(ctx context.Context, uid authctx.UserID, code 
 	}
 	counter, err := verifyTOTP(string(secret), code, row.Params, time.Now())
 	if err != nil {
-		if errors.Is(err, ErrTOTPParams) {
+		if errors.Is(err, twofa.ErrParams) {
 			h.logger.Error("stored TOTP parameters are not the supported set", "user_id", int64(uid))
 		}
 		return nil
@@ -417,7 +417,7 @@ func (h *Handler) SendEmailOTP(w http.ResponseWriter, r *http.Request) {
 			"a mailed code cannot be used for this sign-in"))
 		return
 	}
-	code, err := secrets.NewNumericCode(totpDigits)
+	code, err := secrets.NewNumericCode(twofa.Digits)
 	if err != nil {
 		h.logger.Error("otp generate", "err", err)
 		httperr.Write(w, httperr.ErrInternal)
@@ -478,7 +478,7 @@ func (h *Handler) StartTOTP(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
-	key, err := newTOTPSecret(h.totpIssuer, email)
+	key, err := twofa.NewSecret(h.totpIssuer, email)
 	if err != nil {
 		h.logger.Error("totp generate", "err", err)
 		httperr.Write(w, httperr.ErrInternal)
@@ -509,8 +509,8 @@ func (h *Handler) StartTOTP(w http.ResponseWriter, r *http.Request) {
 		"otpauth": key.URL(),
 		"issuer":  h.totpIssuer,
 		"account": email,
-		"digits":  totpDigits,
-		"period":  totpPeriodSeconds,
+		"digits":  twofa.Digits,
+		"period":  twofa.PeriodSeconds,
 		"qr_url":  "/api/auth/2fa/totp/qr.png",
 	})
 }
@@ -550,13 +550,13 @@ func (h *Handler) TOTPQR(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
-	key, err := otp.NewKeyFromURL(otpauthURL(h.totpIssuer, email, string(secret)))
+	key, err := otp.NewKeyFromURL(twofa.URL(h.totpIssuer, email, string(secret)))
 	if err != nil {
 		h.logger.Error("totp qr key", "err", err)
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
-	png, err := totpQRPNG(key, 240)
+	png, err := twofa.QRPNG(key, 240)
 	if err != nil {
 		h.logger.Error("totp qr render", "err", err)
 		httperr.Write(w, httperr.ErrInternal)
@@ -565,7 +565,7 @@ func (h *Handler) TOTPQR(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(png) // #nosec G705 -- PNG from totpQRPNG; Content-Type is image/png, never HTML
+	_, _ = w.Write(png) // #nosec G705 -- PNG from twofa.QRPNG; Content-Type is image/png, never HTML
 }
 
 type totpConfirmInput struct {
@@ -748,7 +748,7 @@ func (h *Handler) DisableTOTP(w http.ResponseWriter, r *http.Request) {
 			msgPasswordIncorrect))
 		return
 	}
-	if errors.Is(err, ErrTOTPReplay) {
+	if errors.Is(err, twofa.ErrReplay) {
 		h.stepUpPasswordUser.CommitSuccess(passwordKey)
 		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_code", msgInvalidCode))
 		return
@@ -819,7 +819,7 @@ func (h *Handler) RegenerateRecoveryCodes(w http.ResponseWriter, r *http.Request
 			msgPasswordIncorrect))
 		return
 	}
-	if errors.Is(err, ErrTOTPReplay) {
+	if errors.Is(err, twofa.ErrReplay) {
 		h.stepUpPasswordUser.CommitSuccess(passwordKey)
 		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_code", msgInvalidCode))
 		return
@@ -914,11 +914,11 @@ func (h *Handler) TwoFactorStatus(w http.ResponseWriter, r *http.Request) {
 // TOTP and matters at least as much for a recovery code, which is a lockout
 // credential rather than a 30-second counter.
 func (h *Handler) tryStepUpProof(ctx context.Context, uid authctx.UserID, user User, code string) (SecondFactorProof, error) {
-	if digits, numeric := numericOTP(code); numeric {
+	if digits, numeric := twofa.NumericOTP(code); numeric {
 		return h.tryNumericStepUpProof(ctx, uid, user, digits)
 	}
-	normalized := normalizeRecoveryCode(code)
-	if len(normalized) != recoveryCodeChars {
+	normalized := twofa.NormalizeRecovery(code)
+	if len(normalized) != twofa.CodeChars {
 		return SecondFactorProof{}, ErrBadCredentials
 	}
 	return h.tryRecoveryStepUpProof(ctx, uid, normalized)
@@ -1011,7 +1011,7 @@ func (h *Handler) settleStepUp(key string, err error) {
 	switch {
 	case err == nil:
 		h.stepUpUser.CommitSuccess(key)
-	case errors.Is(err, ErrTOTPReplay), errors.Is(err, ErrBadCredentials),
+	case errors.Is(err, twofa.ErrReplay), errors.Is(err, ErrBadCredentials),
 		errors.Is(err, ErrPasswordMissing), errors.Is(err, ErrSessionInvalid):
 		h.stepUpUser.CommitFail(key)
 	default:
@@ -1162,7 +1162,7 @@ func enrollmentSessionMatches(stored *int64, current int64) bool {
 
 // newRecoveryCodeSet generates a fresh display set and its stored digests.
 func (h *Handler) newRecoveryCodeSet(uid authctx.UserID) ([]string, [][]byte, error) {
-	codes, err := newRecoveryCodes(recoveryCodeCount)
+	codes, err := twofa.NewRecoveryCodes(twofa.RecoveryCount)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1170,7 +1170,7 @@ func (h *Handler) newRecoveryCodeSet(uid authctx.UserID) ([]string, [][]byte, er
 	for _, c := range codes {
 		// MAC the NORMALIZED form, because verification normalizes too. Storing
 		// the display form with its hyphen would make every typed code fail.
-		hashes = append(hashes, h.codeMAC.RecoveryCodeDigest(uid, normalizeRecoveryCode(c)))
+		hashes = append(hashes, h.codeMAC.RecoveryCodeDigest(uid, twofa.NormalizeRecovery(c)))
 	}
 	return codes, hashes, nil
 }

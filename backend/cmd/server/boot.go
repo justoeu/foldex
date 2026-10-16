@@ -43,15 +43,16 @@ type handles struct {
 	logger *slog.Logger
 	cfg    config.Config
 
-	traceShutdown func(context.Context) error
-	pool          *pgxpool.Pool
-	storage       *storage.Client
-	vapid         push.VAPIDKeys
-	folderUnlock  []byte
-	mail          mailHandle
-	cipher        cipherHandle
-	grants        *roleperm.Repository
-	abuse         *abusepolicy.Cache
+	traceShutdown    func(context.Context) error
+	pool             *pgxpool.Pool
+	storage          *storage.Client
+	vapid            push.VAPIDKeys
+	folderUnlock     []byte
+	mail             mailHandle
+	cipher           cipherHandle
+	grants           *roleperm.Repository
+	abuse            *abusepolicy.Cache
+	noteMediaSweeper *notemedia.Sweeper
 }
 
 type mailHandle struct {
@@ -70,15 +71,16 @@ type cipherHandle struct {
 }
 
 type runtime struct {
-	logger         *slog.Logger
-	deps           server.Deps
-	worker         *preview.Worker
-	ccWorker       *changecheck.Worker
-	screenshotPool *screenshot.Pool
-	mail           mailHandle
-	sweeper        *auth.Sweeper
-	traceShutdown  func(context.Context) error
-	pool           *pgxpool.Pool
+	logger           *slog.Logger
+	deps             server.Deps
+	worker           *preview.Worker
+	ccWorker         *changecheck.Worker
+	screenshotPool   *screenshot.Pool
+	mail             mailHandle
+	sweeper          *auth.Sweeper
+	noteMediaSweeper *notemedia.Sweeper
+	traceShutdown    func(context.Context) error
+	pool             *pgxpool.Pool
 }
 
 func boot(ctx context.Context, logger *slog.Logger, cfg config.Config) (*runtime, error) {
@@ -152,7 +154,9 @@ func loadStorage(h *handles) *storage.Client {
 		h.logger.Warn("object store client not constructed", "err", err)
 		return nil
 	}
-	notemedia.NewSweeper(h.pool, sc, h.logger).Start(h.ctx)
+	// Constructed here, started in startWorkers: a loader must not spawn
+	// goroutines that outlive a later boot failure.
+	h.noteMediaSweeper = notemedia.NewSweeper(h.pool, sc, h.logger)
 	return sc
 }
 
@@ -217,13 +221,11 @@ func loadMail(h *handles) (mailHandle, error) {
 		sink = amqpSink
 		mh.closeSink = func() { _ = amqpSink.Close() }
 		mh.deadLetters = mailoutbox.NewDeadLetterWatcher(outboxRepo, mh.amqpCfg, h.logger)
-		mh.deadLetters.Start(context.Background())
 	}
 	mh.relay = mailoutbox.NewRelay(outboxRepo, sink, mailoutbox.Options{
 		Batch:        h.cfg.Mail.OutboxBatch,
 		PollInterval: time.Duration(h.cfg.Mail.OutboxPollSec) * time.Second,
 	}, h.logger)
-	mh.relay.Start(context.Background())
 	if w := h.cfg.PlaintextBrokerWarning(); w != "" {
 		h.logger.Warn(w)
 	}
@@ -268,8 +270,18 @@ func loadAbuseCache(h *handles) *abusepolicy.Cache {
 	return abusepolicy.NewCache(abusepolicy.NewRepository(h.pool), abusepolicy.DefaultTTL, h.logger)
 }
 
+// startWorkers starts every background goroutine owned by the loaders, in
+// one place, after boot validation has passed.
+func startWorkers(h *handles) {
+	if h.noteMediaSweeper != nil {
+		h.noteMediaSweeper.Start(h.ctx)
+	}
+	h.mail.start(h.ctx)
+}
+
 func assembleDeps(h *handles) (*runtime, error) {
-	worker := preview.NewWorker(h.pool, h.cfg.PreviewConcurrency, time.Duration(h.cfg.PreviewTimeoutSec)*time.Second, h.logger)
+	startWorkers(h)
+	worker := preview.NewWorker(links.NewRepository(h.pool), h.cfg.PreviewConcurrency, time.Duration(h.cfg.PreviewTimeoutSec)*time.Second, h.logger)
 	screenshotPool := screenshot.NewPool()
 	metadataFetcher := preview.NewFetcher(time.Duration(h.cfg.PreviewTimeoutSec) * time.Second)
 	if h.storage != nil {
@@ -397,16 +409,28 @@ func assembleDeps(h *handles) (*runtime, error) {
 	}
 
 	return &runtime{
-		logger:         h.logger,
-		deps:           deps,
-		worker:         worker,
-		ccWorker:       ccWorker,
-		screenshotPool: screenshotPool,
-		mail:           h.mail,
-		sweeper:        sweeper,
-		traceShutdown:  h.traceShutdown,
-		pool:           h.pool,
+		logger:           h.logger,
+		deps:             deps,
+		worker:           worker,
+		ccWorker:         ccWorker,
+		screenshotPool:   screenshotPool,
+		mail:             h.mail,
+		sweeper:          sweeper,
+		noteMediaSweeper: h.noteMediaSweeper,
+		traceShutdown:    h.traceShutdown,
+		pool:             h.pool,
 	}, nil
+}
+
+// start launches the outbox relay and dead-letter watcher on the process
+// lifecycle context. Called only after every fallible boot phase succeeded.
+func (m mailHandle) start(ctx context.Context) {
+	if m.deadLetters != nil {
+		m.deadLetters.Start(ctx)
+	}
+	if m.relay != nil {
+		m.relay.Start(ctx)
+	}
 }
 
 func (m mailHandle) stop() {
@@ -445,7 +469,12 @@ func (rt *runtime) hooks() shutdownHooks {
 			}
 		},
 		closeScreenshots: rt.screenshotPool.Close,
-		waitSweeper:      rt.sweeper.Wait,
-		logger:           rt.logger,
+		waitSweeper: func() {
+			rt.sweeper.Wait()
+			if rt.noteMediaSweeper != nil {
+				rt.noteMediaSweeper.Wait()
+			}
+		},
+		logger: rt.logger,
 	}
 }

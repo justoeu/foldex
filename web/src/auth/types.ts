@@ -113,8 +113,6 @@ export type TwoFactorPending =
   | (TwoFactorPendingBase & { purpose: 'totp' })
   | (TwoFactorPendingBase & { purpose: 'enroll_2fa' })
 
-export type TwoFactorPurpose = TwoFactorPending['purpose']
-
 /**
  * The states GET /api/auth/me and the credential endpoints can report.
  *

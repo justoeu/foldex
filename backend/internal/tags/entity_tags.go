@@ -187,8 +187,8 @@ func TagsForEntities(ctx context.Context, q Querier, uid authctx.UserID, kind st
 	return out, rows.Err()
 }
 
-// TagsForLinkAndNote loads chips for both entity kinds in one round-trip
-// (N1-NEX-014). Results are keyed by entity_kind then entity_id so overlapping
+// TagsForLinkAndNote loads chips for both entity kinds in one round-trip.
+// Results are keyed by entity_kind then entity_id so overlapping
 // numeric ids never cross-contaminate.
 func TagsForLinkAndNote(ctx context.Context, q Querier, uid authctx.UserID, linkIDs, noteIDs []int64) (map[string]map[int64][]Chip, error) {
 	out := map[string]map[int64][]Chip{

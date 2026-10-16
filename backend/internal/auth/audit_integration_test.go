@@ -5,6 +5,7 @@ package auth_test
 import (
 	"context"
 	"fmt"
+	"foldex/internal/auth/ipblock"
 	"net/http"
 	"testing"
 	"time"
@@ -699,7 +700,7 @@ func TestFailureBursts_CountsPerAddress(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Blocklist
+// ipblock.Blocklist
 // ─────────────────────────────────────────────────────────────────────
 
 func TestIPBlock_RoundTripsAndIsIdempotent(t *testing.T) {

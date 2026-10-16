@@ -1,28 +1,9 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
-import { http } from '../../api/client'
+import { listSessions, revokeSession, type SessionRow } from '../../api/auth'
 import { relativeTimeLong } from '../../lib/time'
 import { useConfirm } from '../ConfirmDialog'
-
-type SessionRow = {
-  id: number
-  created_at: string
-  last_seen_at: string
-  user_agent?: string
-  ip?: string
-  current: boolean
-}
-
-/** The list is the caller's own — owner-scoped on the server. */
-async function listSessions(): Promise<SessionRow[]> {
-  const { data } = await http.get<{ sessions: SessionRow[] }>('/api/auth/sessions')
-  return data.sessions
-}
-
-async function revokeSession(id: number): Promise<void> {
-  await http.delete(`/api/auth/sessions/${id}`)
-}
 
 /**
  * Parses just enough of a UA to name the device: browser family and OS

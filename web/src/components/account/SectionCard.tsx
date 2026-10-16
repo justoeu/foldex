@@ -91,15 +91,6 @@ export function Notice({
   )
 }
 
-export function SectionBlock({ label, children }: Readonly<{ label: string; children: ReactNode }>) {
-  return (
-    <div className="fx-sec-block">
-      <span className="fx-sec-block-label">{label}</span>
-      {children}
-    </div>
-  )
-}
-
 /**
  * One thing the account has, with its state and what can be done about it.
  *

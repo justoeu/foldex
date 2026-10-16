@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"foldex/internal/auth/ipblock"
 	"net"
 	"net/http"
 	"strings"
@@ -71,7 +72,7 @@ func mountFrontDoor(r chi.Router, d Deps) {
 		return parsed != nil && containsIP(trustedNets, parsed)
 	}
 	if d.AuthRepo != nil {
-		blocklist := auth.NewBlocklist(d.AuthRepo.BlockedIPs)
+		blocklist := ipblock.NewBlocklist(d.AuthRepo.BlockedIPs)
 		r.Use(blocklistGate(blocklist))
 		if d.AdminHandler != nil {
 			d.AdminHandler.WithBlocklist(blocklist, isTrustedProxy)

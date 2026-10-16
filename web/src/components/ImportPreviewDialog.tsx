@@ -11,7 +11,7 @@ import { ConflictModePicker } from './ConflictModePicker'
 // The backend emits one warning PER duplicate URL and one row per distinct
 // folder path, uncapped up to the 50k import ceiling — re-importing a large
 // library in duplicate mode ships thousands of strings. Rendering them all
-// froze the tab on commit (N1-NEX-001/002), so both lists are capped and
+// froze the tab on commit, so both lists are capped and
 // overflow is summarized; folders keep an explicit expander because the
 // checkboxes are the only way to EXCLUDE a path.
 const MAX_RENDERED_WARNINGS = 50

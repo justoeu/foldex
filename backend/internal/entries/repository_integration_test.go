@@ -239,7 +239,7 @@ func TestList_QueryParityWithLinkAndNoteRepositories(t *testing.T) {
 	require.NoError(t, err)
 	_, err = f.lrepo.ClickAndResolve(ctx, rootLink.ID, uid)
 	require.NoError(t, err)
-	_, err = f.nrepo.SystemViewAndResolve(ctx, rootNote.Slug, uid)
+	_, err = f.nrepo.SystemViewAndResolveBySlug(ctx, rootNote.Slug, uid)
 	require.NoError(t, err)
 
 	tests := []struct {

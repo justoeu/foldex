@@ -18,5 +18,3 @@ func HTTPError(err error) error {
 		return err
 	}
 }
-
-func repositoryHTTPError(err error) error { return HTTPError(err) }

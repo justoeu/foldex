@@ -343,7 +343,8 @@ func TestExport_FullSnapshotRoundTrip(t *testing.T) {
 
 	shotKey := fmt.Sprintf("screenshots/%d.jpg", l.ID)
 	bucket.objs[shotKey] = []byte("img")
-	require.NoError(t, links.NewRepository(pool).UpdateOGImage(ctx, uid, l.ID, "/api/files/"+shotKey))
+	_, ogErr := links.NewRepository(pool).ReplaceOGImage(ctx, uid, l.ID, "/api/files/"+shotKey)
+	require.NoError(t, ogErr)
 	// Referenced by no row, so attributable to no user — export leaves it behind.
 	bucket.objs["images/orphan.jpg"] = []byte("orphan")
 
@@ -593,7 +594,8 @@ func TestRestoreRejectsChecksumMismatchBeforeMutation(t *testing.T) {
 	require.NoError(t, err)
 	keeperKey := fmt.Sprintf("images/%d.keeper.jpg", keeper.ID)
 	bucket.objs[keeperKey] = []byte("existing object")
-	require.NoError(t, repo.UpdateOGImage(ctx, uid, keeper.ID, "/api/files/"+keeperKey))
+	_, ogErr := repo.ReplaceOGImage(ctx, uid, keeper.ID, "/api/files/"+keeperKey)
+	require.NoError(t, ogErr)
 
 	now := time.Now().UTC()
 	archiveKey := "files/images/77.jpg"

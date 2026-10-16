@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"foldex/internal/auth/twofa"
 	"strings"
 	"time"
 
@@ -505,7 +506,7 @@ func consumeFactorIfPresentTx(ctx context.Context, tx pgx.Tx, id authctx.UserID,
 		return nil
 	}
 	if proof.Method == "" {
-		return ErrTOTPReplay
+		return twofa.ErrReplay
 	}
 	return consumeSecondFactorTx(ctx, tx, id, proof)
 }

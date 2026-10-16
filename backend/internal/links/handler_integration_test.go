@@ -353,12 +353,13 @@ func TestHandler_WithMetadataFetcher_Chains(t *testing.T) {
 	assert.NotNil(t, h)
 }
 
-func TestRepository_UpdateOGImageAndClear(t *testing.T) {
+func TestRepository_ReplaceOGImageAndClear(t *testing.T) {
 	ctx, uid, lrepo, _ := setup(t)
 	l, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://og.example", Title: "og"})
 	require.NoError(t, err)
 
-	require.NoError(t, lrepo.UpdateOGImage(ctx, uid, l.ID, "/api/files/og/1.jpg"))
+	_, ogErr := lrepo.ReplaceOGImage(ctx, uid, l.ID, "/api/files/og/1.jpg")
+	require.NoError(t, ogErr)
 	got, err := lrepo.Get(ctx, uid, l.ID)
 	require.NoError(t, err)
 	require.NotNil(t, got.OGImageURL)
@@ -370,7 +371,8 @@ func TestRepository_UpdateOGImageAndClear(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, got.OGImageURL)
 
-	assert.ErrorIs(t, lrepo.UpdateOGImage(ctx, uid, 99999, "/x"), domainerr.ErrNotFound)
+	_, ogErr = lrepo.ReplaceOGImage(ctx, uid, 99999, "/x")
+	assert.ErrorIs(t, ogErr, domainerr.ErrNotFound)
 	assert.ErrorIs(t, lrepo.ClearOGImage(ctx, uid, 99999), domainerr.ErrNotFound)
 }
 

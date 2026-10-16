@@ -381,11 +381,9 @@ func (r *Repository) loggerOrDefault() *slog.Logger {
 	return slog.Default()
 }
 
+// uploaderObjectDeleter adapts a plain Uploader to the batch deleter shape
+// by looping the single-object delete it already has.
 type uploaderObjectDeleter struct{ ports.Uploader }
-
-func (d uploaderObjectDeleter) DeleteObject(ctx context.Context, key string) error {
-	return d.Uploader.DeleteObject(ctx, key)
-}
 
 func (d uploaderObjectDeleter) DeleteObjects(ctx context.Context, keys []string) error {
 	for _, key := range keys {

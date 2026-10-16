@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"foldex/internal/backupjobs"
 	"testing"
 	"time"
 
@@ -24,17 +25,17 @@ func TestS3776_DrillRun_ShipsNothingAndStopsBeforeRestoreOnUnverifiedBytes(t *te
 	assert.Empty(t, f.leftovers(t))
 
 	empty := newDrillFixture(t)
-	empty.runs.pickErr = ErrNoDumpToDrill
+	empty.runs.pickErr = backupjobs.ErrNoDumpToDrill
 	_, _, reason, err = empty.job.Run(context.Background(), 1)
 	require.Error(t, err)
-	assert.Equal(t, ReasonDrillNoDump, reason)
+	assert.Equal(t, backupjobs.ReasonDrillNoDump, reason)
 	assert.Empty(t, empty.rec.calls, "with nothing to validate, no cluster is ever started")
 
 	bitrot := newDrillFixture(t)
 	bitrot.store.uploads[bitrot.runs.src.Key] = append([]byte{0x00}, bitrot.cipher...)
 	_, _, reason, err = bitrot.job.Run(context.Background(), 1)
 	require.Error(t, err)
-	assert.Equal(t, ReasonDrillDigestMismatch, reason)
+	assert.Equal(t, backupjobs.ReasonDrillDigestMismatch, reason)
 	assert.Empty(t, bitrot.rec.calls, "unverified bytes must never reach pg_restore")
 }
 

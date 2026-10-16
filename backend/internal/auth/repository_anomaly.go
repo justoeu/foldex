@@ -9,8 +9,8 @@ import (
 )
 
 func (r *Repository) Anomalies(ctx context.Context, window time.Duration,
-	th AnomalyThresholds) ([]Anomaly, error) {
-	var out []Anomaly
+	th anomaly.Thresholds) ([]anomaly.Anomaly, error) {
+	var out []anomaly.Anomaly
 	iv := intervalArg(window)
 
 	spray, err := r.pool.Query(ctx, `
@@ -24,13 +24,13 @@ func (r *Repository) Anomalies(ctx context.Context, window time.Duration,
 		GROUP BY ip
 		HAVING count(DISTINCT target_email) >= $3
 		ORDER BY count(DISTINCT target_email) DESC, max(created_at) DESC
-		LIMIT $4`, iv, AuditLoginFailed, th.SprayAccounts, anomalyQueryLimit)
+		LIMIT $4`, iv, AuditLoginFailed, th.SprayAccounts, anomaly.QueryLimit)
 	if err != nil {
 		return nil, fmt.Errorf("anomaly spray: %w", err)
 	}
 	defer spray.Close()
 	for spray.Next() {
-		a := Anomaly{Kind: AnomalyKindSpray}
+		a := anomaly.Anomaly{Kind: anomaly.KindSpray}
 		if err := spray.Scan(&a.IP, &a.IPTrusted, &a.DistinctAccounts, &a.Failures,
 			&a.FirstSeen, &a.LastSeen, &a.Blocked); err != nil {
 			return nil, fmt.Errorf("scan anomaly spray: %w", err)
@@ -58,13 +58,13 @@ func (r *Repository) Anomalies(ctx context.Context, window time.Duration,
 		FROM per_account
 		GROUP BY ip
 		ORDER BY max(failures) DESC, max(last_at) DESC
-		LIMIT $4`, iv, AuditLoginFailed, th.HammerFailures, anomalyQueryLimit)
+		LIMIT $4`, iv, AuditLoginFailed, th.HammerFailures, anomaly.QueryLimit)
 	if err != nil {
 		return nil, fmt.Errorf("anomaly hammer: %w", err)
 	}
 	defer hammer.Close()
 	for hammer.Next() {
-		a := Anomaly{Kind: AnomalyKindHammer}
+		a := anomaly.Anomaly{Kind: anomaly.KindHammer}
 		if err := hammer.Scan(&a.IP, &a.IPTrusted, &a.DistinctAccounts, &a.Failures,
 			&a.FirstSeen, &a.LastSeen, &a.Blocked); err != nil {
 			return nil, fmt.Errorf("scan anomaly hammer: %w", err)
@@ -84,13 +84,13 @@ func (r *Repository) Anomalies(ctx context.Context, window time.Duration,
 		WHERE created_at >= now() - $1::interval AND action = $2 AND ip IS NOT NULL
 		GROUP BY ip
 		ORDER BY count(*) DESC, max(created_at) DESC
-		LIMIT $3`, iv, AuditRateLimited, anomalyQueryLimit)
+		LIMIT $3`, iv, AuditRateLimited, anomaly.QueryLimit)
 	if err != nil {
 		return nil, fmt.Errorf("anomaly throttle: %w", err)
 	}
 	defer throttle.Close()
 	for throttle.Next() {
-		a := Anomaly{Kind: AnomalyKindThrottle, Severity: AnomalySeverityCritical}
+		a := anomaly.Anomaly{Kind: anomaly.KindThrottle, Severity: anomaly.SeverityCritical}
 		if err := throttle.Scan(&a.IP, &a.IPTrusted, &a.Throttles,
 			&a.FirstSeen, &a.LastSeen, &a.Blocked); err != nil {
 			return nil, fmt.Errorf("scan anomaly throttle: %w", err)

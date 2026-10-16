@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"foldex/internal/backupjobs"
 	"io"
 	"strings"
 	"testing"
@@ -77,7 +78,7 @@ func TestUserZipRun_AllFailingFailsTheWholeRun(t *testing.T) {
 
 	_, _, reason, err := job.Run(context.Background())
 	require.Error(t, err)
-	assert.Equal(t, ReasonUserZipFailed, reason)
+	assert.Equal(t, backupjobs.ReasonUserZipFailed, reason)
 	assert.Empty(t, store.uploads)
 }
 
@@ -90,7 +91,7 @@ func TestUserZipRun_ListingFailureFailsTheRun(t *testing.T) {
 
 	_, _, reason, err := job.Run(context.Background())
 	require.Error(t, err)
-	assert.Equal(t, ReasonUserZipFailed, reason)
+	assert.Equal(t, backupjobs.ReasonUserZipFailed, reason)
 }
 
 func TestUserZipRun_ZeroActiveUsersIsAnEmptySuccess(t *testing.T) {
@@ -222,7 +223,7 @@ func TestUserZipRun_PruneFailureDowngradesToRunMetadata(t *testing.T) {
 	_, meta, reason, err := job.Run(context.Background())
 	require.NoError(t, err, "the archive landed; a failed prune must not turn success into failure")
 	assert.Empty(t, reason)
-	assert.Equal(t, ReasonPruneFailed, meta["prune_error"])
+	assert.Equal(t, backupjobs.ReasonPruneFailed, meta["prune_error"])
 }
 
 func TestUserZipRun_DefersToAnInFlightRestore(t *testing.T) {
@@ -275,7 +276,7 @@ func TestUserZipRun_AProbeErrorIsAFailureNeverADeferral(t *testing.T) {
 
 	_, meta, reason, err := job.Run(context.Background())
 	require.Error(t, err, "every user failing must fail the run")
-	assert.Equal(t, ReasonUserZipFailed, reason)
+	assert.Equal(t, backupjobs.ReasonUserZipFailed, reason)
 	_, deferred := meta["deferred_users"]
 	assert.False(t, deferred,
 		"an unanswerable probe is not a restore in flight — deferring would retry forever against a broken lock path")
@@ -288,6 +289,6 @@ func TestUserZipShipOne_ZeroByteExportIsNotABackup(t *testing.T) {
 
 	_, _, reason, err := job.Run(context.Background())
 	require.Error(t, err)
-	assert.Equal(t, ReasonUserZipFailed, reason)
+	assert.Equal(t, backupjobs.ReasonUserZipFailed, reason)
 	assert.Empty(t, store.uploads, "an empty archive must never land looking like a backup")
 }

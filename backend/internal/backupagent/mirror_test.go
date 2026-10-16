@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"foldex/internal/backupjobs"
 	"io"
 	"testing"
 	"time"
@@ -17,7 +18,7 @@ func newTestMirrorJob(source, dest *recorderStore) *MirrorJob {
 	return &MirrorJob{
 		source:               source,
 		dest:                 dest,
-		logger:               testLogger().With("job", JobMirror),
+		logger:               testLogger().With("job", backupjobs.JobMirror),
 		lastSuccess:          func(context.Context) (time.Time, error) { return time.Time{}, nil },
 		restoreBusy:          func(context.Context) (bool, error) { return false, nil },
 		restoreProbeEvery:    time.Millisecond,
@@ -142,7 +143,7 @@ func TestMirrorRun_CopyFailureFailsFastWithNormalizedReason(t *testing.T) {
 	job := newTestMirrorJob(source, dest)
 	_, _, reason, err := job.Run(context.Background())
 	require.Error(t, err)
-	assert.Equal(t, ReasonMirrorCopyFailed, reason)
+	assert.Equal(t, backupjobs.ReasonMirrorCopyFailed, reason)
 	source.mu.Lock()
 	opened := source.openCalls
 	source.mu.Unlock()
@@ -157,7 +158,7 @@ func TestMirrorRun_ScanFailureIsItsOwnReason(t *testing.T) {
 
 	_, _, reason, err := job.Run(context.Background())
 	require.Error(t, err)
-	assert.Equal(t, ReasonMirrorScanFailed, reason)
+	assert.Equal(t, backupjobs.ReasonMirrorScanFailed, reason)
 }
 
 func TestMirrorRun_WaitsOutARestoreThenProceeds(t *testing.T) {
@@ -184,7 +185,7 @@ func TestMirrorRun_StillBusyAtDeadlineFailsAsRestoreInFlight(t *testing.T) {
 
 	_, _, reason, err := job.Run(context.Background())
 	require.Error(t, err)
-	assert.Equal(t, ReasonRestoreInFlight, reason,
+	assert.Equal(t, backupjobs.ReasonRestoreInFlight, reason,
 		"a restore that outlives the wait becomes a normalized failure the next slot retries — never a raw error string")
 }
 
@@ -197,8 +198,8 @@ func TestNew_RegistersTheMirrorOnlyWithIntervalAndSource(t *testing.T) {
 	// unscheduled, for the manual button); the mirror is the third entry.
 	require.Len(t, agent.jobs, 3)
 	mirror := agent.jobs[len(agent.jobs)-1]
-	assert.Equal(t, JobMirror, mirror.name)
-	timing := agent.timing(JobMirror)
+	assert.Equal(t, backupjobs.JobMirror, mirror.name)
+	timing := agent.timing(backupjobs.JobMirror)
 	assert.Equal(t, time.Hour, timing.Interval)
 	assert.True(t, timing.Enabled(), "an interval schedule alone must enable the loop — no anchor needed")
 
@@ -207,7 +208,7 @@ func TestNew_RegistersTheMirrorOnlyWithIntervalAndSource(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, agent.jobs, 2, "interval 0 keeps the mirror out of the registry")
 	for _, spec := range agent.jobs {
-		assert.NotEqual(t, JobMirror, spec.name)
+		assert.NotEqual(t, backupjobs.JobMirror, spec.name)
 	}
 }
 

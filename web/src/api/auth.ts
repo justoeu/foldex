@@ -79,6 +79,29 @@ export async function logout(): Promise<void> {
   await http.post('/api/auth/logout')
 }
 
+export async function logoutAll(): Promise<void> {
+  await http.post('/api/auth/logout-all')
+}
+
+export type SessionRow = {
+  id: number
+  created_at: string
+  last_seen_at: string
+  user_agent?: string
+  ip?: string
+  current: boolean
+}
+
+/** The list is the caller's own — owner-scoped on the server. */
+export async function listSessions(): Promise<SessionRow[]> {
+  const { data } = await http.get<{ sessions: SessionRow[] }>('/api/auth/sessions')
+  return data.sessions
+}
+
+export async function revokeSession(id: number): Promise<void> {
+  await http.delete(`/api/auth/sessions/${id}`)
+}
+
 /**
  * Renames the signed-in account. The only self-service profile field — e-mail
  * is identity and role/status are administration. Answers with the same

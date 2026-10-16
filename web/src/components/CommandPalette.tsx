@@ -24,7 +24,7 @@ type Props = Readonly<{
 }>
 
 // Search paints at most 12 links + 12 notes. Fetching 200 rows to fill that
-// is the N1-NEX-009 overfetch; 24 mixed rows is enough to fill both lists.
+// is pure overfetch; 24 mixed rows is enough to fill both lists.
 const PALETTE_SEARCH_LIMIT = 24
 
 const PALETTE_DEBOUNCE_MS = 200

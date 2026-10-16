@@ -2,6 +2,7 @@ package auth
 
 import (
 	"errors"
+	"foldex/internal/auth/twofa"
 	"net/http"
 	"time"
 
@@ -231,7 +232,7 @@ func (h *Handler) SetPassword(w http.ResponseWriter, r *http.Request) {
 			"this account already has a password; change it instead"))
 		return
 	}
-	if errors.Is(err, ErrTOTPReplay) {
+	if errors.Is(err, twofa.ErrReplay) {
 		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_code", msgInvalidCode))
 		return
 	}

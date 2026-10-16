@@ -189,7 +189,7 @@ async function networkFirst(req: Request, cacheName: string): Promise<Response> 
     const res = await fetch(req)
     if (res?.status === 200) {
       // Clone before stashing — Response bodies are single-use streams.
-      // Await put + prune so FILES_CACHE stays bounded (LEAK-HYD-008).
+      // Await put + prune so FILES_CACHE stays bounded.
       try {
         await cache.put(req, res.clone())
         if (cacheName === FILES_CACHE) {

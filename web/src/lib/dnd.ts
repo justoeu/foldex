@@ -1,4 +1,4 @@
-import type { Folder, MergeSource } from './api/types'
+import type { Folder, MergeSource } from '../api/types'
 
 export function wouldCreateFolderCycle(
   folders: Folder[],

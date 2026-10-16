@@ -10,12 +10,8 @@ import (
 func TestTwinIPNormalizeAliasesAreGone(t *testing.T) {
 	err := walkProductionFuncs(func(path string, fn *ast.FuncDecl) {
 		switch fn.Name.Name {
-		case "normalizeAuditIP":
-			t.Errorf("%s still defines normalizeAuditIP; call ipblock.Normalize", path)
-		case "NormalizeIP":
-			if path != "ipblock_export.go" {
-				t.Errorf("%s still defines NormalizeIP; call ipblock.Normalize", path)
-			}
+		case "normalizeAuditIP", "NormalizeIP":
+			t.Errorf("%s still defines %s; call ipblock.Normalize", path, fn.Name.Name)
 		}
 	})
 	require.NoError(t, err)

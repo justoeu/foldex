@@ -32,10 +32,6 @@ func newUnlockLimiter() *attemptlimit.Limiter {
 	return attemptlimit.New(maxUnlockAttempts, unlockLockout)
 }
 
-func beginUnlockAttempt(limiter *attemptlimit.Limiter, key string) (time.Time, bool) {
-	return limiter.Begin(key)
-}
-
 // SweepLimiters is the lifecycle hook registered with the process sweeper.
 func (h *Handler) SweepLimiters(olderThan time.Duration) int {
 	n := h.limiter.Sweep(olderThan)

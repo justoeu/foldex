@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"foldex/internal/auth/twofa"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -539,7 +540,7 @@ func lockChallengeUser(ctx context.Context, tx pgx.Tx, challengeID int64) error 
 type TOTPRow struct {
 	Ciphertext             []byte
 	Nonce                  []byte
-	Params                 totpParams
+	Params                 twofa.Params
 	Confirmed              bool
 	EnrollmentTokenVersion *int
 	EnrollmentSessionID    *int64
@@ -618,7 +619,7 @@ func (r *Repository) StartTOTPEnrollment(ctx context.Context, uid authctx.UserID
 		    enrollment_session_id = EXCLUDED.enrollment_session_id,
 		    last_used_counter = NULL
 		WHERE totp_secret.confirmed_at IS NULL`,
-		int64(uid), ciphertext, nonce, totpAlgorithm, totpDigits, totpPeriodSeconds, tokenVersion, sessionID)
+		int64(uid), ciphertext, nonce, twofa.Algorithm, twofa.Digits, twofa.PeriodSeconds, tokenVersion, sessionID)
 	if err != nil {
 		return fmt.Errorf("start totp enrollment: %w", err)
 	}
@@ -904,7 +905,7 @@ func consumeTOTPProofTx(ctx context.Context, tx pgx.Tx, uid authctx.UserID, proo
 		return err
 	}
 	if !ok {
-		return ErrTOTPReplay
+		return twofa.ErrReplay
 	}
 	return nil
 }

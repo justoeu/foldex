@@ -523,7 +523,7 @@ func (c Config) validateSecureDefaults() error {
 }
 
 // defaultPostgresPassword is the literal docker-compose.db.yml and legacy
-// .env.example shipped before SEC-SEN-005. Anything that can reach the
+// .env.example shipped. Anything that can reach the
 // `foldex` docker network and lands a foothold in one container reads and
 // writes the whole database with it.
 const defaultPostgresPassword = "foldex"

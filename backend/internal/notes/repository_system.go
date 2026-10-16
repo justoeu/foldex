@@ -18,27 +18,15 @@ import (
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/clicklog"
 	"foldex/internal/pkg/domainerr"
-	"foldex/internal/pkg/publictarget"
 	"foldex/internal/tags"
 )
 
-// SystemViewAndResolve resolves id-or-slug and logs a click_log row in the same
-// tx, mirroring links.ClickAndResolve(BySlug) — used by GET /n/{id-or-slug}.
+// The ByID/BySlug pair resolves and logs a click_log row in the same tx,
+// mirroring links.ClickAndResolve(BySlug) — used by GET /n/{id-or-slug} via
+// publictarget.Resolve at the handler.
 //
 // viewer is the resolved principal of the request (0 when anonymous): the note
 // renders when it is opted in via is_public OR when the viewer owns it.
-func (r *Repository) SystemViewAndResolve(ctx context.Context, idOrSlug string, viewer authctx.UserID) (Note, error) {
-	return publictarget.Resolve(
-		ctx, idOrSlug, true,
-		func(ctx context.Context, id int64) (Note, error) {
-			return r.SystemViewAndResolveByID(ctx, id, viewer)
-		},
-		func(ctx context.Context, slug string) (Note, error) {
-			return r.SystemViewAndResolveBySlug(ctx, slug, viewer)
-		},
-	)
-}
-
 func (r *Repository) SystemViewAndResolveByID(ctx context.Context, id int64, viewer authctx.UserID) (Note, error) {
 	return r.systemViewAndResolveWhere(ctx, viewer, "n.id = $1", id)
 }
@@ -54,7 +42,7 @@ func (r *Repository) systemViewAndResolveWhere(ctx context.Context, viewer authc
 	}
 	defer tx.Rollback(ctx)
 
-	// SEC-SEN-001: a title-derived slug is guessable, so it cannot be the
+	// A title-derived slug is guessable, so it cannot be the
 	// only thing standing between a note and every anonymous reader. The
 	// page is a capability the owner grants (is_public) or uses themselves
 	// (owner session, mounted optional on /n/). Locked folders stay a
@@ -84,7 +72,7 @@ func (r *Repository) systemViewAndResolveWhere(ctx context.Context, viewer authc
 	// public HTTP path changes behaviour, and a suppressed view still RENDERS:
 	// only the click row is skipped. Owner from the resolved row — /n/ is
 	// public, there is no session here.
-	if err := clicklog.Record(ctx, tx, "note", id, owner); err != nil {
+	if err := clicklog.Record(ctx, tx, clicklog.KindNote, id, authctx.UserID(owner)); err != nil {
 		return Note{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {

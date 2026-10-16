@@ -413,7 +413,7 @@ func allocateRestoreNoteSlugs(ctx context.Context, tx pgx.Tx, notes []NoteRow) (
 	for i := range notes {
 		bases[i] = restoreSlugBase(notes[i].Slug, notes[i].Title, "note-restored")
 	}
-	taken, err := loadTakenNoteSlugs(ctx, tx, bases, maxRestoreSlugMatches)
+	taken, err := slugpkg.LoadTakenNotes(ctx, tx, bases, maxRestoreSlugMatches)
 	if err != nil {
 		return nil, err
 	}

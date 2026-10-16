@@ -22,6 +22,7 @@ import (
 
 	"foldex/internal/backup"
 	"foldex/internal/backupagent"
+	"foldex/internal/backupjobs"
 	"foldex/internal/pkg/logsafe"
 	"foldex/internal/storage"
 )
@@ -125,7 +126,7 @@ func run(logger *slog.Logger) int {
 			logger.Error("user_zip job", "err", err)
 			return 2
 		}
-		agent.RegisterJob(backupagent.JobUserZip, userZip.Run)
+		agent.RegisterJob(backupjobs.JobUserZip, userZip.Run)
 	}
 	if err := agent.CheckSchema(ctx); err != nil {
 		logger.Error("schema gate", "err", err)

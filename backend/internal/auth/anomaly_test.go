@@ -3,6 +3,7 @@ package auth
 import (
 	"bytes"
 	"encoding/json"
+	"foldex/internal/auth/anomaly"
 	"log/slog"
 	"strings"
 	"testing"
@@ -19,13 +20,13 @@ func at(min int) time.Time {
 // The panel is scanned, not read: the worst line has to be first, and among
 // equally bad lines the most recent one is the one an operator is acting on.
 func TestRankAnomalies_OrdersBySeverityThenRecency(t *testing.T) {
-	in := []Anomaly{
-		{Kind: AnomalyKindHammer, IP: "198.51.100.1", Severity: AnomalySeverityWarn, LastSeen: at(50)},
-		{Kind: AnomalyKindSpray, IP: "203.0.113.7", Severity: AnomalySeverityCritical, LastSeen: at(10)},
-		{Kind: AnomalyKindThrottle, IP: "203.0.113.9", Severity: AnomalySeverityCritical, LastSeen: at(40)},
-		{Kind: AnomalyKindSpray, IP: "192.0.2.4", Severity: AnomalySeverityWarn, LastSeen: at(60)},
+	in := []anomaly.Anomaly{
+		{Kind: anomaly.KindHammer, IP: "198.51.100.1", Severity: anomaly.SeverityWarning, LastSeen: at(50)},
+		{Kind: anomaly.KindSpray, IP: "203.0.113.7", Severity: anomaly.SeverityCritical, LastSeen: at(10)},
+		{Kind: anomaly.KindThrottle, IP: "203.0.113.9", Severity: anomaly.SeverityCritical, LastSeen: at(40)},
+		{Kind: anomaly.KindSpray, IP: "192.0.2.4", Severity: anomaly.SeverityWarning, LastSeen: at(60)},
 	}
-	out := rankAnomalies(in, 100, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
+	out := anomaly.Rank(in, 100, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
 	require.Len(t, out, 4)
 	assert.Equal(t, []string{"203.0.113.9", "203.0.113.7", "192.0.2.4", "198.51.100.1"},
 		[]string{out[0].IP, out[1].IP, out[2].IP, out[3].IP})
@@ -35,12 +36,12 @@ func TestRankAnomalies_OrdersBySeverityThenRecency(t *testing.T) {
 // distinction the operator is deciding on — a spray and a lockout from the same
 // address are two different facts.
 func TestRankAnomalies_KeepsOneRowPerIPAndKind(t *testing.T) {
-	in := []Anomaly{
-		{Kind: AnomalyKindSpray, IP: "203.0.113.7", Severity: AnomalySeverityCritical, LastSeen: at(10)},
-		{Kind: AnomalyKindHammer, IP: "203.0.113.7", Severity: AnomalySeverityCritical, LastSeen: at(11)},
-		{Kind: AnomalyKindThrottle, IP: "203.0.113.7", Severity: AnomalySeverityCritical, LastSeen: at(12)},
+	in := []anomaly.Anomaly{
+		{Kind: anomaly.KindSpray, IP: "203.0.113.7", Severity: anomaly.SeverityCritical, LastSeen: at(10)},
+		{Kind: anomaly.KindHammer, IP: "203.0.113.7", Severity: anomaly.SeverityCritical, LastSeen: at(11)},
+		{Kind: anomaly.KindThrottle, IP: "203.0.113.7", Severity: anomaly.SeverityCritical, LastSeen: at(12)},
 	}
-	out := rankAnomalies(in, 100, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
+	out := anomaly.Rank(in, 100, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
 	assert.Len(t, out, 3)
 }
 
@@ -49,12 +50,12 @@ func TestRankAnomalies_KeepsOneRowPerIPAndKind(t *testing.T) {
 // the cut visible to whoever reads the logs during the incident.
 func TestRankAnomalies_LogsWhatItCut(t *testing.T) {
 	var buf bytes.Buffer
-	in := make([]Anomaly, 0, 5)
+	in := make([]anomaly.Anomaly, 0, 5)
 	for i := 0; i < 5; i++ {
-		in = append(in, Anomaly{Kind: AnomalyKindSpray, IP: "203.0.113.7",
-			Severity: AnomalySeverityWarn, LastSeen: at(i)})
+		in = append(in, anomaly.Anomaly{Kind: anomaly.KindSpray, IP: "203.0.113.7",
+			Severity: anomaly.SeverityWarning, LastSeen: at(i)})
 	}
-	out := rankAnomalies(in, 2, slog.New(slog.NewTextHandler(&buf, nil)))
+	out := anomaly.Rank(in, 2, slog.New(slog.NewTextHandler(&buf, nil)))
 	require.Len(t, out, 2)
 	assert.Contains(t, buf.String(), "anomaly")
 	assert.Contains(t, buf.String(), "3", "the line must say how many rows were dropped")
@@ -62,7 +63,7 @@ func TestRankAnomalies_LogsWhatItCut(t *testing.T) {
 
 func TestRankAnomalies_SaysNothingWhenNothingWasCut(t *testing.T) {
 	var buf bytes.Buffer
-	out := rankAnomalies([]Anomaly{{Kind: AnomalyKindSpray, IP: "203.0.113.7"}}, 2,
+	out := anomaly.Rank([]anomaly.Anomaly{{Kind: anomaly.KindSpray, IP: "203.0.113.7"}}, 2,
 		slog.New(slog.NewTextHandler(&buf, nil)))
 	assert.Len(t, out, 1)
 	assert.Empty(t, buf.String(), "a warning that fires when nothing is wrong is one people learn to ignore")
@@ -74,11 +75,11 @@ func TestRankAnomalies_SaysNothingWhenNothingWasCut(t *testing.T) {
 // it — one that no projection guards — which is exactly the multiplication
 // INV-175 went to the trouble of reducing to one.
 func TestAnomaly_CarriesNoEmailAnywhereInItsJSON(t *testing.T) {
-	a := Anomaly{
-		Kind: AnomalyKindSpray, IP: "203.0.113.7", IPTrusted: false,
+	a := anomaly.Anomaly{
+		Kind: anomaly.KindSpray, IP: "203.0.113.7", IPTrusted: false,
 		DistinctAccounts: 12, Failures: 40, Throttles: 0,
 		FirstSeen: at(0), LastSeen: at(9), Blocked: false,
-		Severity: AnomalySeverityCritical,
+		Severity: anomaly.SeverityCritical,
 	}
 	raw, err := json.Marshal(a)
 	require.NoError(t, err)
@@ -107,14 +108,14 @@ func TestAnomaly_CarriesNoEmailAnywhereInItsJSON(t *testing.T) {
 // the same event, and a screen that painted both the same colour would make the
 // operator find the real one by reading rather than by looking.
 func TestAnomalySeverity_EscalatesAtTwiceTheThreshold(t *testing.T) {
-	assert.Equal(t, AnomalySeverityWarn, anomalySeverity(5, 5))
-	assert.Equal(t, AnomalySeverityWarn, anomalySeverity(9, 5))
-	assert.Equal(t, AnomalySeverityCritical, anomalySeverity(10, 5))
-	assert.Equal(t, AnomalySeverityCritical, anomalySeverity(400, 5))
+	assert.Equal(t, anomaly.SeverityWarning, anomaly.SeverityFor(5, 5))
+	assert.Equal(t, anomaly.SeverityWarning, anomaly.SeverityFor(9, 5))
+	assert.Equal(t, anomaly.SeverityCritical, anomaly.SeverityFor(10, 5))
+	assert.Equal(t, anomaly.SeverityCritical, anomaly.SeverityFor(400, 5))
 	// A zero or negative threshold cannot make everything critical: the policy
 	// bounds forbid it, and a guard here is what keeps a future widening of
 	// those bounds from silently repainting the whole panel.
-	assert.Equal(t, AnomalySeverityWarn, anomalySeverity(1, 0))
+	assert.Equal(t, anomaly.SeverityWarning, anomaly.SeverityFor(1, 0))
 }
 
 // A closed vocabulary for parseAuditFilter's reason: an arbitrary window is an
@@ -122,16 +123,16 @@ func TestAnomalySeverity_EscalatesAtTwiceTheThreshold(t *testing.T) {
 // ABSENT one is the configured window, not a hard-coded default — the owner
 // already answered that question when they saved the policy.
 func TestAnomalyWindow_IsAClosedVocabularyAndFallsBackToThePolicy(t *testing.T) {
-	d, label, ok := anomalyWindow("1h", 15)
+	d, label, ok := anomaly.Window("1h", 15)
 	require.True(t, ok)
 	assert.Equal(t, time.Hour, d)
 	assert.Equal(t, "1h", label)
 
-	d, label, ok = anomalyWindow("", 45)
+	d, label, ok = anomaly.Window("", 45)
 	require.True(t, ok)
 	assert.Equal(t, 45*time.Minute, d, "an absent window is the configured one")
 	assert.Equal(t, "45m", label)
 
-	_, _, ok = anomalyWindow("30s", 15)
+	_, _, ok = anomaly.Window("30s", 15)
 	assert.False(t, ok, "an arbitrary window is an arbitrary amount of scanning to ask for")
 }

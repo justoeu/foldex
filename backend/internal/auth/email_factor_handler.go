@@ -2,6 +2,7 @@ package auth
 
 import (
 	"errors"
+	"foldex/internal/auth/twofa"
 	"net/http"
 
 	"foldex/internal/mailer"
@@ -50,7 +51,7 @@ func (h *Handler) StartEmailFactor(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
-	code, err := secrets.NewNumericCode(totpDigits)
+	code, err := secrets.NewNumericCode(twofa.Digits)
 	if err != nil {
 		h.logger.Error("email factor code", "err", err)
 		httperr.Write(w, httperr.ErrInternal)
@@ -89,7 +90,7 @@ func (h *Handler) StartEmailFactor(w http.ResponseWriter, r *http.Request) {
 	httperr.JSON(w, http.StatusOK, map[string]any{
 		"account":    MaskEmail(user.Email),
 		"expires_in": int(ttl.Seconds()),
-		"digits":     totpDigits,
+		"digits":     twofa.Digits,
 	})
 }
 
@@ -148,7 +149,7 @@ func (h *Handler) ConfirmEmailFactor(w http.ResponseWriter, r *http.Request) {
 	}
 	user, tok, err := h.repo.CompleteEmailFactorEnrollment(r.Context(), EnrollmentComplete{
 		UID: uid, TokenVersion: tokenVersion, RecoveryHashes: hashes, Session: session,
-	}, h.codeMAC.EmailOTPDigest(uid, OTPPurposeEnrollEmail2FA, nil, normalizeOTPCode(in.Code)))
+	}, h.codeMAC.EmailOTPDigest(uid, OTPPurposeEnrollEmail2FA, nil, twofa.NormalizeOTP(in.Code)))
 	settleErr = err
 	if writeEmailFactorConfirmError(w, err) || h.writeFactorTxnError(w, err, "email factor confirm") {
 		return
@@ -259,7 +260,7 @@ func (h *Handler) SendStepUpEmailOTP(w http.ResponseWriter, r *http.Request) {
 			"e-mail is not enrolled as a second factor"))
 		return
 	}
-	code, err := secrets.NewNumericCode(totpDigits)
+	code, err := secrets.NewNumericCode(twofa.Digits)
 	if err != nil {
 		h.logger.Error("step-up otp generate", "err", err)
 		httperr.Write(w, httperr.ErrInternal)
@@ -354,8 +355,8 @@ func (h *Handler) DisableEmailFactor(w http.ResponseWriter, r *http.Request) {
 		// code that expired. All three are the caller's problem, not the
 		// server's — reporting them as 500 both lies about whose fault it is and
 		// files an ERROR log line for an ordinary refusal. DisableTOTP has
-		// mapped ErrTOTPReplay this way since it was written.
-		case errors.Is(err, ErrTOTPReplay), errors.Is(err, ErrBadCredentials):
+		// mapped twofa.ErrReplay this way since it was written.
+		case errors.Is(err, twofa.ErrReplay), errors.Is(err, ErrBadCredentials):
 			httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_code",
 				msgInvalidCode))
 		default:

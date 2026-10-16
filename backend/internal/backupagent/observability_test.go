@@ -1,6 +1,7 @@
 package backupagent
 
 import (
+	"foldex/internal/backupjobs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -40,8 +41,8 @@ func assertObservabilityFileOnlyReferencesServedSeries(t *testing.T, file string
 
 	m := NewMetrics()
 	// Touch every job label so all declared series render.
-	m.ObserveSuccess(JobDump, time.Now(), time.Second, 1)
-	m.ObserveFailure(JobDrill, time.Second, 1)
+	m.ObserveSuccess(backupjobs.JobDump, time.Now(), time.Second, 1)
+	m.ObserveFailure(backupjobs.JobDrill, time.Second, 1)
 
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	req.Header.Set("Authorization", "Bearer tk")

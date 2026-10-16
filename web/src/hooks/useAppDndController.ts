@@ -7,7 +7,7 @@ import { useUpdateLink } from '../api/links'
 import { useUpdateNote } from '../api/notes'
 import { useUpdateFolder } from '../api/folders'
 import type { Folder, MergeSource } from '../api/types'
-import { isSameEntry, wouldCreateFolderCycle } from '../AppDnd'
+import { isSameEntry, wouldCreateFolderCycle } from '../lib/dnd'
 
 export function useAppDndController({
   folders,

@@ -7,14 +7,6 @@ export function passwordMode(hasPassword: boolean): PasswordMode {
   return hasPassword ? 'change' : 'create'
 }
 
-/**
- * INV-147: a signed-in change goes through POST /api/auth/password/change;
- * creating a password on a Google-only account uses /password/set.
- */
-export function passwordEndpoint(hasPassword: boolean): '/api/auth/password/change' | '/api/auth/password/set' {
-  return hasPassword ? '/api/auth/password/change' : '/api/auth/password/set'
-}
-
 export function passwordsMismatch(next: string, confirm: string): boolean {
   return next !== confirm
 }

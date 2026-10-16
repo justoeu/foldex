@@ -136,7 +136,7 @@ func TestRepository_DeleteCascadeRemovesSubtree(t *testing.T) {
 	lb, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://b", Title: "B", FolderID: &b.ID})
 	lc, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://c", Title: "C", FolderID: &c.ID})
 
-	require.NoError(t, frepo.DeleteCascade(ctx, uid, a.ID, testUnlockKey, ""))
+	require.NoError(t, frepo.DeleteCascadeForTest(ctx, uid, a.ID, testUnlockKey, ""))
 
 	for _, fid := range []int64{a.ID, b.ID, c.ID} {
 		_, err := frepo.Get(ctx, uid, fid)
@@ -174,7 +174,7 @@ func TestRepository_DeleteCascadeDoesNotOrphanTagsOrClicks(t *testing.T) {
 	_, err = lrepo.ClickAndResolve(ctx, link.ID, uid)
 	require.NoError(t, err)
 
-	require.NoError(t, frepo.DeleteCascade(ctx, uid, folder.ID, testUnlockKey, ""))
+	require.NoError(t, frepo.DeleteCascadeForTest(ctx, uid, folder.ID, testUnlockKey, ""))
 
 	var tagRows, clickRows int64
 	require.NoError(t, pool.QueryRow(ctx,
@@ -201,7 +201,7 @@ func TestRepository_DeleteCascadeReleasesOwnedNoteMediaRefs(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.NoError(t, frepo.DeleteCascade(ctx, uid, folder.ID, testUnlockKey, ""))
+	require.NoError(t, frepo.DeleteCascadeForTest(ctx, uid, folder.ID, testUnlockKey, ""))
 	var refs int64
 	var lease *time.Time
 	var expired bool
@@ -237,7 +237,7 @@ func TestRepository_DeleteCascadeRemovesNotesAndLinksTogether(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.NoError(t, frepo.DeleteCascade(ctx, uid, folder.ID, testUnlockKey, ""))
+	require.NoError(t, frepo.DeleteCascadeForTest(ctx, uid, folder.ID, testUnlockKey, ""))
 	_, err = lrepo.Get(ctx, uid, link.ID)
 	assert.ErrorIs(t, err, domainerr.ErrNotFound)
 	_, err = nrepo.Get(ctx, uid, note.ID)
@@ -249,7 +249,7 @@ func TestRepository_DeleteCascadeOnEmptyFolder(t *testing.T) {
 
 	f, err := frepo.Create(ctx, uid, folders.CreateInput{Name: "empty", Color: "#000"})
 	require.NoError(t, err)
-	require.NoError(t, frepo.DeleteCascade(ctx, uid, f.ID, testUnlockKey, ""))
+	require.NoError(t, frepo.DeleteCascadeForTest(ctx, uid, f.ID, testUnlockKey, ""))
 	_, err = frepo.Get(ctx, uid, f.ID)
 	assert.ErrorIs(t, err, domainerr.ErrNotFound)
 }
@@ -276,7 +276,7 @@ func TestRepository_DeleteCascadeLocksSubtreeBeforeProtectionCheck(t *testing.T)
 
 	result := make(chan error, 1)
 	go func() {
-		result <- frepo.DeleteCascade(context.Background(), uid, root.ID, testUnlockKey, "")
+		result <- frepo.DeleteCascadeForTest(context.Background(), uid, root.ID, testUnlockKey, "")
 	}()
 	require.Eventually(t, func() bool {
 		var waiting bool
@@ -332,7 +332,7 @@ func TestRepository_DeleteCascadePreservesChildMovedOutMidCascade(t *testing.T) 
 
 	result := make(chan error, 1)
 	go func() {
-		result <- frepo.DeleteCascade(context.Background(), uid, root.ID, testUnlockKey, "")
+		result <- frepo.DeleteCascadeForTest(context.Background(), uid, root.ID, testUnlockKey, "")
 	}()
 	require.Eventually(t, func() bool {
 		var waiting bool
@@ -714,7 +714,7 @@ func TestRepository_GetAndPasswordHashForMissing(t *testing.T) {
 	assert.ErrorIs(t, err, domainerr.ErrNotFound)
 	err = frepo.Delete(ctx, uid, 999_999, testUnlockKey, "")
 	assert.ErrorIs(t, err, domainerr.ErrNotFound)
-	err = frepo.DeleteCascade(ctx, uid, 999_999, testUnlockKey, "")
+	err = frepo.DeleteCascadeForTest(ctx, uid, 999_999, testUnlockKey, "")
 	assert.ErrorIs(t, err, domainerr.ErrNotFound)
 }
 
@@ -760,7 +760,7 @@ func TestRepository_DeleteCascadeRefusesProtectedDescendant(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	err = frepo.DeleteCascade(ctx, uid, root.ID, testUnlockKey, "")
+	err = frepo.DeleteCascadeForTest(ctx, uid, root.ID, testUnlockKey, "")
 	assert.ErrorIs(t, err, folders.ErrDescendantProtected)
 	_, err = frepo.Get(ctx, uid, root.ID)
 	require.NoError(t, err)
@@ -815,7 +815,7 @@ func TestRepository_CancelledContextSurfacesErrors(t *testing.T) {
 	require.Error(t, err)
 	err = frepo.Delete(ctx, uid, 1, testUnlockKey, "")
 	require.Error(t, err)
-	err = frepo.DeleteCascade(ctx, uid, 1, testUnlockKey, "")
+	err = frepo.DeleteCascadeForTest(ctx, uid, 1, testUnlockKey, "")
 	require.Error(t, err)
 	err = frepo.ResetPasswordByMaster(ctx, uid, 1, "x")
 	require.Error(t, err)

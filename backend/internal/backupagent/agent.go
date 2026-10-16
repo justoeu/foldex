@@ -110,7 +110,7 @@ type Agent struct {
 	schedMu     sync.RWMutex
 	timings     map[string]backupjobs.Timing
 	schedChange chan struct{}
-	// timingOverrides pins a job's Timing past the sync loop — tests need
+	// timingOverrides pins a job's backupjobs.Timing past the sync loop — tests need
 	// sub-second cadences no row or env var can express.
 	timingOverrides map[string]backupjobs.Timing
 
@@ -315,7 +315,7 @@ func (a *Agent) validatedScheduleRow(name string, rows map[string]backupjobs.Sch
 	return &cfg
 }
 
-// timing returns the current Timing for a job.
+// timing returns the current backupjobs.Timing for a job.
 func (a *Agent) timing(name string) backupjobs.Timing {
 	a.schedMu.RLock()
 	defer a.schedMu.RUnlock()
@@ -338,7 +338,7 @@ func (a *Agent) setTimings(next map[string]backupjobs.Timing) {
 	a.schedMu.Unlock()
 }
 
-// forceTiming pins one job's Timing past the sync loop (tests only).
+// forceTiming pins one job's backupjobs.Timing past the sync loop (tests only).
 func (a *Agent) forceTiming(name string, t backupjobs.Timing) {
 	a.schedMu.Lock()
 	if a.timingOverrides == nil {
@@ -545,7 +545,7 @@ func (a *Agent) scheduleSyncLoop(ctx context.Context) {
 	}
 }
 
-// scheduleLoop drives one job from its live Timing: sleep to the next slot,
+// scheduleLoop drives one job from its live backupjobs.Timing: sleep to the next slot,
 // run, recompute — and recompute early whenever the agenda swaps under it.
 func (a *Agent) scheduleLoop(ctx context.Context, spec jobSpec) {
 	defer a.wg.Done()

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"net/http"
 
-	"foldex/internal/pkg/contenthttp"
+	"foldex/internal/contenthttp"
 	"foldex/internal/pkg/httperr"
 )
 

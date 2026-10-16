@@ -37,9 +37,9 @@ func TestClient_UploadGetListDelete(t *testing.T) {
 	assert.Equal(t, payload, got)
 	assert.Equal(t, "image/png", ct)
 
-	exists, err := cli.ObjectExists(ctx, "images/1.png")
+	exists, err := cli.ExistingObjects(ctx, []string{"images/1.png"})
 	require.NoError(t, err)
-	assert.True(t, exists)
+	assert.True(t, exists["images/1.png"])
 
 	var objs []storage.ObjectInfo
 	err = cli.WalkObjects(ctx, "images/", func(obj storage.ObjectInfo) error {
@@ -73,14 +73,14 @@ func TestClient_UploadGetListDelete(t *testing.T) {
 	assert.Equal(t, map[string]bool{"images/1.png": true, "images/2.bin": true}, existing)
 
 	require.NoError(t, cli.DeleteObjects(ctx, []string{"images/1.png", "images/2.bin", "images/missing.bin"}))
-	exists, err = cli.ObjectExists(ctx, "images/1.png")
+	exists, err = cli.ExistingObjects(ctx, []string{"images/1.png"})
 	require.NoError(t, err)
-	assert.False(t, exists)
-	exists, err = cli.ObjectExists(ctx, "images/keep.bin")
+	assert.False(t, exists["images/1.png"])
+	exists, err = cli.ExistingObjects(ctx, []string{"images/keep.bin"})
 	require.NoError(t, err)
-	assert.True(t, exists, "explicit-key delete must not remove an unrequested tenant key")
+	assert.True(t, exists["images/keep.bin"], "explicit-key delete must not remove an unrequested tenant key")
 
-	require.NoError(t, cli.DeleteObjectsPrefix(ctx, "images/"))
+	require.NoError(t, cli.DeleteObjects(ctx, []string{"images/keep.bin"}))
 }
 
 func TestClient_WalkObjectsStreamsAndStopsOnCallbackError(t *testing.T) {
@@ -126,12 +126,12 @@ func TestClient_MissingObjectPaths(t *testing.T) {
 	}
 	require.Error(t, err)
 
-	exists, err := cli.ObjectExists(ctx, "no/such/key")
+	exists, err := cli.ExistingObjects(ctx, []string{"no/such/key"})
 	require.NoError(t, err)
-	assert.False(t, exists)
+	assert.False(t, exists["no/such/key"])
 
 	require.NoError(t, cli.DeleteObject(ctx, "no/such/key"))
-	require.NoError(t, cli.DeleteObjectsPrefix(ctx, "nothing/"))
+	require.NoError(t, cli.DeleteObjects(ctx, []string{"nothing/none"}))
 
 	cli2 := newClientRetry(t, ctx, storage.Config{
 		Endpoint:  ep,
@@ -141,7 +141,7 @@ func TestClient_MissingObjectPaths(t *testing.T) {
 		UseSSL:    false,
 	}, logger)
 	require.NoError(t, cli2.Upload(ctx, "a/b.bin", []byte("z"), "application/octet-stream"))
-	require.NoError(t, cli2.DeleteObjectsPrefix(ctx, "a/"))
+	require.NoError(t, cli2.DeleteObjects(ctx, []string{"a/b.bin"}))
 }
 
 func TestClient_NewCreatesBucket(t *testing.T) {
@@ -161,7 +161,7 @@ func TestClient_NewCreatesBucket(t *testing.T) {
 	assert.Equal(t, int64(1), st.Objects)
 }
 
-func TestClient_CancelledContextOnPrefixDelete(t *testing.T) {
+func TestClient_CancelledContextOnExplicitDelete(t *testing.T) {
 	ep, user, pass := startRustFS(t)
 	logger := discardLogger()
 	cli := newClientRetry(t, context.Background(), storage.Config{
@@ -172,7 +172,6 @@ func TestClient_CancelledContextOnPrefixDelete(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_ = cli.DeleteObjectsPrefix(ctx, "p/")
 	_, err := cli.ExistingObjects(ctx, []string{"p/1", "p/2"})
 	assert.ErrorIs(t, err, context.Canceled)
 	err = cli.DeleteObjects(ctx, []string{"p/1", "p/2"})

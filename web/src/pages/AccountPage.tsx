@@ -9,7 +9,7 @@ import { TwoFactorSection } from '../components/TwoFactorSection'
 import { ApiTokensSection } from '../components/ApiTokensSection'
 import { forgetRememberedEmail } from '../components/auth/LoginScreen'
 import { useAuth, useCurrentUser } from '../auth/AuthProvider'
-import { http } from '../api/client'
+import { logoutAll } from '../api/auth'
 import { initialsOf } from '../lib/initials'
 import { hasSecondFactor, type AuthUser } from '../auth/types'
 
@@ -86,7 +86,7 @@ export function AccountPage({ initialTab }: Readonly<{ initialTab?: AccountTab }
     })
     if (!yes) return
     try {
-      await http.post('/api/auth/logout-all')
+      await logoutAll()
     } catch {
       // Swallowed deliberately, not ignored: the sign-out below happens either
       // way, so there is nothing for the user to do about a failed revoke —

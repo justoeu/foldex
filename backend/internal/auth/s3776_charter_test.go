@@ -94,13 +94,13 @@ func TestS3776CharterRefreshReplayKillsTheFamily(t *testing.T) {
 
 func TestS3776CharterNumericOTPIsSeparatedByStrippedLength(t *testing.T) {
 	step := mustFindMethod(t, "Handler", "tryStepUpProof")
-	require.True(t, hasCallNamed(step.Body, "numericOTP"),
+	require.True(t, hasCallNamed(step.Body, "NumericOTP"),
 		"six-digit vs recovery must be separator-stripped length, not digit count (INV-004)")
-	require.True(t, containsIdent(step.Body, "recoveryCodeChars"),
+	require.True(t, containsIdent(step.Body, "CodeChars"),
 		"a recovery code is sixteen symbols once hyphens are gone")
 
 	proof := mustFindMethod(t, "Handler", "challengeProof")
-	require.True(t, hasCallNamed(proof.Body, "numericOTP"),
+	require.True(t, hasCallNamed(proof.Body, "NumericOTP"),
 		"login 2FA must use the same length split as step-up")
 }
 

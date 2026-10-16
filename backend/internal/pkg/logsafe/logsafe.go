@@ -9,7 +9,7 @@
 // volume regardless of encoding — hence the truncation in String.
 //
 // String clears CodeQL's go/log-injection at the sinks tried so far (the
-// artifact bridge's four, PR #123) — stated as a measurement, not a promise:
+// artifact bridge's four) — stated as a measurement, not a promise:
 // the analyzer's sanitizer model is not ours to depend on, and a future
 // version may well flag a String'd value again.
 //

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
 import { TagDialog } from './TagDialog'
@@ -8,6 +8,7 @@ import { useRecentChanges } from '../api/links'
 import { relativeTime } from '../lib/time'
 import { VERSION, BUILD_DATE, formatBuildDate } from '../version'
 import { useEscape } from '../hooks/useEscape'
+import { isBoolean, usePersistedState } from '../hooks/usePersistedState'
 
 type Props = Readonly<{
   selected: number[]
@@ -33,13 +34,6 @@ const FREQ_OPEN_KEY = 'foldex.sidebar.freqOpen'
 const OTHER_OPEN_KEY = 'foldex.sidebar.otherOpen'
 const RECENT_OPEN_KEY = 'foldex.sidebar.recentOpen'
 
-function readBool(key: string, def: boolean): boolean {
-  if (typeof localStorage === 'undefined') return def
-  const v = localStorage.getItem(key)
-  if (v === null) return def
-  return v === '1'
-}
-
 export function TagSidebar({
   selected,
   onToggle,
@@ -55,18 +49,9 @@ export function TagSidebar({
   const [creating, setCreating] = useState(false)
   const [managing, setManaging] = useState(false)
 
-  const [freqOpen, setFreqOpen] = useState(() => readBool(FREQ_OPEN_KEY, true))
-  const [otherOpen, setOtherOpen] = useState(() => readBool(OTHER_OPEN_KEY, true))
+  const [freqOpen, setFreqOpen] = usePersistedState(FREQ_OPEN_KEY, true, isBoolean)
+  const [otherOpen, setOtherOpen] = usePersistedState(OTHER_OPEN_KEY, true, isBoolean)
   const [otherShowAll, setOtherShowAll] = useState(false)
-
-  useEffect(() => {
-    if (typeof localStorage === 'undefined') return
-    localStorage.setItem(FREQ_OPEN_KEY, freqOpen ? '1' : '0')
-  }, [freqOpen])
-  useEffect(() => {
-    if (typeof localStorage === 'undefined') return
-    localStorage.setItem(OTHER_OPEN_KEY, otherOpen ? '1' : '0')
-  }, [otherOpen])
 
   // Esc closes the mobile drawer when it's open, through the escape
   // stack so it does not also pop the folder underneath.
@@ -260,12 +245,7 @@ export function TagSidebar({
 function RecentChangesSection({ enabled }: Readonly<{ enabled: boolean }>) {
   const { t } = useTranslation()
   const { data: links = [], isLoading } = useRecentChanges(7, 10, enabled)
-  const [open, setOpen] = useState(() => readBool(RECENT_OPEN_KEY, true))
-
-  useEffect(() => {
-    if (typeof localStorage === 'undefined') return
-    localStorage.setItem(RECENT_OPEN_KEY, open ? '1' : '0')
-  }, [open])
+  const [open, setOpen] = usePersistedState(RECENT_OPEN_KEY, true, isBoolean)
 
   if (!isLoading && links.length === 0) return null
 

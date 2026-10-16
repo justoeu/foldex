@@ -116,7 +116,7 @@ type Handler struct {
 	// "run the compiled-in floors", which is also what the policy package
 	// returns when nothing was ever saved — so an unwired handler and a
 	// never-configured instance behave identically.
-	policy PolicyReader
+	policy *policy.Repository
 
 	// abuse supplies the live rate-limit magnitudes (ADR-47). Nil is safe and
 	// means the compiled defaults, which is also what the cache answers before
@@ -205,7 +205,7 @@ type HandlerConfig struct {
 
 	// Policy supplies the owner-configurable rules. Optional: nil runs the
 	// compiled-in floors.
-	Policy PolicyReader
+	Policy *policy.Repository
 
 	// Abuse supplies the owner-configurable rate-limit magnitudes. Optional:
 	// nil runs the compiled defaults, and so does a cache whose store is
@@ -1212,27 +1212,6 @@ func floorDuration(start time.Time, d time.Duration) {
 	}
 }
 
-// PolicyReader supplies the instance rules this handler enforces. It is an
-// interface so internal/auth does not import internal/policy, which would make
-// the dependency circular the moment policy needs to name a role.
-//
-// All three methods are required rather than discovered by type assertion: an
-// optional-capability dance would let a fake that forgot GoogleProvisioning
-// compile and silently disable auto-provisioning, and "the feature quietly does
-// nothing" is the failure mode hardest to notice in a test suite.
-type PolicyReader interface {
-	PasswordMinLength(ctx context.Context) int
-	// OTPTTL is how long a mailed code stays usable.
-	OTPTTL(ctx context.Context) time.Duration
-	// OTPResendCooldown is the minimum gap between two sends.
-	OTPResendCooldown(ctx context.Context) time.Duration
-	// GoogleAllows reports whether the address may join through Google.
-	GoogleAllows(ctx context.Context, email string) bool
-	// GoogleProvisioning reports whether an unknown Google address may create an
-	// account, and with which role.
-	GoogleProvisioning(ctx context.Context) (bool, authctx.Role)
-}
-
 // passwordFloor is the configured minimum, never below the compiled-in one.
 //
 // The max() is not belt-and-braces: it is what makes the policy screen unable
@@ -1252,7 +1231,7 @@ func (h *Handler) liveFeatures(ctx context.Context) AuthFeatures {
 	return f
 }
 
-func passwordFloorOf(ctx context.Context, policy PolicyReader) int {
+func passwordFloorOf(ctx context.Context, policy *policy.Repository) int {
 	if policy == nil {
 		return MinPasswordLen
 	}
@@ -1286,7 +1265,7 @@ func (h *Handler) validatePassword(ctx context.Context, p string) error {
 	return validatePasswordAgainst(ctx, h.policy, p)
 }
 
-func validatePasswordAgainst(ctx context.Context, policy PolicyReader, p string) error {
+func validatePasswordAgainst(ctx context.Context, policy *policy.Repository, p string) error {
 	minLen := passwordFloorOf(ctx, policy)
 	if utf8.RuneCountInString(p) < minLen {
 		return httperr.New(http.StatusBadRequest, "password_too_short",
