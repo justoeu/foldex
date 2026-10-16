@@ -203,7 +203,7 @@ func (r *Repository) SystemClaimDueForCheck(ctx context.Context, limit int) ([]D
             LIMIT $1
             FOR UPDATE OF l SKIP LOCKED
         )
-		RETURNING id, user_id, url, title, check_interval, last_fingerprint, last_checked_at
+		RETURNING id, user_id, url, title, slug, check_interval, last_fingerprint, last_checked_at
     `, folders.SQLNotInLockedFolder("l")), limit)
 	if err != nil {
 		return nil, fmt.Errorf("claim due for check: %w", err)
@@ -218,6 +218,7 @@ func (r *Repository) SystemClaimDueForCheck(ctx context.Context, limit int) ([]D
 			&owner,
 			&d.URL,
 			&d.Title,
+			&d.Slug,
 			&d.CheckInterval,
 			&d.LastFingerprint,
 			&d.ClaimedAt,
@@ -236,6 +237,7 @@ type DueLink struct {
 	UserID          authctx.UserID
 	URL             string
 	Title           string
+	Slug            string
 	CheckInterval   string
 	LastFingerprint *string
 	ClaimedAt       time.Time

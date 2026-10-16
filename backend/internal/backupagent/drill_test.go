@@ -156,6 +156,20 @@ func (f *drillFixture) leftovers(t *testing.T) []os.DirEntry {
 	return entries
 }
 
+// After decryption the encrypted spool is dead weight: keeping it next to
+// restore.dump triples peak disk during pg_restore.
+func TestPrepareDump_RemovesEncryptedSpoolAfterDecrypt(t *testing.T) {
+	f := newDrillFixture(t)
+	dir := t.TempDir()
+	dumpPath, reason, err := f.job.prepareDump(context.Background(), f.runs.src, dir)
+	require.NoError(t, err)
+	assert.Empty(t, reason)
+	_, statErr := os.Stat(filepath.Join(dir, "artifact.spool"))
+	assert.True(t, os.IsNotExist(statErr), "encrypted spool must be removed after decryption")
+	_, statErr = os.Stat(dumpPath)
+	require.NoError(t, statErr)
+}
+
 func TestDrillRun_FullPipelineDownloadsVerifiesRestoresAndCleansUp(t *testing.T) {
 	f := newDrillFixture(t)
 

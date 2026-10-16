@@ -108,10 +108,18 @@ function PasswordPromptModal({
   useFocusTrap(dialogRef, true)
 
   // While locked out, tick every second so the countdown updates and the form
-  // re-enables the moment the lockout expires.
+  // re-enables the moment the lockout expires. The tick stops at expiry:
+  // lockedUntil staying non-null would otherwise re-render at 1 Hz forever.
   useEffect(() => {
     if (lockedUntil == null) return
-    const iv = setInterval(() => setNowTs(Date.now()), 1000)
+    const iv = setInterval(() => {
+      const now = Date.now()
+      setNowTs(now)
+      if (now >= lockedUntil) {
+        clearInterval(iv)
+        setLockedUntil(null)
+      }
+    }, 1000)
     return () => clearInterval(iv)
   }, [lockedUntil])
 

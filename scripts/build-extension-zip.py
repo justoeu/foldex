@@ -28,7 +28,7 @@ DIST = ROOT / "backend/internal/addon/dist"
 # Test sources never ship inside the extension an admin downloads: they are
 # dev-only in either layout the addon project uses (a test/ dir or
 # co-located *.test.*).
-EXCLUDED_DIRS = {"node_modules", ".git", "test", "tests"}
+EXCLUDED_DIRS = {"node_modules", ".git", "test", "tests", "coverage"}
 EXCLUDED_SUFFIXES = (".test.js", ".test.mjs", ".test.cjs")
 
 FIXED_DATE_TIME = (1980, 1, 1, 0, 0, 0)  # the ZIP epoch
@@ -58,7 +58,7 @@ def collect() -> list[Path]:
         rel = path.relative_to(SRC)
         if any(part in EXCLUDED_DIRS for part in rel.parts[:-1]):
             continue
-        if rel.name.startswith("."):
+        if any(part.startswith(".") for part in rel.parts):
             continue
         if rel.name.endswith(EXCLUDED_SUFFIXES):
             continue

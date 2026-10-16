@@ -228,9 +228,16 @@ export function useMarkChangeSeen() {
     onMutate: async (id) => {
       await qc.cancelQueries({ queryKey: ['links'] })
       await qc.cancelQueries({ queryKey: ['entries'] })
-      const now = new Date().toISOString()
-      mapCachedLinks(qc, (l) => (l.id === id ? { ...l, change_seen_at: now } : l))
-      mapCachedLinkEntries(qc, (l) => (l.id === id ? { ...l, change_seen_at: now } : l))
+      const now = Date.now()
+      // Clamp to the detected-change stamp: a client clock behind the
+      // server would otherwise mark seen BEFORE the change and the badge
+      // would never clear.
+      const seenFor = (l: Link) => {
+        const detected = l.last_change_detected_at ? Date.parse(l.last_change_detected_at) : 0
+        return new Date(Math.max(now, detected)).toISOString()
+      }
+      mapCachedLinks(qc, (l) => (l.id === id ? { ...l, change_seen_at: seenFor(l) } : l))
+      mapCachedLinkEntries(qc, (l) => (l.id === id ? { ...l, change_seen_at: seenFor(l) } : l))
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['links', 'recent-changes'] })
@@ -241,6 +248,13 @@ export function useMarkChangeSeen() {
       qc.invalidateQueries({ queryKey: ['entries'] })
     },
   })
+}
+
+export async function fetchLink(id: number, folderId?: number | null): Promise<Link> {
+  const { data } = await http.get<Link>(`/api/links/${id}`, {
+    headers: imageUnlockHeaders(folderId),
+  })
+  return data
 }
 
 export async function lookupLinkByURL(url: string, signal?: AbortSignal): Promise<Link | null> {

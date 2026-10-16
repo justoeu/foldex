@@ -42,9 +42,10 @@ export function invalidateEntryCounts(qc: QueryClient) {
 // existing reach — behavior-preserving consolidation.
 export function invalidateLibrary(
   qc: QueryClient,
-  keys: { links?: boolean; entries?: boolean; tags?: boolean; folders?: boolean; counts?: boolean },
+  keys: { links?: boolean; notes?: boolean; entries?: boolean; tags?: boolean; folders?: boolean; counts?: boolean },
 ) {
   if (keys.links) void qc.invalidateQueries({ queryKey: ['links'] })
+  if (keys.notes) void qc.invalidateQueries({ queryKey: ['notes'] })
   if (keys.entries) void qc.invalidateQueries({ queryKey: ['entries'] })
   if (keys.tags) void qc.invalidateQueries({ queryKey: ['tags'] })
   if (keys.folders) void qc.invalidateQueries({ queryKey: ['folders'] })

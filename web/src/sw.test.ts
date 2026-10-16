@@ -526,6 +526,18 @@ describe('service worker (sw.ts)', () => {
     )
   })
 
+  it('notificationclick prefers the backend /r/{slug} target over the id form', async () => {
+    const ev = makeExtendableEvent({
+      notification: {
+        close: vi.fn(),
+        data: { link_id: 9, kind: 'change_detected', url: '/r/my-bookmark', slug: 'my-bookmark' },
+      },
+    })
+    handlers.notificationclick![0](ev)
+    await ev.flush()
+    expect((globalThis as any).clients.openWindow).toHaveBeenCalledWith('/r/my-bookmark')
+  })
+
   it('notificationclick opens window when no client exists', async () => {
     const close = vi.fn()
     const ev = makeExtendableEvent({

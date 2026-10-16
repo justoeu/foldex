@@ -986,6 +986,14 @@ func (r *Repository) CreateInvite(ctx context.Context, email string, role authct
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	// Serialize concurrent invites for the same email: supersede-then-insert
+	// under READ COMMITTED races on invite_open_email_uniq and the loser
+	// would surface a uniqueness 500 instead of a working second link.
+	if _, err := tx.Exec(ctx,
+		`SELECT pg_advisory_xact_lock(hashtext('foldex.invite'), hashtext($1))`, norm); err != nil {
+		return Invite{}, "", fmt.Errorf("invite advisory lock: %w", err)
+	}
+
 	var taken bool
 	if err := tx.QueryRow(ctx,
 		`SELECT EXISTS(SELECT 1 FROM app_user WHERE email_normalized = $1)`, norm).Scan(&taken); err != nil {

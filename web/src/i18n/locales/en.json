@@ -106,6 +106,7 @@
     "settings": "Settings"
   },
   "sort": {
+    "label": "Sort",
     "new": "Newest",
     "top": "Top",
     "recent": "Recent",

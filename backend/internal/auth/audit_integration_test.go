@@ -116,13 +116,119 @@ func TestAudit_OwnFeedReturnsTheSubject(t *testing.T) {
 		Subject: "My private bookmark title", EntityKind: "link", EntityID: ptr(int64(42)),
 	})
 
-	entries, err := repo.ListOwnActivity(context.Background(), int64(member.ID), 0, 50)
+	entries, err := repo.ListOwnActivity(context.Background(), member.ID, 0, nil, 50)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	require.NotNil(t, entries[0].Subject)
 	assert.Equal(t, "My private bookmark title", *entries[0].Subject)
 	require.NotNil(t, entries[0].EntityID)
 	assert.Equal(t, int64(42), *entries[0].EntityID)
+}
+
+// The merged click half of the feed must actually reach the caller: this
+// pins the join against the table that exists (link, not links) and the
+// entity id the ActivitySection glyphs key off.
+func TestAudit_OwnFeedIncludesLinkClicks(t *testing.T) {
+	repo, pool, _, member := auditFixture(t)
+	ctx := context.Background()
+
+	var linkID int64
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO link (user_id, url, title, slug)
+		VALUES ($1, 'https://clicked.example', 'Clicked bookmark', 'clicked-bookmark-test')
+		RETURNING id`, int64(member.ID)).Scan(&linkID))
+	_, err := pool.Exec(ctx, `
+		INSERT INTO click_log (user_id, entity_kind, entity_id, clicked_at)
+		VALUES ($1, 'link', $2, now())`, int64(member.ID), linkID)
+	require.NoError(t, err)
+
+	entries, err := repo.ListOwnActivity(ctx, member.ID, 0, nil, 50)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "link.clicked", entries[0].Action)
+	require.NotNil(t, entries[0].Subject)
+	assert.Equal(t, "Clicked bookmark", *entries[0].Subject)
+	require.NotNil(t, entries[0].EntityID)
+	assert.Equal(t, linkID, *entries[0].EntityID)
+}
+
+// The merged feed pages on its last row's id, and the two sources have
+// separate id sequences: a click id reused as an audit cursor would jump
+// to an arbitrary audit row. Click rows carry negated ids so paging walks
+// the interleaved timeline exactly once.
+func TestAudit_OwnFeedPaginationAcrossMixedIDs(t *testing.T) {
+	repo, pool, _, member := auditFixture(t)
+	ctx := context.Background()
+	base := time.Now().Add(-time.Hour).Truncate(time.Microsecond)
+
+	var linkID int64
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO link (user_id, url, title, slug)
+		VALUES ($1, 'https://paged.example', 'Paged bookmark', 'paged-bookmark-test')
+		RETURNING id`, int64(member.ID)).Scan(&linkID))
+
+	for i := 0; i < 3; i++ {
+		at := base.Add(time.Duration(2*i) * time.Minute)
+		_, err := pool.Exec(ctx, `
+			INSERT INTO audit_log (actor_id, action, subject, created_at)
+			VALUES ($1, 'link.created', $2, $3)`,
+			int64(member.ID), fmt.Sprintf("audit-%d", i), at)
+		require.NoError(t, err)
+		_, err = pool.Exec(ctx, `
+			INSERT INTO click_log (user_id, entity_kind, entity_id, clicked_at)
+			VALUES ($1, 'link', $2, $3)`,
+			int64(member.ID), linkID, at.Add(time.Minute))
+		require.NoError(t, err)
+	}
+
+	// A same-instant cluster (one audit row + two clicks sharing a
+	// timestamp, as a batch import produces) must page through the
+	// composite (created_at, feed id) order without drops or repeats.
+	clusterAt := base.Add(10 * time.Minute)
+	_, err := pool.Exec(ctx, `
+		INSERT INTO audit_log (actor_id, action, subject, created_at)
+		VALUES ($1, 'link.created', 'audit-cluster', $2)`, int64(member.ID), clusterAt)
+	require.NoError(t, err)
+	for range 2 {
+		_, err = pool.Exec(ctx, `
+			INSERT INTO click_log (user_id, entity_kind, entity_id, clicked_at)
+			VALUES ($1, 'link', $2, $3)`, int64(member.ID), linkID, clusterAt)
+		require.NoError(t, err)
+	}
+
+	var got []auth.AuditEntry
+	var cursorID int64
+	var cursorAt *time.Time
+	for page := 0; page < 8; page++ {
+		entries, err := repo.ListOwnActivity(ctx, member.ID, cursorID, cursorAt, 2)
+		require.NoError(t, err)
+		if len(entries) == 0 {
+			break
+		}
+		got = append(got, entries...)
+		last := entries[len(entries)-1]
+		cursorID, cursorAt = last.ID, &last.CreatedAt
+	}
+	require.Len(t, got, 9)
+
+	// A composite cursor needs no cursor row: deleting every seeded click
+	// must not end paging early or resurrect rows.
+	_, err = pool.Exec(ctx, `DELETE FROM click_log WHERE user_id = $1`, int64(member.ID))
+	require.NoError(t, err)
+	rest, err := repo.ListOwnActivity(ctx, member.ID, cursorID, cursorAt, 50)
+	require.NoError(t, err)
+	assert.Empty(t, rest)
+	seen := map[int64]bool{}
+	for i, e := range got {
+		assert.False(t, seen[e.ID], "entry id %d repeated across pages", e.ID)
+		seen[e.ID] = true
+		if e.Action == "link.clicked" {
+			assert.Negative(t, e.ID, "click rows carry negated click_log ids")
+		}
+		if i > 0 {
+			assert.False(t, got[i].CreatedAt.After(got[i-1].CreatedAt), "feed must stay time-descending across pages")
+		}
+	}
 }
 
 // INV-001's explicit-uid rule applied to a table that is otherwise
@@ -137,7 +243,7 @@ func TestCrossUser_OwnActivityNeverReturnsAnotherAccountsRows(t *testing.T) {
 		Action: auth.AuditLinkCreated, ActorID: &member.ID, Subject: "the member's own",
 	})
 
-	entries, err := repo.ListOwnActivity(context.Background(), int64(member.ID), 0, 50)
+	entries, err := repo.ListOwnActivity(context.Background(), member.ID, 0, nil, 50)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	assert.Equal(t, "the member's own", *entries[0].Subject)
@@ -157,7 +263,7 @@ func TestAudit_OwnFeedIncludesLoginsExcludesAdminOnYou(t *testing.T) {
 		Action: auth.AuditNoteUpdated, ActorID: &member.ID, Subject: "a note",
 	})
 
-	entries, err := repo.ListOwnActivity(context.Background(), int64(member.ID), 0, 50)
+	entries, err := repo.ListOwnActivity(context.Background(), member.ID, 0, nil, 50)
 	require.NoError(t, err)
 	// The login is the member's OWN action — it belongs. The role change was
 	// done TO the member by the admin — it does not.

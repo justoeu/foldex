@@ -18,28 +18,31 @@ type existingRestoreLink struct {
 	slug string
 }
 
-func restoreSkipStaged(ctx context.Context, tx pgx.Tx, uid authctx.UserID, snap *Snapshot) (Counts, Counts, idMapping, error) {
+func restoreSkipStaged(ctx context.Context, tx pgx.Tx, uid authctx.UserID, snap *Snapshot) (Counts, Counts, []string, idMapping, error) {
 	var inserted, skipped Counts
+	var warnings []string
 	mapping := newIDMapping()
 
 	existingLinks, err := loadExistingRestoreLinks(ctx, tx, uid, snap.Links)
 	if err != nil {
-		return inserted, skipped, mapping, err
+		return inserted, skipped, warnings, mapping, err
 	}
 	linkSlugs, err := allocateRestoreLinkSlugs(ctx, tx, snap.Links, existingLinks)
 	if err != nil {
-		return inserted, skipped, mapping, err
+		return inserted, skipped, warnings, mapping, err
 	}
 	noteSlugs, err := allocateRestoreNoteSlugs(ctx, tx, snap.Notes)
 	if err != nil {
-		return inserted, skipped, mapping, err
+		return inserted, skipped, warnings, mapping, err
 	}
 
 	if err := createRestoreStagingTables(ctx, tx); err != nil {
-		return inserted, skipped, mapping, err
+		return inserted, skipped, warnings, mapping, err
 	}
-	if err := copyRestoreStaging(ctx, tx, snap, nil, linkSlugs, noteSlugs); err != nil {
-		return inserted, skipped, mapping, err
+	stagingWarnings, err := copyRestoreStaging(ctx, tx, snap, nil, linkSlugs, noteSlugs)
+	warnings = append(warnings, stagingWarnings...)
+	if err != nil {
+		return inserted, skipped, warnings, mapping, err
 	}
 
 	ct, err := tx.Exec(ctx, `
@@ -49,7 +52,7 @@ func restoreSkipStaged(ctx context.Context, tx pgx.Tx, uid authctx.UserID, snap 
 		ORDER BY ordinal
 		ON CONFLICT (user_id, name) DO NOTHING`, int64(uid))
 	if err != nil {
-		return inserted, skipped, mapping, fmt.Errorf("insert staged restore tags: %w", err)
+		return inserted, skipped, warnings, mapping, fmt.Errorf("insert staged restore tags: %w", err)
 	}
 	inserted.Tags = ct.RowsAffected()
 	skipped.Tags = int64(len(snap.Tags)) - inserted.Tags
@@ -57,32 +60,32 @@ func restoreSkipStaged(ctx context.Context, tx pgx.Tx, uid authctx.UserID, snap 
 		SELECT staged.old_id, live.id
 		FROM _backup_restore_tag staged
 		JOIN tag live ON live.user_id = $1 AND live.name = staged.name`, mapping.tagMap, int64(uid)); err != nil {
-		return inserted, skipped, mapping, fmt.Errorf("map staged restore tags: %w", err)
+		return inserted, skipped, warnings, mapping, fmt.Errorf("map staged restore tags: %w", err)
 	}
 
 	inserted.Folders, err = insertStagedFolders(ctx, tx, uid, mapping)
 	if err != nil {
-		return inserted, skipped, mapping, err
+		return inserted, skipped, warnings, mapping, err
 	}
 
 	links, err := restoreConflictLinks(ctx, tx, uid, snap.Links, existingLinks, mapping, ModeSkip)
 	if err != nil {
-		return inserted, skipped, mapping, err
+		return inserted, skipped, warnings, mapping, err
 	}
 	inserted.Links, skipped.Links = links.inserted, links.skipped
 
 	inserted.Notes, err = insertStagedNotes(ctx, tx, uid, mapping)
 	if err != nil {
-		return inserted, skipped, mapping, err
+		return inserted, skipped, warnings, mapping, err
 	}
 
 	if err := attachPolymorphicTags(ctx, tx, mapping, snap, &inserted, &skipped, true); err != nil {
-		return inserted, skipped, mapping, err
+		return inserted, skipped, warnings, mapping, err
 	}
 	if err := copyPolymorphicClicks(ctx, tx, uid, mapping, snap, restoreClickAccounting{inserted: &inserted, skipped: &skipped, countSkips: true}); err != nil {
-		return inserted, skipped, mapping, err
+		return inserted, skipped, warnings, mapping, err
 	}
-	return inserted, skipped, mapping, nil
+	return inserted, skipped, warnings, mapping, nil
 }
 
 func restoreDuplicateStaged(ctx context.Context, tx pgx.Tx, uid authctx.UserID, snap *Snapshot) (Counts, []string, idMapping, error) {
@@ -97,10 +100,14 @@ func restoreDuplicateStaged(ctx context.Context, tx pgx.Tx, uid authctx.UserID, 
 	if err := createRestoreStagingTables(ctx, tx); err != nil {
 		return inserted, warnings, mapping, err
 	}
-	if err := copyRestoreStaging(ctx, tx, snap, prep.tagNames, prep.linkSlugs, prep.noteSlugs); err != nil {
+	stagingWarnings, err := copyRestoreStaging(ctx, tx, snap, prep.tagNames, prep.linkSlugs, prep.noteSlugs)
+	warnings = append(warnings, stagingWarnings...)
+	if err != nil {
 		return inserted, warnings, mapping, err
 	}
-	return insertDuplicateRestore(ctx, tx, uid, snap, prep, mapping)
+	inserted, insertWarnings, mapping, err := insertDuplicateRestore(ctx, tx, uid, snap, prep, mapping)
+	warnings = append(warnings, insertWarnings...)
+	return inserted, warnings, mapping, err
 }
 
 type duplicateRestorePrep struct {
@@ -249,6 +256,9 @@ func restoreConflictLinks(ctx context.Context, tx pgx.Tx, uid authctx.UserID, li
 		FROM _backup_restore_link staged
 		JOIN link live ON live.user_id = $1 AND live.url = staged.url`, mapping.linkMap, int64(uid)); err != nil {
 		return restored, fmt.Errorf("map staged %s links: %w", label, err)
+	}
+	if err := loadInsertedLinkIDs(ctx, tx, uid, mapping); err != nil {
+		return restored, err
 	}
 	if mode == ModeSkip {
 		restored.skipped = int64(len(links)) - restored.inserted
@@ -458,21 +468,22 @@ func createRestoreStagingTables(ctx context.Context, tx pgx.Tx) error {
 	return nil
 }
 
-func copyRestoreStaging(ctx context.Context, tx pgx.Tx, snap *Snapshot, tagNames, linkSlugs, noteSlugs []string) error {
+func copyRestoreStaging(ctx context.Context, tx pgx.Tx, snap *Snapshot, tagNames, linkSlugs, noteSlugs []string) ([]string, error) {
 	ids, err := reserveRestoreStagingIDs(ctx, tx, snap)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := copyRestoreTags(ctx, tx, snap.Tags, tagNames, ids.tags); err != nil {
-		return err
+		return nil, err
 	}
-	if err := copyRestoreFolders(ctx, tx, snap.Folders, ids.folders); err != nil {
-		return err
+	warnings, err := copyRestoreFolders(ctx, tx, snap.Folders, ids.folders)
+	if err != nil {
+		return warnings, err
 	}
 	if err := copyRestoreLinks(ctx, tx, snap.Links, linkSlugs, ids.links); err != nil {
-		return err
+		return warnings, err
 	}
-	return copyRestoreNotes(ctx, tx, snap.Notes, noteSlugs, ids.notes)
+	return warnings, copyRestoreNotes(ctx, tx, snap.Notes, noteSlugs, ids.notes)
 }
 
 type restoreStagingIDs struct {
@@ -518,21 +529,34 @@ func copyRestoreTags(ctx context.Context, tx pgx.Tx, tags []TagRow, tagNames []s
 	return nil
 }
 
-func copyRestoreFolders(ctx context.Context, tx pgx.Tx, folders []FolderRow, newIDs []int64) error {
+func copyRestoreFolders(ctx context.Context, tx pgx.Tx, folders []FolderRow, newIDs []int64) ([]string, error) {
 	if len(folders) == 0 {
-		return nil
+		return nil, nil
 	}
-	folderParents, _ := normalizeRestoreFolderParents(folders)
+	folderParents, warnings := normalizeRestoreFolderParents(folders)
+	// A hand-edited archive can repeat a folder id; staging the row twice
+	// violates the temp table PK and aborts the whole restore. Keep the
+	// first occurrence, matching indexRestoreFolders.
+	indexes := make([]int, 0, len(folders))
+	seen := make(map[int64]bool, len(folders))
+	for i, row := range folders {
+		if seen[row.ID] {
+			continue
+		}
+		seen[row.ID] = true
+		indexes = append(indexes, i)
+	}
 	_, err := tx.CopyFrom(ctx, pgx.Identifier{"_backup_restore_folder"},
 		[]string{"ordinal", "old_id", "new_id", "name", "color", "parent_old_id", "password_hash", "password_hint", "created_at"},
-		pgx.CopyFromSlice(len(folders), func(i int) ([]any, error) {
+		pgx.CopyFromSlice(len(indexes), func(n int) ([]any, error) {
+			i := indexes[n]
 			row := folders[i]
 			return []any{i, row.ID, newIDs[i], row.Name, row.Color, folderParents[i], row.PasswordHash, row.PasswordHint, row.CreatedAt}, nil
 		}))
 	if err != nil {
-		return fmt.Errorf("copy restore folders: %w", err)
+		return warnings, fmt.Errorf("copy restore folders: %w", err)
 	}
-	return nil
+	return warnings, nil
 }
 
 func copyRestoreLinks(ctx context.Context, tx pgx.Tx, links []LinkRow, slugs []string, newIDs []int64) error {
@@ -722,6 +746,29 @@ func reserveRestoreIDs(ctx context.Context, tx pgx.Tx, sequence string, count in
 		return nil, fmt.Errorf("reserve restore ids from %s: got %d, want %d", sequence, len(ids), count)
 	}
 	return ids, nil
+}
+
+// loadInsertedLinkIDs records which staged links this restore actually
+// inserted (their allocated new_id exists live), as opposed to conflict
+// rows linkMap resolves onto a pre-existing survivor.
+func loadInsertedLinkIDs(ctx context.Context, tx pgx.Tx, uid authctx.UserID, mapping idMapping) error {
+	rows, err := tx.Query(ctx, `
+		SELECT staged.new_id
+		FROM _backup_restore_link staged
+		JOIN link live ON live.id = staged.new_id AND live.user_id = $1`, int64(uid))
+	if err != nil {
+		return fmt.Errorf("load inserted staged links: %w", err)
+	}
+	defer rows.Close()
+	mapping.insertedLinks[0] = true // authoritative, even when empty
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return err
+		}
+		mapping.insertedLinks[id] = true
+	}
+	return rows.Err()
 }
 
 func loadStagedIDMapping(ctx context.Context, tx pgx.Tx, query string, mapping map[int64]int64, args ...any) error {

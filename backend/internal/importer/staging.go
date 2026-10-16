@@ -219,10 +219,13 @@ func (plan *importStagingPlan) chooseRows(mode importMode, existing map[string]e
 			plan.selectedIndexes = append(plan.selectedIndexes, group.last)
 			continue
 		}
-		if group.lastTagged >= 0 {
-			plan.applyTags[group.lastTagged] = true
-		}
 		if _, found := existing[url]; !found {
+			// Only a newly imported link takes the item's tag set: applying
+			// tags to a pre-existing link would wipe and replace the tags
+			// the user curated on it.
+			if group.lastTagged >= 0 {
+				plan.applyTags[group.lastTagged] = true
+			}
 			plan.selectedIndexes = append(plan.selectedIndexes, group.first)
 		}
 	}

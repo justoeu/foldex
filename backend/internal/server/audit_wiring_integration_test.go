@@ -17,6 +17,7 @@ import (
 
 	"foldex/internal/auth"
 	"foldex/internal/config"
+	"foldex/internal/pkg/authctx"
 	"foldex/internal/server"
 	"foldex/internal/testdb"
 )
@@ -82,7 +83,7 @@ func TestWiring_ContentAuditRecordsAMutationThroughTheRealRouter(t *testing.T) {
 
 	// ...and the OWNER's feed has it, which is the read split end to end.
 	require.NotNil(t, entries[0].ActorRef, "the row must still name its actor opaquely")
-	own, err := repo.ListOwnActivity(context.Background(), *entries[0].ActorRef, 0, 50)
+	own, err := repo.ListOwnActivity(context.Background(), authctx.UserID(*entries[0].ActorRef), 0, nil, 50)
 	require.NoError(t, err)
 	require.Len(t, own, 1)
 	require.NotNil(t, own[0].Subject)

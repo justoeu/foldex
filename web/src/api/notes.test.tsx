@@ -51,6 +51,21 @@ describe('useCreateNote', () => {
 })
 
 describe('useUpdateNote', () => {
+  it('refreshes the single-note cache so a reopened dialog does not 409 on its own write', async () => {
+    state.notes.push({
+      id: 7, title: 'Old', slug: 'old', body_html: '<p>x</p>', pinned: false, folder_id: null,
+      cover_url: null, click_count: 0, last_clicked_at: null,
+      created_at: '', updated_at: '2026-01-01T00:00:00Z', tags: [],
+    })
+    client.setQueryData(['notes', 7, 'locked'], {
+      id: 7, title: 'Old', updated_at: '2026-01-01T00:00:00Z',
+    })
+    const { result } = renderHook(() => useUpdateNote(), { wrapper })
+    await result.current.mutateAsync({ id: 7, body: { title: 'New' } })
+    const cached = client.getQueryData<{ title: string; updated_at: string }>(['notes', 7, 'locked'])
+    expect(cached?.title).toBe('New')
+    expect(cached?.updated_at).not.toBe('2026-01-01T00:00:00Z')
+  })
   it('patches an existing note', async () => {
     state.notes.push({
       id: 1, title: 'Old', slug: 'old', body_html: '<p>x</p>', pinned: false,

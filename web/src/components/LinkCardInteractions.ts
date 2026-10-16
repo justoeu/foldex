@@ -9,8 +9,11 @@ const LINK_MIME = 'application/x-foldex-link'
 const NOTE_MIME = 'application/x-foldex-note'
 
 export function hasUnseenChange(link: Link): boolean {
+  // Numeric parse: lexicographic comparison breaks across timezone offsets
+  // and fractional-second precision differences between the two stamps.
   return !!link.last_change_detected_at &&
-    (!link.change_seen_at || link.change_seen_at < link.last_change_detected_at)
+    (!link.change_seen_at ||
+      Date.parse(link.change_seen_at) < Date.parse(link.last_change_detected_at))
 }
 
 export function acceptsCardDrag(types: readonly string[]): boolean {

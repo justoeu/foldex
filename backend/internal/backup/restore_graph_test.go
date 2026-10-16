@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -36,12 +37,14 @@ func TestCopyRestore_EmptySlicesAndTxFailure(t *testing.T) {
 	ctx := context.Background()
 	tx := failRestoreTx{}
 	require.NoError(t, copyRestoreTags(ctx, tx, nil, nil, nil))
-	require.NoError(t, copyRestoreFolders(ctx, tx, nil, nil))
+	_, foldersErr := copyRestoreFolders(ctx, tx, nil, nil)
+	require.NoError(t, foldersErr)
 	require.NoError(t, copyRestoreLinks(ctx, tx, nil, nil, nil))
 	require.NoError(t, copyRestoreNotes(ctx, tx, nil, nil, nil))
 
 	require.Error(t, copyRestoreTags(ctx, tx, []TagRow{{ID: 1, Name: "a"}}, []string{"a"}, []int64{1}))
-	require.Error(t, copyRestoreFolders(ctx, tx, []FolderRow{{ID: 1, Name: "f"}}, []int64{1}))
+	_, foldersErr = copyRestoreFolders(ctx, tx, []FolderRow{{ID: 1, Name: "f"}}, []int64{1})
+	require.Error(t, foldersErr)
 	require.Error(t, copyRestoreLinks(ctx, tx, []LinkRow{{ID: 1, URL: "https://x", Title: "t"}}, []string{"s"}, []int64{1}))
 	require.Error(t, copyRestoreNotes(ctx, tx, []NoteRow{{ID: 1, Title: "n", BodyHTML: "<p>x</p>"}}, []string{"s"}, []int64{1}))
 	require.Error(t, createRestoreStagingTables(ctx, tx))
@@ -77,9 +80,42 @@ func TestNormalizeRestoreFolderParents_TreeDuplicateAndCycle(t *testing.T) {
 	_ = childParent
 }
 
+type countingCopyTx struct {
+	seqRestoreTx
+	rows [][]any
+}
+
+func (c *countingCopyTx) CopyFrom(_ context.Context, _ pgx.Identifier, _ []string, src pgx.CopyFromSource) (int64, error) {
+	for src.Next() {
+		values, err := src.Values()
+		if err != nil {
+			return 0, err
+		}
+		c.rows = append(c.rows, values)
+	}
+	return int64(len(c.rows)), src.Err()
+}
+
+// A hand-edited archive repeating a folder id must stage the folder once —
+// twice violates the staging PK and aborts the whole restore.
+func TestCopyRestoreFolders_SkipsDuplicateFolderIDs(t *testing.T) {
+	t.Parallel()
+	tx := &countingCopyTx{}
+	folders := []FolderRow{
+		{ID: 5, Name: "first"},
+		{ID: 5, Name: "duplicate"},
+		{ID: 6, Name: "other"},
+	}
+	warnings, err := copyRestoreFolders(context.Background(), tx, folders, []int64{50, 51, 60})
+	require.NoError(t, err)
+	require.Len(t, tx.rows, 2)
+	require.Equal(t, "first", tx.rows[0][3], "the first occurrence wins")
+	require.NotEmpty(t, warnings, "the duplicate is surfaced, not silenced")
+}
+
 func TestCopyRestoreStaging_FailsWhenReserveFails(t *testing.T) {
 	t.Parallel()
-	err := copyRestoreStaging(context.Background(), failRestoreTx{}, &Snapshot{Tags: []TagRow{{ID: 1}}}, []string{"a"}, nil, nil)
+	_, err := copyRestoreStaging(context.Background(), failRestoreTx{}, &Snapshot{Tags: []TagRow{{ID: 1}}}, []string{"a"}, nil, nil)
 	require.Error(t, err)
 }
 
@@ -88,7 +124,7 @@ func TestRestoreSkipAndDuplicate_FailClosedOnBadTx(t *testing.T) {
 	ctx := context.Background()
 	uid := authctx.UserID(1)
 	snap := &Snapshot{Tags: []TagRow{{ID: 1, Name: "t"}}}
-	_, _, _, err := restoreSkipStaged(ctx, failRestoreTx{}, uid, snap)
+	_, _, _, _, err := restoreSkipStaged(ctx, failRestoreTx{}, uid, snap)
 	require.Error(t, err)
 	_, _, _, err = restoreDuplicateStaged(ctx, failRestoreTx{}, uid, snap)
 	require.Error(t, err)
@@ -105,9 +141,9 @@ func TestRestoreStaged_WalkEachTxStep(t *testing.T) {
 		Notes:   []NoteRow{{ID: 4, Title: "N", Slug: "n", BodyHTML: "<p>x</p>"}},
 	}
 	for n := 1; n <= 16; n++ {
-		_, _, _, _ = restoreSkipStaged(ctx, &seqRestoreTx{failAt: n}, uid, snap)
+		_, _, _, _, _ = restoreSkipStaged(ctx, &seqRestoreTx{failAt: n}, uid, snap)
 		_, _, _, _ = restoreDuplicateStaged(ctx, &seqRestoreTx{failAt: n}, uid, snap)
-		_ = copyRestoreStaging(ctx, &seqRestoreTx{failAt: n}, snap, []string{"a"}, []string{"l"}, []string{"n"})
+		_, _ = copyRestoreStaging(ctx, &seqRestoreTx{failAt: n}, snap, []string{"a"}, []string{"l"}, []string{"n"})
 		_, _ = insertStagedFolders(ctx, &seqRestoreTx{failAt: n}, uid, newIDMapping())
 		_, _ = loadExistingRestoreLinks(ctx, &seqRestoreTx{failAt: n}, uid, snap.Links)
 	}

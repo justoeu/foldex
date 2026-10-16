@@ -72,7 +72,10 @@ export async function applyImport(
   fd.append('file', file)
   fd.append('format', format)
   fd.append('mode', mode)
-  if (excludeFolders.length > 0) fd.append('exclude_folders', excludeFolders.join(','))
+  // One field per folder: a comma-joined value would split folder names
+  // that contain commas.
+  for (const folder of excludeFolders) fd.append('exclude_folders', folder)
+  if (excludeFolders.length > 0) fd.append('exclude_folders_v2', '1')
   const { data } = await http.post<ImportResult>('/api/import/apply', fd, {
     headers: { 'Content-Type': 'multipart/form-data' },
     signal,

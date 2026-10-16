@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"foldex/internal/pkg/authctx"
+	"foldex/internal/pkg/pgerr"
 )
 
 type restoreTransactionResult struct {
@@ -41,6 +42,16 @@ func (s *Service) Restore(ctx context.Context, uid authctx.UserID, zr *zip.Reade
 	defer prepared.cleanup()
 
 	result, err := s.applyRestoreTransaction(ctx, uid, mode, preflight, prepared)
+	for attempt := 1; err != nil && pgerr.IsSlugRace(err) && attempt < maxRestoreSlugAttempts; attempt++ {
+		// A concurrent create grabbed a global slug after the preload;
+		// the transaction rolled back whole, so retrying is safe.
+		select {
+		case <-ctx.Done():
+			return empty, ctx.Err()
+		case <-time.After(time.Duration(attempt) * 25 * time.Millisecond):
+		}
+		result, err = s.applyRestoreTransaction(ctx, uid, mode, preflight, prepared)
+	}
 	if err != nil {
 		return empty, err
 	}
@@ -52,6 +63,9 @@ func (s *Service) Restore(ctx context.Context, uid authctx.UserID, zr *zip.Reade
 		start:  start,
 	}, result, prepared)
 }
+
+// maxRestoreSlugAttempts bounds the slug-race retry in Restore.
+const maxRestoreSlugAttempts = 3
 
 func preflightRestore(ctx context.Context, zr *zip.Reader) (backupArchiveInspection, error) {
 	preflight := inspectBackupArchive(ctx, zr)
@@ -161,8 +175,9 @@ func applyRestoreMode(ctx context.Context, tx pgx.Tx, uid authctx.UserID, mode C
 	case ModeWipe:
 		return applyWipeRestore(ctx, tx, uid, snapshot, report)
 	case ModeSkip:
-		inserted, skipped, mapping, err := restoreSkip(ctx, tx, uid, snapshot)
+		inserted, skipped, warnings, mapping, err := restoreSkip(ctx, tx, uid, snapshot)
 		report.Inserted, report.Skipped = inserted, skipped
+		report.Warnings = append(report.Warnings, warnings...)
 		return mapping, wrapRestoreInsertError("skip", err)
 	case ModeDuplicate:
 		inserted, warnings, mapping, err := restoreDuplicate(ctx, tx, uid, snapshot)
@@ -183,8 +198,9 @@ func applyWipeRestore(ctx context.Context, tx pgx.Tx, uid authctx.UserID, snapsh
 		return idMapping{}, fmt.Errorf("backup: wipe db: %w", err)
 	}
 	report.Wiped = wiped
-	inserted, _, mapping, err := restoreSkip(ctx, tx, uid, snapshot)
+	inserted, _, warnings, mapping, err := restoreSkip(ctx, tx, uid, snapshot)
 	report.Inserted = inserted
+	report.Warnings = append(report.Warnings, warnings...)
 	return mapping, wrapRestoreInsertError("wipe", err)
 }
 

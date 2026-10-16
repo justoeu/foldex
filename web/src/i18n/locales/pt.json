@@ -106,6 +106,7 @@
     "settings": "Configurações"
   },
   "sort": {
+    "label": "Ordenar",
     "new": "Novos",
     "top": "Top",
     "recent": "Recentes",

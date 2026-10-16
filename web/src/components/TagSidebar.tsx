@@ -7,6 +7,7 @@ import { useTags } from '../api/tags'
 import { useRecentChanges } from '../api/links'
 import { relativeTime } from '../lib/time'
 import { VERSION, BUILD_DATE, formatBuildDate } from '../version'
+import { useEscape } from '../hooks/useEscape'
 
 type Props = Readonly<{
   selected: number[]
@@ -67,17 +68,9 @@ export function TagSidebar({
     localStorage.setItem(OTHER_OPEN_KEY, otherOpen ? '1' : '0')
   }, [otherOpen])
 
-  // Esc closes the mobile drawer when it's open. Hooked unconditionally
-  // (handler no-ops when mobileOpen is false) so React doesn't see a
-  // changing hook count.
-  useEffect(() => {
-    if (!mobileOpen) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onMobileClose?.()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [mobileOpen, onMobileClose])
+  // Esc closes the mobile drawer when it's open, through the escape
+  // stack so it does not also pop the folder underneath.
+  useEscape(() => onMobileClose?.(), mobileOpen)
 
   const railClass = mobileOpen ? ' fx-sidebar-mobile-open' : ''
 

@@ -50,6 +50,16 @@ export function TwoFactorScreen({ pending }: Readonly<{ pending: TwoFactorPendin
   const [phase, setPhase] = useState<Phase>('counting')
   const [resendUsed, setResendUsed] = useState(false)
   const emailRequestedRef = useRef(false)
+  // Flipped when the screen is left (unmount or sign-out paths): a verify
+  // response that lands afterwards must NOT adopt the session.
+  const goneRef = useRef(false)
+  useEffect(() => () => {
+    goneRef.current = true
+  }, [])
+  const leave = useCallback(() => {
+    goneRef.current = true
+    void signOut()
+  }, [signOut])
   const canEmail = pending.methods.includes('email_otp')
 
   useEffect(() => {
@@ -80,11 +90,15 @@ export function TwoFactorScreen({ pending }: Readonly<{ pending: TwoFactorPendin
   // The tick above only lands at 0; the transition is its own effect so a
   // phase change mid-window (resend) can restart the clock cleanly.
   useEffect(() => {
+    // A submit in flight owns the screen: expiring under it would unmount
+    // the form mid-verification. busy in deps re-runs this when the submit
+    // settles, so a failed attempt at 0 still transitions cleanly.
+    if (busy) return
     if (phase === 'counting' && secondsLeft === 0) {
       if (emailRequestedRef.current && !resendUsed) setPhase('askResend')
       else setPhase('expiredFinal')
     }
-  }, [secondsLeft, phase, resendUsed])
+  }, [secondsLeft, phase, resendUsed, busy])
 
   // The expired panel redirects on its own; signOut (not a route push) so the
   // pre-auth cookie dies too — otherwise the next login replays this very
@@ -92,9 +106,9 @@ export function TwoFactorScreen({ pending }: Readonly<{ pending: TwoFactorPendin
   // password.
   useEffect(() => {
     if (phase !== 'expiredFinal') return
-    const redirect = setTimeout(() => void signOut(), REDIRECT_AFTER_MS)
+    const redirect = setTimeout(leave, REDIRECT_AFTER_MS)
     return () => clearTimeout(redirect)
-  }, [phase, signOut])
+  }, [phase, leave])
 
   const submit = useCallback(
     async (raw: string) => {
@@ -104,6 +118,12 @@ export function TwoFactorScreen({ pending }: Readonly<{ pending: TwoFactorPendin
       setNotice('')
       try {
         const res = await verifyTwoFactor(raw)
+        if (goneRef.current) {
+          // The screen was left while verifying; the user signed out (or
+          // the challenge expired) — do not resurrect the session.
+          void signOut()
+          return
+        }
         // `busy` is deliberately NOT cleared on success. A successful
         // verification is terminal for this screen: the gate swaps it for the
         // app, and until that render lands the form must stay inert. Clearing
@@ -138,7 +158,7 @@ export function TwoFactorScreen({ pending }: Readonly<{ pending: TwoFactorPendin
         setBusy(false)
       }
     },
-    [adopt, busy, t],
+    [adopt, busy, signOut, t],
   )
 
   async function requestEmail() {
@@ -192,7 +212,7 @@ export function TwoFactorScreen({ pending }: Readonly<{ pending: TwoFactorPendin
       <AuthShell kicker={t('auth_otp.kicker')} title={t('auth_otp.expired_title')}>
         <p className="fx-auth-sub">{t('auth_otp.expired_final_desc')}</p>
         <div className="fx-auth-alt fx-auth-alt-center">
-          <button type="button" className="fx-btn fx-btn-primary" onClick={() => void signOut()}>
+          <button type="button" className="fx-btn fx-btn-primary" onClick={leave}>
             {t('auth_otp.back_to_login')}
           </button>
         </div>
@@ -275,7 +295,7 @@ export function TwoFactorScreen({ pending }: Readonly<{ pending: TwoFactorPendin
               {t('auth_otp.send_email')}
             </button>
           )}
-          <button type="button" className="fx-auth-link" onClick={() => void signOut()}>
+          <button type="button" className="fx-auth-link" onClick={leave}>
             {t('auth_otp.cancel')}
           </button>
         </div>

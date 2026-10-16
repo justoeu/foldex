@@ -166,6 +166,16 @@ func (s *fakeSender) seen() []Notification {
 
 // ----- Lifecycle -----
 
+func TestStop_ReleasesClaimsOfBufferedJobs(t *testing.T) {
+	repo := &fakeRepo{}
+	w := New(repo, fakeFetcher{}, nil, Options{ScanInterval: time.Hour}, testLogger())
+	w.jobs <- workerJob(1, links.Link{ID: 41, URL: "https://a.test/", CheckInterval: ptrStr("daily")})
+	w.jobs <- workerJob(1, links.Link{ID: 42, URL: "https://b.test/", CheckInterval: ptrStr("daily")})
+	w.Stop()
+	assert.ElementsMatch(t, []int64{41, 42}, repo.snapshotReleased(),
+		"Stop must release claims buffered but never processed")
+}
+
 func TestStop_Idempotent(t *testing.T) {
 	w := New(&fakeRepo{}, fakeFetcher{}, nil, Options{ScanInterval: time.Hour}, testLogger())
 	w.Start(context.Background())
@@ -264,6 +274,7 @@ func TestProcess_ContentDrift_DetectsChangeAndNotifies(t *testing.T) {
 				ID:              1,
 				URL:             "https://x.test/",
 				Title:           "x",
+				Slug:            "x-slug",
 				CheckInterval:   ptrStr("daily"),
 				LastFingerprint: &prev,
 			},
@@ -284,7 +295,8 @@ func TestProcess_ContentDrift_DetectsChangeAndNotifies(t *testing.T) {
 	assert.Equal(t, Notification{
 		LinkID: 1,
 		Title:  "x",
-		URL:    "https://x.test/",
+		URL:    "/r/x-slug",
+		Slug:   "x-slug",
 		Kind:   "change_detected",
 		UserID: owner,
 	}, sender.seen()[0])
@@ -681,6 +693,7 @@ func workerJob(owner authctx.UserID, link links.Link) links.DueLink {
 		UserID:          owner,
 		URL:             link.URL,
 		Title:           link.Title,
+		Slug:            link.Slug,
 		CheckInterval:   interval,
 		LastFingerprint: link.LastFingerprint,
 		ClaimedAt:       time.Unix(1, 0),

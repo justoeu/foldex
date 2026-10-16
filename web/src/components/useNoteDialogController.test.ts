@@ -39,6 +39,27 @@ describe('buildImageUploadHandler', () => {
     await waitFor(() => expect(onError).toHaveBeenCalled())
     expect(onError).toHaveBeenCalledWith(storageError)
   })
+
+  it('inserts at the current selection and tracks in-flight uploads', async () => {
+    const replaceSelectionWith = vi.fn(() => ({}))
+    const replaceWith = vi.fn(() => ({}))
+    const view = fakeView()
+    ;(view.state as { tr: unknown }).tr = { replaceSelectionWith, replaceWith }
+    const deltas: number[] = []
+    let resolveUpload!: (v: { url: string }) => void
+    const handler = buildImageUploadHandler(
+      () => new Promise((r) => { resolveUpload = r }),
+      () => {},
+      (d) => deltas.push(d),
+    )
+    handler(view, new File(['x'], 'a.png', { type: 'image/png' }))
+    expect(deltas).toEqual([1])
+    resolveUpload({ url: '/api/files/x.png' })
+    await waitFor(() => expect(view.dispatch).toHaveBeenCalled())
+    expect(replaceSelectionWith).toHaveBeenCalled()
+    expect(replaceWith).not.toHaveBeenCalled()
+    expect(deltas).toEqual([1, -1])
+  })
 })
 
 describe('noteImageErrorMessage', () => {

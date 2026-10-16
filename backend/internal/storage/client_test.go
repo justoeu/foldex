@@ -63,6 +63,52 @@ func TestExport_DoesNotStatObjectsAlreadyListed(t *testing.T) {
 	assert.Zero(t, stats.Load(), "export must not StatObject per key after List already returned Size")
 }
 
+func TestStatsCache_InvalidationForcesRewalk(t *testing.T) {
+	objects := []listedObject{{Key: "screenshots/1.jpg", Size: 10}}
+	var yields atomic.Int64
+	c := &Client{listFn: countingList(&yields, objects, nil)}
+	_, err := c.Stats(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, int64(1), yields.Load())
+
+	c.invalidateStatsCache()
+	_, err = c.Stats(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), yields.Load(), "a write must drop the cached listing")
+}
+
+// The flight leader runs detached: cancelling the leader's request must not
+// fail the shared listing for a waiter that is still interested.
+func TestStats_LeaderCancellationDoesNotFailWaiters(t *testing.T) {
+	objects := []listedObject{{Key: "screenshots/1.jpg", Size: 10}}
+	started := make(chan struct{})
+	block := make(chan struct{})
+	var yields atomic.Int64
+	c := &Client{listFn: countingList(&yields, objects, &listGate{started: started, block: block})}
+
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	leaderErr := make(chan error, 1)
+	go func() {
+		_, err := c.Stats(leaderCtx)
+		leaderErr <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("list never started")
+	}
+
+	waiterErr := make(chan error, 1)
+	go func() {
+		_, err := c.Stats(context.Background())
+		waiterErr <- err
+	}()
+	cancelLeader()
+	close(block)
+	require.NoError(t, <-waiterErr, "waiter must survive the leader's cancellation")
+	<-leaderErr // leader may succeed from the shared result or observe cancel; either is fine
+}
+
 func TestStorageStats_DoesNotRescanWholeBucketOnEveryGet(t *testing.T) {
 	const objectCount = 20
 	objects := make([]listedObject, 0, objectCount+1)

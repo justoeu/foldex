@@ -214,6 +214,26 @@ func TestRestore_SkipConvergesAfterSuccessfulRepeat(t *testing.T) {
 	assert.EqualValues(t, 6, count(t, pool, "click_log"), "second skip restore must not re-insert snapshot clicks")
 }
 
+// Duplicate mode cannot duplicate a URL-collided link, so its archive file
+// must not overwrite the surviving live link's screenshot either.
+func TestRestore_DuplicateKeepsLiveScreenshotOnURLCollision(t *testing.T) {
+	pool := testdb.Shared(t)
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
+	ctx := context.Background()
+	bucket := newStubBucket()
+	svc := backup.NewService(pool, bucket, discardLogger())
+	ids := seedSnapshot(t, pool, uid, bucket)
+
+	zr := exportToReader(t, svc, uid)
+	liveKey := fmt.Sprintf("screenshots/%d.jpg", ids.linkA)
+	bucket.objs[liveKey] = []byte("newer-live-bytes")
+
+	_, err := svc.Restore(ctx, uid, zr, backup.ModeDuplicate)
+	require.NoError(t, err)
+	assert.Equal(t, "newer-live-bytes", string(bucket.objs[liveKey]),
+		"duplicate restore must not overwrite a skipped link's live file")
+}
+
 // TestRestore_DuplicateRenamesTagsAndFallsBackOnURLCollision locks the §4
 // duplicate contract: tags collide-rename to "nome (2)", folders are always
 // new, and a link whose URL already exists falls back to skip + warning (URL is

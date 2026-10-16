@@ -132,6 +132,7 @@ export function useDeleteFolder() {
     onSuccess: (_data, args) => {
       invalidateLibrary(qc, {
         folders: true,
+        tags: true,
         links: true,
         entries: true,
         // Only a cascade delete changes entry counts (plain delete unflags

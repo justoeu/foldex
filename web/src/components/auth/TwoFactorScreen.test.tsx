@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { act, fireEvent, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -218,6 +219,62 @@ describe('the entry window (60s countdown)', () => {
     expect(screen.getByText(/expires in 60s/i)).toBeInTheDocument()
     act(() => { vi.advanceTimersByTime(2000) })
     expect(screen.getByText(/expires in 58s/i)).toBeInTheDocument()
+  })
+
+  // A verification in flight owns the screen: the window closing under it
+  // must not swap in the expired panel mid-submit.
+  it('does not expire while a verification is in flight', async () => {
+    let resolveVerify!: (v: unknown) => void
+    vi.spyOn(http, 'post').mockImplementation(
+      () => new Promise((r) => { resolveVerify = r }) as never,
+    )
+    renderWithProbe({ methods: ['totp', 'recovery_code'] })
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    await user.paste('123456')
+
+    act(() => { vi.advanceTimersByTime(60_000) })
+    expect(screen.queryByText(/window has closed|código acabou/i)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /verify/i })).toBeInTheDocument()
+
+    await act(async () => {
+      resolveVerify({ data: { status: 'authenticated', user: { id: 1 }, features: {} } })
+    })
+    await waitFor(() =>
+      expect(screen.getByTestId('session-status')).toHaveTextContent('authenticated'),
+    )
+  })
+
+  // A verify response landing after the screen was left must not adopt the
+  // session: the user already walked away from this challenge.
+  it('does not sign in when verification resolves after unmount', async () => {
+    let resolveVerify!: (v: unknown) => void
+    vi.spyOn(http, 'post').mockImplementation(
+      () => new Promise((r) => { resolveVerify = r }) as never,
+    )
+    function Harness() {
+      const [show, setShow] = useState(true)
+      return (
+        <>
+          {show && <TwoFactorScreen pending={pending} />}
+          <SessionProbe />
+          <button type="button" onClick={() => setShow(false)}>leave-screen</button>
+        </>
+      )
+    }
+    renderWithProviders(<Harness />, { session: null })
+    await waitFor(() =>
+      expect(screen.getByTestId('session-status')).toHaveTextContent('anonymous'),
+    )
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    await user.paste('123456')
+    await user.click(screen.getByRole('button', { name: 'leave-screen' }))
+
+    await act(async () => {
+      resolveVerify({ data: { status: 'authenticated', user: { id: 1 }, features: {} } })
+    })
+    // Give adopt() every chance to land; the guard must have vetoed it.
+    await act(async () => { await vi.advanceTimersByTimeAsync(50) })
+    expect(screen.getByTestId('session-status')).toHaveTextContent('anonymous')
   })
 
   // App mode (no email asked): expiry says so and returns to the login form —

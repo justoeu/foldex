@@ -407,8 +407,10 @@ func (h *Handler) ListOwnActivity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	before, err := optionalInt64(r.URL.Query().Get("before"))
-	if err != nil || before < 0 {
-		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_cursor", "before must be an id"))
+	// Negative cursors are valid here: merged click rows carry negated
+	// click_log ids so the mixed feed can page on its last row's id.
+	if err != nil {
+		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_cursor", "before must be a feed id"))
 		return
 	}
 	limit, err := optionalInt64(r.URL.Query().Get("limit"))
@@ -417,7 +419,16 @@ func (h *Handler) ListOwnActivity(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("limit must be a number between 0 and %d", maxAuditPageSize)))
 		return
 	}
-	entries, err := h.repo.ListOwnActivity(r.Context(), int64(caller.UserID), before, int(limit))
+	var beforeAt *time.Time
+	if raw := r.URL.Query().Get("before_at"); raw != "" {
+		parsed, perr := time.Parse(time.RFC3339Nano, raw)
+		if perr != nil {
+			httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_cursor", "before_at must be an RFC3339 timestamp"))
+			return
+		}
+		beforeAt = &parsed
+	}
+	entries, err := h.repo.ListOwnActivity(r.Context(), caller.UserID, before, beforeAt, int(limit))
 	if err != nil {
 		h.logger.Error("own activity", "err", err)
 		httperr.Write(w, httperr.ErrInternal)
