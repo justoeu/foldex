@@ -355,9 +355,15 @@ export async function unblockIP(ip: string): Promise<void> {
  */
 export const activityQueryKey = ['activity'] as const
 
-export async function fetchOwnActivity(before?: number, limit?: number, signal?: AbortSignal): Promise<AuditEntry[]> {
-  const params: { before?: number; limit?: number } = {}
-  if (before) params.before = before
+/** Keyset cursor for the merged feed: (created_at, feed id) of the last row. */
+export type ActivityCursor = { id: number; at: string }
+
+export async function fetchOwnActivity(cursor?: ActivityCursor, limit?: number, signal?: AbortSignal): Promise<AuditEntry[]> {
+  const params: { before?: number; before_at?: string; limit?: number } = {}
+  if (cursor) {
+    params.before = cursor.id
+    params.before_at = cursor.at
+  }
   if (limit) params.limit = limit
   const { data } = await http.get<{ entries: AuditEntry[] }>('/api/activity', { params, signal })
   return data.entries

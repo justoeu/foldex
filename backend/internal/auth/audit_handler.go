@@ -419,7 +419,16 @@ func (h *Handler) ListOwnActivity(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("limit must be a number between 0 and %d", maxAuditPageSize)))
 		return
 	}
-	entries, err := h.repo.ListOwnActivity(r.Context(), caller.UserID, before, int(limit))
+	var beforeAt *time.Time
+	if raw := r.URL.Query().Get("before_at"); raw != "" {
+		parsed, perr := time.Parse(time.RFC3339Nano, raw)
+		if perr != nil {
+			httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_cursor", "before_at must be an RFC3339 timestamp"))
+			return
+		}
+		beforeAt = &parsed
+	}
+	entries, err := h.repo.ListOwnActivity(r.Context(), caller.UserID, before, beforeAt, int(limit))
 	if err != nil {
 		h.logger.Error("own activity", "err", err)
 		httperr.Write(w, httperr.ErrInternal)

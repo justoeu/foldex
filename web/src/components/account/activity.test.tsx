@@ -73,20 +73,32 @@ describe('account page — my activity', () => {
   // filters `id < before`, so page two came back empty and the assertion
   // re-checked a row that was already on screen.
   it('replaces the list with the next page instead of appending it', async () => {
-    // A full page, so the feed reports another one to fetch.
-    state.activity = Array.from({ length: 50 }, (_, i) => row(100 - i))
+    // A full page, so the feed reports another one to fetch. Timestamps
+    // descend with the page order, as the real feed returns them.
+    state.activity = Array.from({ length: 50 }, (_, i) =>
+      row(100 - i, { created_at: new Date(Date.now() - i * 60_000).toISOString() }),
+    )
     const get = vi.spyOn(http, 'get')
     await openActivity()
     await screen.findByText('Bookmark 100')
     expect(screen.getAllByTestId('fx-activity-row')).toHaveLength(50)
 
-    // The next page comes from BELOW the cursor, which is what the mock's
-    // `id < before` filter models.
-    state.activity = [...state.activity, row(50), row(49)]
+    // The next page comes from BELOW the composite (created_at, id) cursor,
+    // which is what the mock's keyset filter models.
+    const cursorAt = state.activity.at(-1)!.created_at
+    const older = (mins: number) => new Date(Date.parse(cursorAt) - mins * 60_000).toISOString()
+    state.activity = [
+      ...state.activity,
+      row(50, { created_at: older(1) }),
+      row(49, { created_at: older(2) }),
+    ]
     await userEvent.setup().click(screen.getByRole('button', { name: /^next$/i }))
 
     await waitFor(() =>
-      expect(get).toHaveBeenCalledWith('/api/activity', expect.objectContaining({ params: { before: 51, limit: 50 } })),
+      expect(get).toHaveBeenCalledWith(
+        '/api/activity',
+        expect.objectContaining({ params: { before: 51, before_at: cursorAt, limit: 50 } }),
+      ),
     )
     await waitFor(() => expect(screen.getAllByTestId('fx-activity-row')).toHaveLength(2))
     expect(screen.queryByText('Bookmark 100')).not.toBeInTheDocument()

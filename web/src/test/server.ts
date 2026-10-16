@@ -181,9 +181,20 @@ const buildRoutes = (): Record<Method, Route[]> => ({
       url: /^\/api\/activity$/,
       handle: (_m, _d, p, s) => {
         const before = Number(p.get('before') ?? 0)
+        const beforeAt = p.get('before_at')
         const requested = Number(p.get('limit') ?? 50)
         const limit = Number.isFinite(requested) && requested > 0 ? Math.min(requested, 200) : 50
-        const rows = before > 0 ? s.activity.filter((e) => e.id < before) : s.activity
+        // Composite (created_at, feed id) keyset, mirroring the real feed:
+        // audit ids are positive, click ids negated.
+        const rows = beforeAt
+          ? s.activity.filter(
+              (e) =>
+                e.created_at < beforeAt ||
+                (e.created_at === beforeAt && e.id < before),
+            )
+          : before > 0
+            ? s.activity.filter((e) => e.id < before)
+            : s.activity
         return { entries: rows.slice(0, limit) }
       },
     },
@@ -210,6 +221,7 @@ const buildRoutes = (): Record<Method, Route[]> => ({
     // path matches first; the catch-all /api/links handler is fine after.
     { url: /^\/api\/links\/recent-changes$/, handle: listRecentChanges },
     { url: /^\/api\/links\/by-url$/, handle: getLinkByURL },
+    { url: /^\/api\/links\/(\d+)$/, handle: getLink },
     { url: /^\/api\/links$/, handle: listLinks },
     { url: /^\/api\/entries$/, handle: listEntries },
     { url: /^\/api\/notes\/(\d+)$/, handle: getNote },
@@ -1281,6 +1293,14 @@ function slugifyForMockNote(s: string): string {
 
 function listNotes(_m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockState): Note[] {
   return s.notes
+}
+
+function getLink(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockState, headers: Record<string, string>): Link {
+  const id = Number(m[1])
+  const l = s.links.find((x) => x.id === id)
+  if (!l) throw notFound()
+  checkEntityFolderLock(l.folder_id, s, headers)
+  return l
 }
 
 function getNote(m: RegExpMatchArray, _d: any, _p: URLSearchParams, s: MockState, headers: Record<string, string>): Note {

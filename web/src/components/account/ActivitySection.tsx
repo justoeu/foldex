@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { formatLocalYMD } from '../../lib/time'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
-import { activityQueryKey, fetchOwnActivity, type AuditEntry } from '../../api/admin'
+import { activityQueryKey, fetchOwnActivity, type ActivityCursor, type AuditEntry } from '../../api/admin'
 import { actionLabel } from '../../lib/auditLabels'
 
 /** Page sizes the account feed offers. 50 is the default the server already uses. */
@@ -86,17 +86,17 @@ function dayIsRecent(key: string): boolean {
  * The redesign adds the overview the raw feed lacked: a two-week bar chart,
  * a subject search and kind filters. The chart reads one wider sample. The
  * list is one page at a time — the keyset cursor is the previous page's last
- * id, so next and previous do not accumulate rows on screen.
+ * (created_at, id), so next and previous do not accumulate rows on screen.
  */
 export function ActivitySection() {
   const { t, i18n } = useTranslation()
   const [query, setQuery] = useState('')
   const [kind, setKind] = useState<Kind>('all')
   const [pageSize, setPageSize] = useState<PageSize>(readPageSize)
-  // Index 0 is the first page (no cursor). Later entries are the `before` id
-  // that opens that page. Going back reuses the cursor instead of refetching
+  // Index 0 is the first page (no cursor). Later entries are the composite
+  // `before` cursor that opens that page. Going back reuses the cursor instead of refetching
   // a guess.
-  const [cursors, setCursors] = useState<Array<number | undefined>>([undefined])
+  const [cursors, setCursors] = useState<Array<ActivityCursor | undefined>>([undefined])
   const [page, setPage] = useState(0)
   const cursor = cursors[page]
 
@@ -105,7 +105,7 @@ export function ActivitySection() {
     queryFn: ({ signal }) => fetchOwnActivity(undefined, CHART_SAMPLE, signal),
   })
   const feed = useQuery({
-    queryKey: [...activityQueryKey, 'page', pageSize, cursor ?? 0],
+    queryKey: [...activityQueryKey, 'page', pageSize, cursor ? `${cursor.at}:${cursor.id}` : 0],
     queryFn: ({ signal }) => fetchOwnActivity(cursor, pageSize, signal),
     placeholderData: keepPreviousData,
   })
@@ -180,11 +180,11 @@ export function ActivitySection() {
   const hasPrev = page > 0
 
   function goNext() {
-    const last = entries.at(-1)?.id
+    const last = entries.at(-1)
     if (!last || !hasNext) return
     setCursors((prev) => {
       const next = prev.slice(0, page + 1)
-      next.push(last)
+      next.push({ id: last.id, at: last.created_at })
       return next
     })
     setPage((n) => n + 1)

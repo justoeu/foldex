@@ -214,24 +214,28 @@ func (r *Repository) ListAudit(ctx context.Context, f AuditFilter) ([]AuditEntry
 // click_log so the trail reads like the user's session history. Administrative
 // acts performed ON the account (role changes, disables) stay excluded — they
 // are not activity BY the account.
-func (r *Repository) ListOwnActivity(ctx context.Context, uid authctx.UserID, beforeID int64, limit int) ([]AuditEntry, error) {
+func (r *Repository) ListOwnActivity(ctx context.Context, uid authctx.UserID, beforeID int64, beforeAt *time.Time, limit int) ([]AuditEntry, error) {
 	if limit <= 0 || limit > maxAuditPageSize {
 		limit = 50
 	}
 	args := []any{int64(uid), auditpkg.OwnActivityActions()}
 	cursor := ""
-	// The cursor is the last feed row's id, and the feed merges two id
-	// spaces: audit rows keep their positive audit_log id, clicks carry
-	// their negated click_log id (see ownClicks). A click cursor therefore
-	// bounds audit rows by that click's timestamp instead of by id —
-	// comparing ids across the two sequences would page to a random spot.
-	if beforeID > 0 {
+	// The feed merges two id spaces (audit ids positive, click ids negated),
+	// so the keyset cursor is the composite (created_at, feed id) of the
+	// previous page's last row — one total order both sources can compare
+	// against, with no dereference of the cursor row (a deleted cursor row
+	// or another tenant's id can neither break paging nor leak timing).
+	// A bare beforeID (stale client) keeps the legacy id-only bound.
+	if beforeAt != nil {
+		args = append(args, *beforeAt, beforeID)
+		cursor = fmt.Sprintf(" AND (a.created_at, a.id) < ($%d, $%d)", len(args)-1, len(args))
+	} else if beforeID > 0 {
 		args = append(args, beforeID)
 		cursor = fmt.Sprintf(" AND a.id < $%d", len(args))
 	} else if beforeID < 0 {
 		args = append(args, -beforeID)
 		cursor = fmt.Sprintf(` AND a.created_at < (
-			SELECT clicked_at FROM click_log WHERE id = $%d)`, len(args))
+			SELECT clicked_at FROM click_log WHERE id = $%d AND user_id = $1)`, len(args))
 	}
 	args = append(args, limit)
 	limitArg := len(args)
@@ -240,7 +244,7 @@ func (r *Repository) ListOwnActivity(ctx context.Context, uid authctx.UserID, be
 		       a.entity_kind, a.entity_id, a.subject, a.created_at
 		FROM audit_log a
 		WHERE a.actor_id = $1 AND a.action = ANY($2::text[])%s
-		ORDER BY a.id DESC LIMIT $%d`, cursor, limitArg), args...)
+		ORDER BY a.created_at DESC, a.id DESC LIMIT $%d`, cursor, limitArg), args...)
 	if err != nil {
 		return nil, fmt.Errorf("list own activity: %w", err)
 	}
@@ -265,7 +269,7 @@ func (r *Repository) ListOwnActivity(ctx context.Context, uid authctx.UserID, be
 	// that don't carry the link table. Only that one schema gap (42P01)
 	// degrades the feed; a real SQL failure must surface — swallowing every
 	// error here is what hid a nonexistent-table join in production.
-	clicks, clickErr := r.ownClicks(ctx, uid, beforeID, limit)
+	clicks, clickErr := r.ownClicks(ctx, uid, beforeID, beforeAt, limit)
 	if clickErr != nil && !pgerr.IsUndefinedTable(clickErr) {
 		return nil, fmt.Errorf("list own activity clicks: %w", clickErr)
 	} else if clickErr == nil {
@@ -285,22 +289,26 @@ func (r *Repository) ListOwnActivity(ctx context.Context, uid authctx.UserID, be
 
 // ownClicks reads the caller's link clicks, mapped onto the AuditEntry shape
 // so the feed is one homogeneous list downstream. Click rows carry their
-// NEGATED click_log id: the merged feed's pagination cursor is the last
-// row's id, and a bare click id would be indistinguishable from an
-// audit_log id (and collide with it as a React key). The cursor bounds the
-// window via the cursor row's own table — tuple compare within click_log,
-// timestamp-only against an audit cursor.
-func (r *Repository) ownClicks(ctx context.Context, uid authctx.UserID, beforeID int64, limit int) ([]AuditEntry, error) {
+// NEGATED click_log id: the merged feed's cursor is (created_at, feed id),
+// and a bare click id would be indistinguishable from an audit_log id (and
+// collide with it as a React key). With the composite cursor the bound is
+// the same tuple compare in feed-id space, (clicked_at, -id) < (at, feedID);
+// the legacy id-only cursor falls back to per-source bounds via
+// owner-scoped lookups of the cursor row.
+func (r *Repository) ownClicks(ctx context.Context, uid authctx.UserID, beforeID int64, beforeAt *time.Time, limit int) ([]AuditEntry, error) {
 	args := []any{int64(uid)}
 	window := ""
-	if beforeID > 0 {
+	if beforeAt != nil {
+		args = append(args, *beforeAt, beforeID)
+		window = fmt.Sprintf(" AND (c.clicked_at, -c.id) < ($%d, $%d)", len(args)-1, len(args))
+	} else if beforeID > 0 {
 		args = append(args, beforeID)
 		window = fmt.Sprintf(` AND c.clicked_at < (
-			SELECT created_at FROM audit_log WHERE id = $%d)`, len(args))
+			SELECT created_at FROM audit_log WHERE id = $%d AND actor_id = $1)`, len(args))
 	} else if beforeID < 0 {
 		args = append(args, -beforeID)
 		window = fmt.Sprintf(` AND (c.clicked_at, c.id) < (
-			SELECT clicked_at, id FROM click_log WHERE id = $%d)`, len(args))
+			SELECT clicked_at, id FROM click_log WHERE id = $%d AND user_id = $1)`, len(args))
 	}
 	args = append(args, limit)
 	rows, err := r.pool.Query(ctx, fmt.Sprintf(`
@@ -308,7 +316,7 @@ func (r *Repository) ownClicks(ctx context.Context, uid authctx.UserID, beforeID
 		FROM click_log c
 		LEFT JOIN link l ON l.id = c.entity_id AND l.user_id = $1
 		WHERE c.user_id = $1 AND c.entity_kind = 'link'%s
-		ORDER BY c.clicked_at DESC LIMIT $%d`, window, len(args)), args...)
+		ORDER BY c.clicked_at DESC, c.id ASC LIMIT $%d`, window, len(args)), args...)
 	if err != nil {
 		return nil, fmt.Errorf("own clicks: %w", err)
 	}

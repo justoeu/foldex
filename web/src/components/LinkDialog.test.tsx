@@ -931,7 +931,10 @@ describe('LinkDialog', () => {
       slug: 'baseline', click_count: 0, preview_status: 'failed', pinned: false,
       created_at: '', updated_at: 'version-1', tags: [], og_image_url: null,
     } as unknown as Link
-    state.links.push(link)
+    // The mock server row is a COPY: bumping its updated_at must not mutate
+    // the prop object the dialog based its baseline on, or the test passes
+    // with the baseline refresh deleted.
+    state.links.push({ ...link })
     const originalPost = vi.mocked(http.post).getMockImplementation()!
     vi.mocked(http.post).mockImplementation(((url: string, ...rest: unknown[]) => {
       if (String(url).includes('/screenshot')) {
