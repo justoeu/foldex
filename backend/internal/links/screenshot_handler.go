@@ -96,7 +96,9 @@ func (h *ScreenshotHandler) WithFolderGate(lookup folders.PasswordHashLookup, un
 	return h
 }
 
-// WithEnqueuer wires the preview worker so a missing object can heal itself.
+// NewScreenshotHandler creates a ScreenshotHandler. urlPolicy gates
+// CaptureAndStore — pass preview.IsPublicURL from main.go. A nil policy is
+// treated as "deny all", which fails closed.
 func NewScreenshotHandler(repo screenshotRepo, sc Screenshotter, st ports.Uploader, urlPolicy URLPolicy, logger *slog.Logger) *ScreenshotHandler {
 	return &ScreenshotHandler{
 		FileHandler:   NewFileHandler(repo, st, logger),

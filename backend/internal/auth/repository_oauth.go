@@ -604,7 +604,7 @@ func (r *Repository) ProvisionOAuthUser(ctx context.Context, email, name, provid
 		INSERT INTO app_user (email, email_normalized, name, role, status, email_verified_at)
 		VALUES ($1, $2, $3, $4, 'active', now())
 		RETURNING `+userColumns,
-		strings.TrimSpace(email), NormalizeEmail(email), strings.TrimSpace(name), string(role)))
+		strings.TrimSpace(email), NormalizeEmail(email), capProfileName(name), string(role)))
 	if err != nil {
 		// A concurrent callback for the same address loses the unique index here.
 		if pgerr.UniqueConstraint(err) == "app_user_email_norm_uniq" {

@@ -259,6 +259,11 @@ func (h *AdminHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func validateUpdateUserInput(in updateUserInput) error {
+	if in.Name != nil {
+		if _, err := validateProfileName(*in.Name); err != nil {
+			return err
+		}
+	}
 	// Owner is absent from the assignable set on purpose: ownership moves only
 	// through the transfer endpoint, which demotes the outgoing owner in the
 	// same statement. Allowing it here would let a promotion race the partial

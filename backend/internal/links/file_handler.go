@@ -64,10 +64,6 @@ func (h *FileHandler) gateFolder(r *http.Request, l Link) error {
 	return h.folderGate.Check(r.Context(), authctx.MustUser(r.Context()), *l.FolderID, r.Header.Get(folders.UnlockHeader))
 }
 
-// NewScreenshotHandler creates a ScreenshotHandler. urlPolicy gates
-// CaptureAndStore — pass preview.IsPublicURL from main.go. A nil policy is
-// treated as "deny all", which fails closed.
-
 // ProxyFile proxies a file from object storage to the HTTP client.
 // Mounted at GET /api/files/*key. Keys are restricted to the known
 // upload/screenshot prefixes so this can't be used to read arbitrary objects

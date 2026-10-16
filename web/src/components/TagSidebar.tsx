@@ -35,6 +35,18 @@ const FREQ_OPEN_KEY = 'foldex.sidebar.freqOpen'
 const OTHER_OPEN_KEY = 'foldex.sidebar.otherOpen'
 const RECENT_OPEN_KEY = 'foldex.sidebar.recentOpen'
 
+function migrateLegacyBoolKeys(keys: string[]) {
+  try {
+    for (const key of keys) {
+      const v = localStorage.getItem(key)
+      if (v === '1') localStorage.setItem(key, 'true')
+      else if (v === '0') localStorage.setItem(key, 'false')
+    }
+  } catch {
+    // Storage unavailable: defaults apply, same as usePersistedState.
+  }
+}
+
 export function TagSidebar({
   selected,
   onToggle,
@@ -50,6 +62,9 @@ export function TagSidebar({
   const [creating, setCreating] = useState(false)
   const [managing, setManaging] = useState(false)
 
+  // One-time migration: these keys stored '1'/'0' before usePersistedState
+  // (JSON booleans) took over; without it a closed section reopens once.
+  migrateLegacyBoolKeys([FREQ_OPEN_KEY, OTHER_OPEN_KEY, RECENT_OPEN_KEY])
   const [freqOpen, setFreqOpen] = usePersistedState(FREQ_OPEN_KEY, true, isBoolean)
   const [otherOpen, setOtherOpen] = usePersistedState(OTHER_OPEN_KEY, true, isBoolean)
   const [otherShowAll, setOtherShowAll] = useState(false)

@@ -68,7 +68,7 @@ func (r *Repository) Set(ctx context.Context, p Policy) error {
 	return nil
 }
 
-// PasswordMinLength implements auth.PolicyReader.
+// PasswordMinLength is consumed directly by internal/auth.
 //
 // It answers with the compiled-in floor on any read failure rather than
 // propagating the error. This is called while validating a password the user is
@@ -84,7 +84,7 @@ func (r *Repository) PasswordMinLength(ctx context.Context) int {
 	return p.PasswordMinLength
 }
 
-// GoogleAllows implements auth.PolicyReader.
+// GoogleAllows is consumed directly by internal/auth.
 //
 // A read failure denies. This gate decides who may CREATE access, so the safe
 // direction is the closed one: a degraded database must not become an open
@@ -98,7 +98,7 @@ func (r *Repository) GoogleAllows(ctx context.Context, email string) bool {
 	return p.AllowsEmail(email)
 }
 
-// GoogleProvisioning implements auth.PolicyReader. A read failure disables it,
+// GoogleProvisioning is consumed directly by internal/auth. A read failure disables it,
 // for the same reason GoogleAllows denies.
 func (r *Repository) GoogleProvisioning(ctx context.Context) (bool, authctx.Role) {
 	p, err := r.Get(ctx)
@@ -108,7 +108,7 @@ func (r *Repository) GoogleProvisioning(ctx context.Context) (bool, authctx.Role
 	return p.GoogleAutoProvision, p.GoogleDefaultRole
 }
 
-// OTPTTL implements auth.PolicyReader. A read failure yields the default, and
+// OTPTTL is consumed directly by internal/auth. A read failure yields the default, and
 // the caller clamps to the compiled-in floor either way.
 func (r *Repository) OTPTTL(ctx context.Context) time.Duration {
 	p, err := r.Get(ctx)
@@ -133,7 +133,7 @@ func (r *Repository) RequiresTOTPForAdmins(ctx context.Context) bool {
 	return p.RequiresTOTPForAdmins()
 }
 
-// OTPResendCooldown implements auth.PolicyReader.
+// OTPResendCooldown is consumed directly by internal/auth.
 func (r *Repository) OTPResendCooldown(ctx context.Context) time.Duration {
 	p, err := r.Get(ctx)
 	if err != nil {

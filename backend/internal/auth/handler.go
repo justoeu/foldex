@@ -1297,6 +1297,16 @@ func validatePasswordAgainst(ctx context.Context, policy *policy.Repository, p s
 // name-writing route shares (profile edit, admin create, bootstrap, invite
 // acceptance). It returns the trimmed name to store so the length that was
 // judged is the value that is persisted.
+// capProfileName truncates an IdP-asserted display name to the profile cap.
+// Rejecting would lock the person out over a string they did not type here.
+func capProfileName(raw string) string {
+	name := strings.TrimSpace(raw)
+	if utf8.RuneCountInString(name) > maxProfileNameRunes {
+		name = string([]rune(name)[:maxProfileNameRunes])
+	}
+	return name
+}
+
 func validateProfileName(raw string) (string, error) {
 	trimmed := strings.TrimSpace(raw)
 	if utf8.RuneCountInString(trimmed) > maxProfileNameRunes {

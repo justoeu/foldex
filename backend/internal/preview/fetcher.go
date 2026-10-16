@@ -172,8 +172,30 @@ func (f *Fetcher) fetchStage(ctx context.Context, pageURL string) ([]byte, *url.
 	if resp.StatusCode >= 400 {
 		return nil, nil, fmt.Errorf("fetch: %w", &HTTPStatusError{Code: resp.StatusCode})
 	}
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	body := readHeadBytes(resp.Body)
 	return body, resp.Request.URL, nil
+}
+
+// readHeadBytes drains at most 2 MiB but stops as soon as the head closes:
+// buffering the whole capped body would wait on servers that drip the body
+// long after the metadata arrived, which the old streaming tokenizer never
+// did (it returned at </head> and closed the connection).
+func readHeadBytes(r io.Reader) []byte {
+	limited := io.LimitReader(r, 2<<20)
+	buf := make([]byte, 0, 64<<10)
+	chunk := make([]byte, 32<<10)
+	for {
+		n, err := limited.Read(chunk)
+		if n > 0 {
+			buf = append(buf, chunk[:n]...)
+			if bytes.Contains(bytes.ToLower(buf[max(0, len(buf)-n-16):]), []byte("</head")) {
+				return buf
+			}
+		}
+		if err != nil {
+			return buf
+		}
+	}
 }
 
 // extractStage is the parse half of the head fetch. It takes no context on

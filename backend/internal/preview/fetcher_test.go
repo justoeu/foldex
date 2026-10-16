@@ -1,13 +1,55 @@
 package preview
 
 import (
+	"io"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// dripReader blocks after its scripted chunks run out: readHeadBytes must
+// return at </head> without waiting for the rest of the body.
+type dripReader struct {
+	chunks [][]byte
+	block  chan struct{}
+}
+
+func (d *dripReader) Read(p []byte) (int, error) {
+	if len(d.chunks) == 0 {
+		<-d.block
+		return 0, io.EOF
+	}
+	n := copy(p, d.chunks[0])
+	d.chunks = d.chunks[1:]
+	return n, nil
+}
+
+func TestReadHeadBytes_StopsAtHeadEnd(t *testing.T) {
+	block := make(chan struct{})
+	defer close(block)
+	r := &dripReader{chunks: [][]byte{
+		[]byte("<html><head><title>x</title></he"),
+		[]byte("ad><body>never read"),
+	}, block: block}
+	done := make(chan []byte, 1)
+	go func() { done <- readHeadBytes(r) }()
+	select {
+	case got := <-done:
+		assert.Contains(t, string(got), "</head>")
+	case <-time.After(2 * time.Second):
+		t.Fatal("readHeadBytes kept reading past </head>")
+	}
+}
+
+func TestReadHeadBytes_CapsAtTwoMiB(t *testing.T) {
+	big := strings.NewReader(strings.Repeat("a", 3<<20))
+	got := readHeadBytes(big)
+	assert.Len(t, got, 2<<20)
+}
 
 func TestParseHead_EmptyTitleDoesNotDropFollowingOGImage(t *testing.T) {
 	for _, raw := range []string{
