@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { screen, fireEvent } from '@testing-library/react'
+import { screen, fireEvent, createEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { GradientPicker } from './GradientPicker'
 import { renderWithProviders } from '../test/renderWithProviders'
@@ -110,6 +110,108 @@ describe('GradientPicker', () => {
     const [from] = onChange.mock.calls[0]
     expect(from).toMatch(/^#/)
     expect(from).not.toBe('#6366F1')
+  })
+
+  it('clears the drag-over highlight only when the pointer really leaves the stop', () => {
+    renderWithProviders(<GradientPicker from="#6366F1" to="#EC4899" onChange={vi.fn()} />)
+    const stops = document.querySelectorAll('.fx-gradient-stop')
+    const dt = { types: ['application/x-foldex-gradient-stop'] }
+    // fireEvent's init dict drops relatedTarget for drag events; define it.
+    const dragLeaveTo = (node: Element, related: EventTarget | null) => {
+      const ev = createEvent.dragLeave(node, { dataTransfer: dt })
+      Object.defineProperty(ev, 'relatedTarget', { value: related })
+      fireEvent(node, ev)
+    }
+    fireEvent.dragEnter(stops[1], { dataTransfer: dt })
+    expect(stops[1].className).toContain('fx-gradient-stop-over')
+    // Moving onto a child of the same stop is not a leave.
+    dragLeaveTo(stops[1], stops[1].firstChild)
+    expect(stops[1].className).toContain('fx-gradient-stop-over')
+    dragLeaveTo(stops[1], document.body)
+    expect(stops[1].className).not.toContain('fx-gradient-stop-over')
+    // A leave with no relatedTarget (left the window) also clears it.
+    fireEvent.dragEnter(stops[1], { dataTransfer: dt })
+    dragLeaveTo(stops[1], null)
+    expect(stops[1].className).not.toContain('fx-gradient-stop-over')
+  })
+
+  it('ignores unrelated drags over a stop', () => {
+    const onChange = vi.fn()
+    renderWithProviders(<GradientPicker from="#6366F1" to="#EC4899" onChange={onChange} />)
+    const stops = document.querySelectorAll('.fx-gradient-stop')
+    const dt = { types: ['text/plain'], getData: vi.fn(() => ''), dropEffect: 'none' }
+    fireEvent.dragEnter(stops[0], { dataTransfer: dt })
+    expect(stops[0].className).not.toContain('fx-gradient-stop-over')
+    fireEvent.dragOver(stops[0], { dataTransfer: dt })
+    fireEvent.drop(stops[0], { dataTransfer: dt })
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it('jumps hue thumbs with Home/End and steps by 10 with Shift', async () => {
+    const onChange = vi.fn()
+    renderWithProviders(<GradientPicker from="#6366F1" to="#EC4899" onChange={onChange} />)
+    const user = userEvent.setup()
+    const end = screen.getByRole('slider', { name: /^End$/i })
+    end.focus()
+    await user.keyboard('{End}')
+    expect(onChange).toHaveBeenCalledWith('#6366F1', expect.stringMatching(/^#/))
+    onChange.mockClear()
+    await user.keyboard('{Home}')
+    expect(onChange).toHaveBeenCalledWith('#6366F1', expect.stringMatching(/^#/))
+    // Props are static in this render, so every key steps from the same hue:
+    // Shift must move 10°, a plain arrow 1° — different resulting hexes.
+    onChange.mockClear()
+    await user.keyboard('{ArrowDown}')
+    const step1 = onChange.mock.calls.at(-1)![1]
+    onChange.mockClear()
+    await user.keyboard('{Shift>}{ArrowDown}{/Shift}')
+    expect(onChange.mock.calls.at(-1)![1]).not.toBe(step1)
+    onChange.mockClear()
+    await user.keyboard('{ArrowUp}')
+    expect(onChange).toHaveBeenCalled()
+    // Unrelated keys do not move the thumb.
+    onChange.mockClear()
+    await user.keyboard('x')
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it('does not move a thumb on pointer move without an active drag, and cancels cleanly', () => {
+    const onChange = vi.fn()
+    renderWithProviders(<GradientPicker from="#6366F1" to="#EC4899" onChange={onChange} />)
+    const bar = screen.getByRole('group', { name: /hue/i })
+    vi.spyOn(bar, 'getBoundingClientRect').mockReturnValue({
+      left: 0, top: 0, width: 360, height: 12, right: 360, bottom: 12, x: 0, y: 0, toJSON: () => ({}),
+    } as DOMRect)
+    bar.setPointerCapture = vi.fn()
+    fireEvent.pointerMove(bar, { clientX: 90, pointerId: 1 })
+    expect(onChange).not.toHaveBeenCalled()
+    fireEvent.pointerDown(bar, { clientX: 90, pointerId: 1 })
+    expect(bar.className).toContain('fx-hue-bar-dragging')
+    onChange.mockClear()
+    fireEvent.pointerMove(bar, { clientX: 180, pointerId: 1 })
+    expect(onChange).toHaveBeenCalled()
+    fireEvent.pointerCancel(bar)
+    expect(bar.className).not.toContain('fx-hue-bar-dragging')
+    onChange.mockClear()
+    fireEvent.pointerMove(bar, { clientX: 270, pointerId: 1 })
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it('snaps the NEAREST thumb when the bar itself is pressed', () => {
+    const onChange = vi.fn()
+    // from ≈ hue 239 (indigo), to ≈ hue 330 (pink): a press at hue ~36 is
+    // nearer to neither edge — distance decides, here the start thumb.
+    renderWithProviders(<GradientPicker from="#6366F1" to="#EC4899" onChange={onChange} />)
+    const bar = screen.getByRole('group', { name: /hue/i })
+    vi.spyOn(bar, 'getBoundingClientRect').mockReturnValue({
+      left: 0, top: 0, width: 360, height: 12, right: 360, bottom: 12, x: 0, y: 0, toJSON: () => ({}),
+    } as DOMRect)
+    bar.setPointerCapture = vi.fn()
+    fireEvent.pointerDown(bar, { clientX: 350, pointerId: 1 }) // hue 350 → nearest is pink (330)
+    expect(onChange).toHaveBeenCalledWith('#6366F1', expect.stringMatching(/^#/))
+    onChange.mockClear()
+    fireEvent.pointerDown(bar, { clientX: 10, pointerId: 1 }) // hue 10 → still nearer pink? 330 dist 320 vs 239 dist 229 → from
+    expect(onChange.mock.calls.at(-1)![1]).toBe('#EC4899')
   })
 
   it('handles near-neutral colors with S/L floor on hue drag', () => {

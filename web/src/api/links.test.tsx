@@ -17,7 +17,11 @@ import {
   removeLinkImage,
   useFetchUrlMetadata,
   _clearUrlMetadataCacheForTests,
+  fetchLink,
+  lookupLinkByURL,
 } from './links'
+import { FOLDER_UNLOCK_HEADER } from './folders'
+import { clearFolderUnlocks, syncFolderUnlocks } from '../lib/folderUnlockRegistry'
 import { useTags } from './tags'
 import { http } from './client'
 import { freshState, installAxiosMock, type MockState } from '../test/server'
@@ -38,6 +42,10 @@ beforeEach(() => {
 describe('goHref', () => {
   it('returns redirect path', () => {
     expect(goHref(42)).toBe('/go/42')
+  })
+
+  it('falls back to the id when the slug is empty', () => {
+    expect(goHref({ id: 7, slug: '' })).toBe('/go/7')
   })
 })
 
@@ -447,5 +455,215 @@ describe('useUpdateLink invalidation branches', () => {
     const entries = client.getQueryData<{ pages: any[][] }>(['entries', '', '', 'created', 'all', 'locked', 100])
     expect(links?.pages[0][0].title).toBe('Newer')
     expect(entries?.pages[0][0].title).toBe('Newer')
+  })
+
+  it('invalidates tags for pending_tags even without tag_ids', async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    })
+    const wrap = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    )
+    state.links.push({
+      id: 30, url: 'https://pt', title: 'PT', click_count: 0,
+      preview_status: 'ok', created_at: '', updated_at: '', tags: [], folder_id: null,
+    } as any)
+    const spy = vi.spyOn(client, 'invalidateQueries')
+    const { result } = renderHook(() => useUpdateLink(), { wrapper: wrap })
+    await result.current.mutateAsync({
+      id: 30,
+      body: { pending_tags: [{ name: 'fresh', color: '#111111' }] } as any,
+    })
+    expect(spy.mock.calls.map(([arg]) => (arg as { queryKey: unknown }).queryKey))
+      .toContainEqual(['tags'])
+  })
+
+  it('a stale folder-move response still drops the card from entries', async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    })
+    const wrap = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    )
+    const original = {
+      id: 31, url: 'https://mv', title: 'MV', slug: 'mv', click_count: 0,
+      preview_status: 'ok', pinned: false, created_at: '', updated_at: 'v1', tags: [], folder_id: null,
+    } as any
+    client.setQueryData(['entries', 'mv'], { pages: [[{ ...original, kind: 'link' }]], pageParams: [0] })
+    let resolveFirst!: (v: { data: typeof original }) => void
+    let resolveSecond!: (v: { data: typeof original }) => void
+    vi.mocked(http.patch)
+      .mockImplementationOnce(() => new Promise((r) => { resolveFirst = r }) as ReturnType<typeof http.patch>)
+      .mockImplementationOnce(() => new Promise((r) => { resolveSecond = r }) as ReturnType<typeof http.patch>)
+    const { result } = renderHook(() => useUpdateLink(), { wrapper: wrap })
+    const first = result.current.mutateAsync({ id: 31, body: { folder_id: 9 } })
+    const second = result.current.mutateAsync({ id: 31, body: { title: 'Newer' } })
+    await waitFor(() => expect(http.patch).toHaveBeenCalledTimes(2))
+    resolveSecond({ data: { ...original, title: 'Newer' } })
+    await second
+    expect(client.getQueryData<{ pages: any[][] }>(['entries', 'mv'])!.pages[0]).toHaveLength(1)
+    resolveFirst({ data: { ...original, folder_id: 9 } })
+    await first
+    // The stale response must not rewrite the link, but its folder move is
+    // real on the server — the card leaves the ungrouped grid regardless.
+    expect(client.getQueryData<{ pages: any[][] }>(['entries', 'mv'])!.pages[0]).toEqual([])
+  })
+})
+
+describe('lookupLinkByURL / fetchLink', () => {
+  beforeEach(() => clearFolderUnlocks())
+
+  it('returns the existing link, null on a 404, and rethrows anything else', async () => {
+    state.links.push({
+      id: 11, url: 'https://known.example', title: 'Known', click_count: 0,
+      preview_status: 'ok', created_at: '', updated_at: '', tags: [],
+    } as any)
+    await expect(lookupLinkByURL('https://known.example')).resolves.toMatchObject({ id: 11 })
+    await expect(lookupLinkByURL('https://missing.example')).resolves.toBeNull()
+    vi.mocked(http.get).mockRejectedValueOnce({ response: { status: 503 } })
+    await expect(lookupLinkByURL('https://known.example')).rejects.toMatchObject({ response: { status: 503 } })
+    vi.mocked(http.get).mockRejectedValueOnce(new Error('offline'))
+    await expect(lookupLinkByURL('https://known.example')).rejects.toThrow('offline')
+  })
+
+  it('fetchLink attaches the folder unlock header only for a live token', async () => {
+    state.links.push({
+      id: 12, url: 'https://locked.example', title: 'Locked', click_count: 0,
+      preview_status: 'ok', folder_id: 9, created_at: '', updated_at: '', tags: [],
+    } as any)
+    await fetchLink(12, 9)
+    expect(vi.mocked(http.get).mock.calls.at(-1)).toEqual([
+      '/api/links/12', { headers: undefined },
+    ])
+    syncFolderUnlocks({ 9: { token: 'tok-9', expiresAt: Date.now() + 60_000 } })
+    const link = await fetchLink(12, 9)
+    expect(link.id).toBe(12)
+    expect(vi.mocked(http.get).mock.calls.at(-1)).toEqual([
+      '/api/links/12', { headers: { [FOLDER_UNLOCK_HEADER]: 'tok-9' } },
+    ])
+    // Same header plumbing serves image uploads into the locked folder.
+    await uploadLinkImage(12, new File(['x'], 'a.png', { type: 'image/png' }), 9)
+    const post = vi.mocked(http.post).mock.calls.at(-1)!
+    expect((post[2] as { headers?: unknown }).headers).toEqual({ [FOLDER_UNLOCK_HEADER]: 'tok-9' })
+  })
+})
+
+describe('mapCachedLinks null pages', () => {
+  it('maps real pages and passes null pages through', () => {
+    const client = makeQueryClient()
+    const link = {
+      id: 1, url: 'https://a', title: 'A', click_count: 0, preview_status: 'ok',
+      created_at: '', updated_at: '', tags: [],
+    } as any
+    client.setQueryData(['links', 'np'], { pages: [null, [link]], pageParams: [0, 1] } as any)
+    mapCachedLinks(client, (l) => ({ ...l, title: 'B' }))
+    const cached = client.getQueryData<{ pages: any[] }>(['links', 'np'])!
+    expect(cached.pages[0]).toBeNull()
+    expect(cached.pages[1][0].title).toBe('B')
+  })
+})
+
+describe('useMarkChangeSeen edge cases', () => {
+  function ownClient() {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    })
+    const wrap = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    )
+    return { client, wrap }
+  }
+
+  it('stamps seen optimistically even without a detected-change stamp', async () => {
+    const { client, wrap } = ownClient()
+    const link = {
+      id: 21, url: 'https://s', title: 'S', slug: 's', click_count: 0, preview_status: 'ok',
+      pinned: false, created_at: '', updated_at: '', tags: [], change_seen_at: null,
+    } as any
+    state.links.push({ ...link, last_change_detected_at: '2026-05-30T10:00:00Z' })
+    client.setQueryData(['links', 'seen'], { pages: [[link]], pageParams: [0] })
+    client.setQueryData(['entries', 'seen'], { pages: [[{ ...link, kind: 'link' }]], pageParams: [0] })
+    const { result } = renderHook(() => useMarkChangeSeen(), { wrapper: wrap })
+    await result.current.mutateAsync(21)
+    const seen = client.getQueryData<{ pages: any[][] }>(['entries', 'seen'])!.pages[0][0].change_seen_at
+    expect(seen).toBeTruthy()
+    expect(Number.isNaN(Date.parse(seen))).toBe(false)
+  })
+
+  it('clamps the optimistic stamp to a future detected-change time', async () => {
+    const { client, wrap } = ownClient()
+    const detected = '2999-01-01T00:00:00.000Z'
+    const link = {
+      id: 22, url: 'https://f', title: 'F', slug: 'f', click_count: 0, preview_status: 'ok',
+      pinned: false, created_at: '', updated_at: '', tags: [],
+      last_change_detected_at: detected, change_seen_at: null,
+    } as any
+    state.links.push(link)
+    client.setQueryData(['links', 'future'], { pages: [[link]], pageParams: [0] })
+    const { result } = renderHook(() => useMarkChangeSeen(), { wrapper: wrap })
+    await result.current.mutateAsync(22)
+    const seen = client.getQueryData<{ pages: any[][] }>(['links', 'future'])!.pages[0][0].change_seen_at
+    expect(seen).toBe(detected)
+  })
+
+  it('invalidates both families when marking seen fails', async () => {
+    const { client, wrap } = ownClient()
+    vi.mocked(http.post).mockRejectedValueOnce(new Error('boom'))
+    const spy = vi.spyOn(client, 'invalidateQueries')
+    const { result } = renderHook(() => useMarkChangeSeen(), { wrapper: wrap })
+    await expect(result.current.mutateAsync(99)).rejects.toThrow('boom')
+    const keys = spy.mock.calls.map(([arg]) => (arg as { queryKey: unknown }).queryKey)
+    expect(keys).toContainEqual(['links'])
+    expect(keys).toContainEqual(['entries'])
+  })
+})
+
+describe('useRefreshPreview failure', () => {
+  it('rolls the optimistic pending state back when the refresh fails', async () => {
+    const client = makeQueryClient()
+    const wrap = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    )
+    const link = {
+      id: 41, url: 'https://r', title: 'R', slug: 'r', click_count: 0, preview_status: 'ok',
+      pinned: false, created_at: '', updated_at: '', tags: [],
+    } as any
+    client.setQueryData(['entries', 'rp'], { pages: [[{ ...link, kind: 'link' }]], pageParams: [0] })
+    vi.mocked(http.post).mockRejectedValueOnce(new Error('refresh boom'))
+    const { result } = renderHook(() => useRefreshPreview(), { wrapper: wrap })
+    await expect(result.current.mutateAsync(41)).rejects.toThrow('refresh boom')
+    const entry = client.getQueryData<{ pages: any[][] }>(['entries', 'rp'])!.pages[0][0]
+    expect(entry.preview_status).toBe('ok')
+  })
+})
+
+describe('useFetchUrlMetadata abort + expiry', () => {
+  beforeEach(() => _clearUrlMetadataCacheForTests())
+
+  it('rejects an already-aborted signal without touching the network', async () => {
+    const { result } = renderHook(() => useFetchUrlMetadata(), { wrapper })
+    const controller = new AbortController()
+    controller.abort()
+    await expect(
+      result.current.mutateAsync({ url: 'https://meta.example', signal: controller.signal }),
+    ).rejects.toMatchObject({ name: 'CanceledError' })
+    expect(state.urlMetadataCalls).toHaveLength(0)
+  })
+
+  it('refetches once the cached metadata passes its TTL', async () => {
+    state.urlMetadata = { title: 'T', description: 'D' }
+    const now = vi.spyOn(Date, 'now')
+    try {
+      now.mockReturnValue(1_000_000)
+      const { result } = renderHook(() => useFetchUrlMetadata(), { wrapper })
+      await result.current.mutateAsync({ url: 'https://ttl.example' })
+      await result.current.mutateAsync({ url: 'https://ttl.example' })
+      expect(state.urlMetadataCalls).toHaveLength(1)
+      now.mockReturnValue(1_000_000 + 5 * 60 * 1000 + 1)
+      await result.current.mutateAsync({ url: 'https://ttl.example' })
+      expect(state.urlMetadataCalls).toHaveLength(2)
+    } finally {
+      now.mockRestore()
+    }
   })
 })

@@ -42,9 +42,12 @@ export function useAppWorkspaceController() {
   const requestReveal = useCallback((target: RevealTarget) => setRevealTarget(target), [])
   const clearReveal = useCallback(() => setRevealTarget(null), [])
   // Deep link into a settings-hub section (used by the topbar user menu).
+  // Goes through setViewState, NOT the setView wrapper below: the wrapper
+  // clears the jump so plain navigation lands on the overview, and calling
+  // it here would erase the jump set on the previous line in the same batch.
   const openSettingsAt = useCallback((section: string) => {
     setSettingsJump((prev) => ({ section, n: (prev?.n ?? 0) + 1 }))
-    setView('settings')
+    setViewState('settings')
   }, [])
   // The plain gear button must land on the OVERVIEW, not on whatever section
   // the last deep link targeted — wrapping setView clears the jump so the
