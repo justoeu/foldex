@@ -123,3 +123,7 @@ require (
 	google.golang.org/protobuf v1.36.12 // indirect
 	gopkg.in/ini.v1 v1.67.3 // indirect
 )
+
+// ysmood/got v0.41 breaks go-rod's launcher (fetchup.New signature);
+// hold the indirect dep at v0.40.0 until rod catches up.
+exclude github.com/ysmood/got v0.41.0
