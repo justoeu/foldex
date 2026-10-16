@@ -5,6 +5,7 @@ package backupagent
 import (
 	"context"
 	"fmt"
+	"foldex/internal/backupjobs"
 	"io"
 	"log/slog"
 	"net/http"
@@ -42,9 +43,9 @@ func TestAgent_LifecycleClaimsRequestedAndServesObservability(t *testing.T) {
 	// sleep — swap the dump's run func for an instant success so the
 	// requested-claim loop has something observable to execute.
 	require.Len(t, agent.jobs, 2)
-	require.Equal(t, JobDump, agent.jobs[0].name)
-	agent.jobs[0].run = func(context.Context, int64) (*Artifact, map[string]any, string, error) {
-		return &Artifact{Key: "lifecycle", Bytes: 7, SHA256: "aa"}, nil, "", nil
+	require.Equal(t, backupjobs.JobDump, agent.jobs[0].name)
+	agent.jobs[0].run = func(context.Context, int64) (*backupjobs.Artifact, map[string]any, string, error) {
+		return &backupjobs.Artifact{Key: "lifecycle", Bytes: 7, SHA256: "aa"}, nil, "", nil
 	}
 	// The skew check would exec a real pg_dump; the lifecycle under test is
 	// the loops, not the binary.
@@ -100,7 +101,7 @@ func TestWaitReady_GatesOnDatabaseAndStore(t *testing.T) {
 	pool := testdb.Shared(t)
 
 	store := newRecorderStore()
-	a := &Agent{cfg: lifecycleConfig(), pool: pool, store: store, runs: NewRunStore(pool),
+	a := &Agent{cfg: lifecycleConfig(), pool: pool, store: store, runs: backupjobs.NewRunStore(pool),
 		metrics: NewMetrics(), logger: slog.New(slog.DiscardHandler)}
 
 	assert.True(t, a.waitReady(ctx), "live db + answering store means ready")

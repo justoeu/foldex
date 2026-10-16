@@ -5,7 +5,6 @@
 package metrics
 
 import (
-	"crypto/subtle"
 	"net/http"
 	"strconv"
 	"time"
@@ -15,7 +14,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // Metrics groups the application collectors and the Prometheus registry.
@@ -125,26 +123,7 @@ func metricMethod(method string) string {
 // at 1: a scrape walks every collector, and an unauthenticated attacker who
 // guessed the token could otherwise stack Gather calls.
 func (m *Metrics) Handler(token string) http.Handler {
-	// Timeout keeps a slow-reading scraper from parking on the single
-	// in-flight slot for the server's full WriteTimeout — without it, one bad
-	// connection means minutes of 503s for every other scrape.
-	promHandler := promhttp.HandlerFor(m.registry, promhttp.HandlerOpts{
-		MaxRequestsInFlight: 1,
-		Timeout:             10 * time.Second,
-	})
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if token == "" {
-			http.Error(w, "metrics disabled", http.StatusServiceUnavailable)
-			return
-		}
-		// Constant-time compare: no timing oracle over the metrics token.
-		if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+token)) != 1 {
-			w.Header().Set("WWW-Authenticate", "Bearer")
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		promHandler.ServeHTTP(w, r)
-	})
+	return PromHandler(m.registry, token)
 }
 
 // poolCollector exposes pgxpool statistics as gauges/counters. The extra

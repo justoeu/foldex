@@ -128,7 +128,7 @@ func TestClient_ErrorPaths_WrongBucket(t *testing.T) {
 	}
 	require.Error(t, err)
 
-	_, err = cli.ObjectExists(ctx, "k")
+	_, err = cli.ExistingObjects(ctx, []string{"k"})
 	if err != nil {
 		assert.Contains(t, err.Error(), "storage:")
 	}
@@ -143,7 +143,7 @@ func TestClient_ErrorPaths_WrongBucket(t *testing.T) {
 	err = cli.WalkObjects(ctx, "", func(ObjectInfo) error { return nil })
 	require.Error(t, err)
 
-	_ = cli.DeleteObjectsPrefix(ctx, "p/")
+	_ = cli.DeleteObjects(ctx, []string{"p/x"})
 }
 
 func TestClient_DeleteObject_NoSuchKeyTolerated(t *testing.T) {
@@ -200,10 +200,10 @@ func TestNew_ConcurrentMakeBucketRace(t *testing.T) {
 	}
 }
 
-func TestDeleteObjectsPrefix_WrongBucketErrors(t *testing.T) {
+func TestDeleteObjects_WrongBucketErrors(t *testing.T) {
 	cli := newInternalClient(t)
 	cli.bucket = "no-such-bucket-for-prefix"
-	_ = cli.DeleteObjectsPrefix(context.Background(), "x/")
+	_ = cli.DeleteObjects(context.Background(), []string{"x/y"})
 }
 
 func TestGetObject_ReadFullSuccess(t *testing.T) {

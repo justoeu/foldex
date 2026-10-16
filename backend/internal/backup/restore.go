@@ -175,12 +175,12 @@ func applyRestoreMode(ctx context.Context, tx pgx.Tx, uid authctx.UserID, mode C
 	case ModeWipe:
 		return applyWipeRestore(ctx, tx, uid, snapshot, report)
 	case ModeSkip:
-		inserted, skipped, warnings, mapping, err := restoreSkip(ctx, tx, uid, snapshot)
+		inserted, skipped, warnings, mapping, err := restoreSkipStaged(ctx, tx, uid, snapshot)
 		report.Inserted, report.Skipped = inserted, skipped
 		report.Warnings = append(report.Warnings, warnings...)
 		return mapping, wrapRestoreInsertError("skip", err)
 	case ModeDuplicate:
-		inserted, warnings, mapping, err := restoreDuplicate(ctx, tx, uid, snapshot)
+		inserted, warnings, mapping, err := restoreDuplicateStaged(ctx, tx, uid, snapshot)
 		report.Inserted = inserted
 		report.Warnings = append(report.Warnings, warnings...)
 		return mapping, wrapRestoreInsertError("duplicate", err)
@@ -198,7 +198,7 @@ func applyWipeRestore(ctx context.Context, tx pgx.Tx, uid authctx.UserID, snapsh
 		return idMapping{}, fmt.Errorf("backup: wipe db: %w", err)
 	}
 	report.Wiped = wiped
-	inserted, _, warnings, mapping, err := restoreSkip(ctx, tx, uid, snapshot)
+	inserted, _, warnings, mapping, err := restoreSkipStaged(ctx, tx, uid, snapshot)
 	report.Inserted = inserted
 	report.Warnings = append(report.Warnings, warnings...)
 	return mapping, wrapRestoreInsertError("wipe", err)

@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useQueryClient } from '@tanstack/react-query'
 import { captureLinkScreenshot, removeLinkImage, uploadLinkImage, useCreateLink, useUpdateLink } from '../api/links'
 import { apiErrorCode } from '../lib/apiError'
+import { linkImageErrorMessage } from './useLinkDialogImage'
 import { tagNameTakenErrorKey, type SelectedTag } from '../lib/dialogTags'
 import { buildLinkCreatePayload, buildLinkUpdatePayload, type LinkDialogValues } from '../lib/linkDialogPayload'
 import type { Link } from '../api/types'
@@ -82,7 +83,7 @@ export function useLinkDialogSubmit(options: Options) {
     } catch (error) {
       // Capture-on-save is a hint, not a save gate: the row already exists.
       if (captureOnSave && !file) return true
-      options.image.setUploadError(uploadErrorMessage(error, t))
+      options.image.setUploadError(linkImageErrorMessage(error, t))
       return false
     } finally {
       options.image.setBusy(false)
@@ -129,19 +130,4 @@ function saveErrorMessage(
   if (code === 'conflict' || status === 409) return t('link_dialog.error_conflict')
   const message = (error as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error?.message
   return message || t('link_dialog.error_generic')
-}
-
-function uploadErrorMessage(
-  error: unknown,
-  t: (key: string) => string,
-): string {
-  const code = apiErrorCode(error)
-  if (code === 'storage_unavailable') return t('link_dialog.image_error_storage')
-  if (code === 'screenshot_failed' || code === 'private_target' || code === 'invalid_scheme') {
-    return t('link_dialog.image_error_screenshot')
-  }
-  const value = error as { response?: { data?: { error?: { message?: string } }; status?: number } }
-  // Chi's empty 404 (route omitted) has no envelope; a JSON not_found is INV-050.
-  if (value.response?.status === 404 && !code) return t('link_dialog.image_error_storage')
-  return value.response?.data?.error?.message ?? t('link_dialog.image_error_generic')
 }

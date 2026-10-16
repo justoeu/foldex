@@ -9,6 +9,7 @@ import {
   type ImportValidation,
 } from '../api/importer'
 import { apiErrorText } from '../lib/apiError'
+import { useAbortableValidation } from './useAbortableValidation'
 
 export type ImportPreviewPhase = 'loading' | 'ready' | 'applying' | 'done' | 'error'
 
@@ -45,41 +46,26 @@ export function deriveImportPreviewPhase(state: {
 
 export function useImportPreview(file: File, format: ImportFormat) {
   const { t } = useTranslation()
-  const [validation, setValidation] = useState<ImportValidation | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [errMsg, setErrMsg] = useState<string | null>(null)
   const [mode, setMode] = useState<ImportMode>('skip')
   const [excluded, setExcluded] = useState<Set<string>>(new Set())
   const [applying, setApplying] = useState(false)
   const [report, setReport] = useState<ImportResult | null>(null)
-  const validationAbortRef = useRef<AbortController | null>(null)
+  const {
+    data: validation,
+    loading,
+    errMsg,
+    setErrMsg,
+    abort: abortValidation,
+  } = useAbortableValidation<ImportValidation>(
+    (signal) => validateImport(file, format, signal),
+    [file, format, t],
+    { onReset: () => setExcluded(new Set()) },
+  )
   const applyAbortRef = useRef<AbortController | null>(null)
   const applyLockedRef = useRef(false)
   const applyImport = useApplyImport()
 
   const phase = deriveImportPreviewPhase({ loading, applying, report, errMsg, validation })
-
-  useEffect(() => {
-    const controller = new AbortController()
-    validationAbortRef.current = controller
-    setLoading(true)
-    setValidation(null)
-    setExcluded(new Set())
-    setErrMsg(null)
-    validateImport(file, format, controller.signal)
-      .then((v) => { if (!controller.signal.aborted) setValidation(v) })
-      .catch((e) => {
-        if (!controller.signal.aborted) setErrMsg(apiErrorText(e, t('common.unknown_error')))
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false)
-        if (validationAbortRef.current === controller) validationAbortRef.current = null
-      })
-    return () => {
-      controller.abort()
-      if (validationAbortRef.current === controller) validationAbortRef.current = null
-    }
-  }, [file, format, t])
 
   useEffect(() => () => applyAbortRef.current?.abort(), [file, format])
 
@@ -116,13 +102,13 @@ export function useImportPreview(file: File, format: ImportFormat) {
   }
 
   const abort = () => {
-    validationAbortRef.current?.abort()
+    abortValidation()
     applyAbortRef.current?.abort()
   }
 
   const requestClose = () => {
     if (applyLockedRef.current || report) return false
-    validationAbortRef.current?.abort()
+    abortValidation()
     return true
   }
 

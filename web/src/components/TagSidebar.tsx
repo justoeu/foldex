@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
 import { TagDialog } from './TagDialog'
@@ -8,6 +8,8 @@ import { useRecentChanges } from '../api/links'
 import { relativeTime } from '../lib/time'
 import { VERSION, BUILD_DATE, formatBuildDate } from '../version'
 import { useEscape } from '../hooks/useEscape'
+import { isBoolean, usePersistedState } from '../hooks/usePersistedState'
+import { TagRow } from './sidebar/TagRow'
 
 type Props = Readonly<{
   selected: number[]
@@ -33,11 +35,16 @@ const FREQ_OPEN_KEY = 'foldex.sidebar.freqOpen'
 const OTHER_OPEN_KEY = 'foldex.sidebar.otherOpen'
 const RECENT_OPEN_KEY = 'foldex.sidebar.recentOpen'
 
-function readBool(key: string, def: boolean): boolean {
-  if (typeof localStorage === 'undefined') return def
-  const v = localStorage.getItem(key)
-  if (v === null) return def
-  return v === '1'
+function migrateLegacyBoolKeys(keys: string[]) {
+  try {
+    for (const key of keys) {
+      const v = localStorage.getItem(key)
+      if (v === '1') localStorage.setItem(key, 'true')
+      else if (v === '0') localStorage.setItem(key, 'false')
+    }
+  } catch {
+    // Storage unavailable: defaults apply, same as usePersistedState.
+  }
 }
 
 export function TagSidebar({
@@ -55,18 +62,12 @@ export function TagSidebar({
   const [creating, setCreating] = useState(false)
   const [managing, setManaging] = useState(false)
 
-  const [freqOpen, setFreqOpen] = useState(() => readBool(FREQ_OPEN_KEY, true))
-  const [otherOpen, setOtherOpen] = useState(() => readBool(OTHER_OPEN_KEY, true))
+  // One-time migration: these keys stored '1'/'0' before usePersistedState
+  // (JSON booleans) took over; without it a closed section reopens once.
+  migrateLegacyBoolKeys([FREQ_OPEN_KEY, OTHER_OPEN_KEY, RECENT_OPEN_KEY])
+  const [freqOpen, setFreqOpen] = usePersistedState(FREQ_OPEN_KEY, true, isBoolean)
+  const [otherOpen, setOtherOpen] = usePersistedState(OTHER_OPEN_KEY, true, isBoolean)
   const [otherShowAll, setOtherShowAll] = useState(false)
-
-  useEffect(() => {
-    if (typeof localStorage === 'undefined') return
-    localStorage.setItem(FREQ_OPEN_KEY, freqOpen ? '1' : '0')
-  }, [freqOpen])
-  useEffect(() => {
-    if (typeof localStorage === 'undefined') return
-    localStorage.setItem(OTHER_OPEN_KEY, otherOpen ? '1' : '0')
-  }, [otherOpen])
 
   // Esc closes the mobile drawer when it's open, through the escape
   // stack so it does not also pop the folder underneath.
@@ -260,12 +261,7 @@ export function TagSidebar({
 function RecentChangesSection({ enabled }: Readonly<{ enabled: boolean }>) {
   const { t } = useTranslation()
   const { data: links = [], isLoading } = useRecentChanges(7, 10, enabled)
-  const [open, setOpen] = useState(() => readBool(RECENT_OPEN_KEY, true))
-
-  useEffect(() => {
-    if (typeof localStorage === 'undefined') return
-    localStorage.setItem(RECENT_OPEN_KEY, open ? '1' : '0')
-  }, [open])
+  const [open, setOpen] = usePersistedState(RECENT_OPEN_KEY, true, isBoolean)
 
   if (!isLoading && links.length === 0) return null
 
@@ -318,27 +314,3 @@ function SectionHeader({
   )
 }
 
-function TagRow({
-  name,
-  color,
-  count,
-  active,
-  onClick,
-}: Readonly<{
-  name: string
-  color: string
-  count: number
-  active: boolean
-  onClick: () => void
-}>) {
-  return (
-    <button
-      className={'fx-side-row' + (active ? ' fx-side-row-active' : '')}
-      onClick={onClick}
-    >
-      <span className="fx-side-dot" style={{ background: color }} />
-      <span className="fx-side-label">{name}</span>
-      <span className="fx-side-count">{count}</span>
-    </button>
-  )
-}

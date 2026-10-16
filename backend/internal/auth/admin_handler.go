@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"foldex/internal/auth/ipblock"
 	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 
@@ -19,6 +19,7 @@ import (
 	"foldex/internal/pkg/authgate"
 	"foldex/internal/pkg/clampint"
 	"foldex/internal/pkg/httperr"
+	"foldex/internal/policy"
 	"foldex/internal/roleperm"
 )
 
@@ -41,7 +42,7 @@ type AdminHandler struct {
 	// policy supplies the owner-configurable password floor (ADR-35), for the
 	// one route here that accepts a password. Nil runs the compiled-in floor,
 	// matching Handler.
-	policy PolicyReader
+	policy *policy.Repository
 	// grants is the effective RBAC matrix (ADR-42) and the roleperm store the
 	// matrix screen writes through. Nil at construction means the compiled
 	// matrix, read-only — the screen then reports every role as locked rather
@@ -51,7 +52,7 @@ type AdminHandler struct {
 	// entry takes effect on the next request instead of up to a TTL later. Nil
 	// (tests, and any build without the gate mounted) simply skips the nudge —
 	// the row is written either way and the TTL still picks it up.
-	blocklist *Blocklist
+	blocklist *ipblock.Blocklist
 	// isTrustedProxy answers the rail that refuses to block the address every
 	// request would arrive from behind nginx. Supplied by the router, which
 	// owns the parsed CIDR set.
@@ -63,7 +64,7 @@ type AdminHandler struct {
 // A builder rather than two more constructor parameters, matching
 // links.Handler.WithFolderGate: NewAdminHandler already takes six, and the
 // blocklist is optional in exactly the way the others there are.
-func (h *AdminHandler) WithBlocklist(b *Blocklist, isTrustedProxy func(string) bool) *AdminHandler {
+func (h *AdminHandler) WithBlocklist(b *ipblock.Blocklist, isTrustedProxy func(string) bool) *AdminHandler {
 	h.blocklist = b
 	h.isTrustedProxy = isTrustedProxy
 	return h
@@ -84,7 +85,7 @@ func (h *AdminHandler) validatePassword(ctx context.Context, p string) error {
 // wiring in main.go broke no test. Nil is still accepted — it means "run the
 // compiled-in floor" — but now a caller has to say so.
 func NewAdminHandler(repo *Repository, m mailer.Mailer,
-	logger *slog.Logger, baseURL string, policy PolicyReader,
+	logger *slog.Logger, baseURL string, policy *policy.Repository,
 	grants *roleperm.Repository) *AdminHandler {
 	return &AdminHandler{
 		repo: repo, mailer: m, logger: logger,
@@ -181,7 +182,7 @@ func (h *AdminHandler) Mount(r chi.Router) {
 
 func (h *AdminHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	limit := clampint.Int(r.URL.Query().Get("limit"), adminListCeiling, 1, adminListCeiling)
-	users, err := h.repo.ListUsers(r.Context(), limit, parseAfterID(r.URL.Query().Get("after")))
+	users, err := h.repo.ListUsers(r.Context(), limit, admin.ParseAfterID(r.URL.Query().Get("after")))
 	if err != nil {
 		h.logger.Error("admin list users", "err", err)
 		httperr.Write(w, httperr.ErrInternal)
@@ -258,6 +259,11 @@ func (h *AdminHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func validateUpdateUserInput(in updateUserInput) error {
+	if in.Name != nil {
+		if _, err := validateProfileName(*in.Name); err != nil {
+			return err
+		}
+	}
 	// Owner is absent from the assignable set on purpose: ownership moves only
 	// through the transfer endpoint, which demotes the outgoing owner in the
 	// same statement. Allowing it here would let a promotion race the partial
@@ -657,9 +663,9 @@ func (h *AdminHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	// Same bound the profile path applies to a name the user picks themselves.
 	// The column is TEXT, so without this the only limit is the 64 KiB body cap
 	// — and this name renders in the administration table.
-	if utf8.RuneCountInString(strings.TrimSpace(in.Name)) > maxProfileNameRunes {
-		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_name",
-			fmt.Sprintf("name must be at most %d characters", maxProfileNameRunes)))
+	name, err := validateProfileName(in.Name)
+	if err != nil {
+		httperr.Write(w, err)
 		return
 	}
 	role := in.Role
@@ -676,7 +682,7 @@ func (h *AdminHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	u, err := h.repo.AdminCreateUser(r.Context(), NewUser{
-		Email: in.Email, Name: in.Name, Password: in.Password, Role: role,
+		Email: in.Email, Name: name, Password: in.Password, Role: role,
 	})
 	switch {
 	case errors.Is(err, ErrEmailTaken):

@@ -30,7 +30,7 @@ type PublicNoteResolver interface {
 // The route is mounted behind auth.Middleware.Optional (or the bootstrap
 // principal under AUTH_ENABLED=0), so a signed-in owner keeps reading their
 // own notes here while the page stays 404 for everyone else unless the note
-// is opted in via is_public (SEC-SEN-001).
+// is opted in via is_public.
 type PublicHandler struct {
 	repo PublicNoteResolver
 	// allowNumericIDs re-enables /n/42 — off by default since ADR-32, and for

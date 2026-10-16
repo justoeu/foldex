@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"foldex/internal/auth/ipblock"
+	"foldex/internal/pkg/auditctx"
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/httperr"
 )
@@ -299,7 +300,7 @@ func (h *AdminHandler) ListIPBlocks(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
-	httperr.JSON(w, http.StatusOK, map[string]any{"blocks": blocks, "max": MaxIPBlocks})
+	httperr.JSON(w, http.StatusOK, map[string]any{"blocks": blocks, "max": ipblock.MaxIPBlocks})
 }
 
 type blockIPInput struct {
@@ -319,7 +320,7 @@ func (h *AdminHandler) BlockIP(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, derr)
 		return
 	}
-	ip, err := ValidateBlockIP(in.IP, h.callerIP(r), h.isTrustedProxy)
+	ip, err := ipblock.ValidateBlockIP(in.IP, h.callerIP(r), h.isTrustedProxy)
 	if err != nil {
 		httperr.Write(w, blockError(err))
 		return
@@ -335,7 +336,7 @@ func (h *AdminHandler) BlockIP(w http.ResponseWriter, r *http.Request) {
 	}
 	block, err := h.repo.BlockIP(r.Context(), ip, in.Reason, actor, actorEmail)
 	if err != nil {
-		if err == ErrBlockFull {
+		if err == ipblock.ErrBlockFull {
 			httperr.Write(w, blockError(err))
 			return
 		}
@@ -378,16 +379,16 @@ func (h *AdminHandler) UnblockIP(w http.ResponseWriter, r *http.Request) {
 // fix it, where one told "invalid" cannot.
 func blockError(err error) error {
 	switch err {
-	case ErrBlockSelf:
+	case ipblock.ErrBlockSelf:
 		return httperr.New(http.StatusConflict, "block_self", err.Error())
-	case ErrBlockLoopback:
+	case ipblock.ErrBlockLoopback:
 		return httperr.New(http.StatusConflict, "block_loopback", err.Error())
-	case ErrBlockProxy:
+	case ipblock.ErrBlockProxy:
 		return httperr.New(http.StatusConflict, "block_proxy", err.Error())
-	case ErrBlockFull:
+	case ipblock.ErrBlockFull:
 		return httperr.New(http.StatusConflict, "block_full", err.Error())
 	default:
-		return httperr.New(http.StatusBadRequest, "invalid_ip", ErrBlockMalformed.Error())
+		return httperr.New(http.StatusBadRequest, "invalid_ip", ipblock.ErrBlockMalformed.Error())
 	}
 }
 
@@ -459,4 +460,21 @@ func (h *AdminHandler) AuditVocabulary(w http.ResponseWriter, r *http.Request) {
 		"actions": auditActionsPayload(),
 		"windows": []string{"24h", "7d", "30d"},
 	})
+}
+
+// WithRequest fills the context columns from the live request.
+//
+// One helper at every write site rather than three lines repeated: the address,
+// its provenance and the device are a SET — a row carrying an address without
+// the flag that says whether anyone vouched for it is the shape migration
+// 000033 refused, and the easiest way to recreate it is to copy two of the
+// three lines.
+func (rec AuditRecord) WithRequest(r *http.Request) AuditRecord {
+	if r == nil {
+		return rec
+	}
+	rec.IP = ipblock.Normalize(r.RemoteAddr)
+	rec.IPTrusted = auditctx.IPTrusted(r.Context())
+	rec.UserAgent = r.UserAgent()
+	return rec
 }

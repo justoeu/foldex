@@ -3,7 +3,8 @@ import { formatLocalYMD } from '../../lib/time'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { activityQueryKey, fetchOwnActivity, type ActivityCursor, type AuditEntry } from '../../api/admin'
-import { actionLabel } from '../../lib/auditLabels'
+import { buildActivityHistogram, groupActivityEntriesByDay } from './activityModel'
+import { ActivityChartCard } from './ActivityChartCard'
 
 /** Page sizes the account feed offers. 50 is the default the server already uses. */
 const PAGE_SIZES = [25, 50, 100] as const
@@ -11,7 +12,6 @@ type PageSize = (typeof PAGE_SIZES)[number]
 const PAGE_SIZE_KEY = 'foldex.activity.pageSize'
 
 /** Days at the top of the feed start open. Older days stay collapsed. */
-const OPEN_DAYS = 3
 
 /** The chart reads a wider slice than one list page, still one request. */
 const CHART_SAMPLE = 200
@@ -27,7 +27,6 @@ function readPageSize(): PageSize {
 }
 
 /** The chart window: two weeks, ending today. Same span the design mock shows. */
-const CHART_DAYS = 14
 
 type Kind = 'all' | 'links' | 'folders' | 'backups' | 'logins' | 'clicks'
 
@@ -44,36 +43,12 @@ const KIND_BY_ACTION: Record<string, Kind> = {
   'backup.restored': 'backups',
 }
 
-/** The dot color classes by action prefix — create/edit/delete/other. */
-function dotClass(action: string): string {
-  // Actions are <entity>.<verb> (link.created), so match the verb suffix.
-  if (action.endsWith('.created')) return 'fx-acc2-act-dot-create'
-  if (action === 'link.clicked') return 'fx-acc2-act-dot-click'
-  if (action.startsWith('login.')) return 'fx-acc2-act-dot-login'
-  if (action.endsWith('.updated')) return 'fx-acc2-act-dot-edit'
-  if (action.endsWith('.deleted')) return 'fx-acc2-act-dot-delete'
-  return 'fx-acc2-act-dot-other'
-}
-
 function entryKind(e: AuditEntry): Kind {
   return KIND_BY_ACTION[e.action] ?? (e.entity_kind && KIND_BY_ENTITY[e.entity_kind]) ?? 'all'
 }
 
 /** Local civil date, matching the chart's day buckets: a UTC slice would
  *  file entries near midnight onto the wrong day for non-UTC users. */
-function dayKey(iso: string): string {
-  return formatLocalYMD(new Date(iso))
-}
-
-/** True when `key` (YYYY-MM-DD) is today or one of the two days before it. */
-function dayIsRecent(key: string): boolean {
-  const day = new Date(`${key}T12:00:00`)
-  const today = new Date()
-  today.setHours(12, 0, 0, 0)
-  const diff = Math.round((today.getTime() - day.getTime()) / 86_400_000)
-  return diff >= 0 && diff < OPEN_DAYS
-}
-
 /**
  * The account's own activity — the other half of ADR-46's read split.
  *
@@ -113,25 +88,10 @@ export function ActivitySection() {
   const entries = feed.data ?? []
   const chartEntries = chartFeed.data ?? []
 
-  // Chart first: counts per day over the window, computed where the bars are
-  // drawn rather than kept in state — a memo over the loaded pages, so a
-  // "load more" that adds older rows never re-slices the window.
-  const chart = useMemo(() => {
-    const days: { key: string; label: string; count: number }[] = []
-    const fmtDay = new Intl.DateTimeFormat(i18nLocale(i18n.language), { day: 'numeric' })
-    for (let i = CHART_DAYS - 1; i >= 0; i--) {
-      const d = new Date()
-      d.setHours(12, 0, 0, 0)
-      d.setDate(d.getDate() - i)
-      days.push({ key: formatLocalYMD(d), label: fmtDay.format(d), count: 0 })
-    }
-    const byKey = new Map(days.map((d) => [d.key, d]))
-    for (const e of chartEntries) {
-      const bucket = byKey.get(dayKey(e.created_at))
-      if (bucket) bucket.count++
-    }
-    return days
-  }, [chartEntries, i18n.language])
+  const chart = useMemo(
+    () => buildActivityHistogram(chartEntries, i18nLocale(i18n.language)),
+    [chartEntries, i18n.language],
+  )
 
   const q = query.trim().toLowerCase()
   const filtered = useMemo(
@@ -142,40 +102,10 @@ export function ActivitySection() {
     [entries, kind, q],
   )
 
-  // Grouped by calendar day, newest first. Intl carries the locale's weekday
-  // and month names — no hand-rolled calendar vocabulary to translate.
-  const groups = useMemo(() => {
-    const map = new Map<string, AuditEntry[]>()
-    for (const e of filtered) {
-      const k = dayKey(e.created_at)
-      const list = map.get(k)
-      if (list) list.push(e)
-      else map.set(k, [e])
-    }
-    const fmtDay = new Intl.DateTimeFormat(i18nLocale(i18n.language), {
-      weekday: 'long',
-      day: 'numeric',
-      month: 'long',
-    })
-    const fmtTime = new Intl.DateTimeFormat(i18nLocale(i18n.language), { hour: '2-digit', minute: '2-digit' })
-    return [...map.entries()]
-      .sort((a, b) => (a[0] < b[0] ? 1 : -1))
-      .map(([key, items]) => ({
-        key,
-        recent: dayIsRecent(key),
-        label: fmtDay.format(new Date(key + 'T12:00:00')),
-        items: items.map((e) => ({
-          id: e.id,
-          time: fmtTime.format(new Date(e.created_at)),
-          label: actionLabel(t, e.action),
-          dot: dotClass(e.action),
-          title: e.subject || t('admin.audit_detail_absent'),
-          ip: e.ip ?? '',
-        })),
-      }))
-  }, [filtered, t, i18n.language])
-
-  const maxCount = Math.max(...chart.map((c) => c.count), 1)
+  const groups = useMemo(
+    () => groupActivityEntriesByDay(filtered, i18nLocale(i18n.language), t),
+    [filtered, t, i18n.language],
+  )
   const hasNext = entries.length === pageSize
   const hasPrev = page > 0
 
@@ -219,36 +149,7 @@ export function ActivitySection() {
 
       {!feed.isPending && !feed.isError && (
         <>
-          <div className="fx-acc2-chart-card">
-            <div className="fx-acc2-chart-head">
-              <span>{t('account.activity_window', { count: CHART_DAYS })}</span>
-              <span className="fx-acc2-chart-total">
-                {t('account.activity_total_loaded', { count: chartEntries.length })}
-              </span>
-            </div>
-            <div className="fx-acc2-chart-bars" role="img" aria-label={t('account.activity_chart_aria')}>
-              {chart.map((c) => (
-                <div
-                  className="fx-acc2-chart-col"
-                  key={c.key}
-                  role="img"
-                  aria-label={t('account.activity_day_tip', { day: c.label, count: c.count })}
-                  data-tooltip={t('account.activity_day_tip', { day: c.label, count: c.count })}
-                  data-tooltip-side="top"
-                >
-                  <div
-                    className={'fx-acc2-chart-bar' + (c.count ? '' : ' fx-acc2-chart-bar-empty')}
-                    style={{ height: `${Math.round((c.count / maxCount) * 100)}%` }}
-                  />
-                </div>
-              ))}
-            </div>
-            <div className="fx-acc2-chart-labels">
-              {chart.map((c) => (
-                <span className="fx-acc2-chart-label" key={c.key}>{c.label}</span>
-              ))}
-            </div>
-          </div>
+          <ActivityChartCard chart={chart} totalLoaded={chartEntries.length} />
 
           <div className="fx-acc2-filters">
             <input

@@ -10,6 +10,7 @@ import {
   type StatsSummary,
   type TopLink,
 } from '../api/stats'
+import { formatBytes } from '../lib/formatBytes'
 
 export function StatsPage() {
   const { t } = useTranslation()
@@ -497,18 +498,6 @@ function TagDistribution({
       ))}
     </ul>
   )
-}
-
-function formatBytes(b: number): string {
-  if (b < 1024) return `${b} B`
-  const units = ['KB', 'MB', 'GB', 'TB']
-  let n = b / 1024
-  let i = 0
-  while (n >= 1024 && i < units.length - 1) {
-    n /= 1024
-    i++
-  }
-  return `${n.toFixed(n >= 10 ? 0 : 1)} ${units[i]}`
 }
 
 function EmptyChart({ hint }: Readonly<{ hint: string }>) {

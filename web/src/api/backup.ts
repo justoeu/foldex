@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { authenticatedFetch, http } from './client'
 import { invalidateEntryCounts } from './entries'
 import { apiErrorCode, apiErrorStatus } from '../lib/apiError'
+import { streamResponseToPickedFile, type SaveFilePicker } from '../lib/streamResponseToPickedFile'
 
 export type BackupManifest = {
   kind: string
@@ -138,50 +139,19 @@ export async function generateBackup(): Promise<BackupHistoryEntry> {
   return navigateBackupDownload()
 }
 
-type BackupWriter = {
-  write: (chunk: Uint8Array) => Promise<void>
-  close: () => Promise<void>
-  abort: (reason?: unknown) => Promise<void>
-}
-
-type SaveFilePicker = (options: {
-  suggestedName: string
-  types: { description: string; accept: Record<string, string[]> }[]
-}) => Promise<{ createWritable: () => Promise<{ getWriter: () => BackupWriter }> }>
-
 async function streamBackupToFile(picker: SaveFilePicker): Promise<BackupHistoryEntry> {
-  const suggestedName = backupFilename(new Date().toISOString())
-  const handle = await picker.call(window, {
-    suggestedName,
+  const { response, bytesWritten, startedAt } = await streamResponseToPickedFile({
+    picker,
+    suggestedName: backupFilename(new Date().toISOString()),
     types: [{ description: 'ZIP archive', accept: { 'application/zip': ['.zip'] } }],
-  })
-  const writer = (await handle.createWritable()).getWriter()
-  const t0 = performance.now()
-  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null
-  let size = 0
-  try {
-    const response = await authenticatedFetch('/api/backup', {
+    fetchResponse: () => authenticatedFetch('/api/backup', {
       method: 'POST',
       signal: AbortSignal.timeout(BACKUP_REQUEST_TIMEOUT_MS),
-    })
-    if (!response.ok) throw await backupResponseError(response)
-    if (!response.body) throw new Error('backup response is not streamable')
-    reader = response.body.getReader()
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-      size += value.byteLength
-      await writer.write(value)
-    }
-    await writer.close()
-    return recordBackup(response.headers, size, t0)
-  } catch (error) {
-    await Promise.allSettled([
-      reader?.cancel(error),
-      writer.abort(error),
-    ])
-    throw error
-  }
+    }),
+    responseError: backupResponseError,
+    notStreamableMessage: 'backup response is not streamable',
+  })
+  return recordBackup(response.headers, bytesWritten, startedAt)
 }
 
 async function backupResponseError(response: Response): Promise<Error> {

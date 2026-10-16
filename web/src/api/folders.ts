@@ -16,7 +16,7 @@ export type FolderListParams = {
   // the backend gates GET /api/folders?parent_id=X on this exact case
   // (root/flat listings are never gated, only "list what's inside X").
   unlockToken?: string
-  // fields=minimal → backend skips preview LATERALs (N1-NEX-006/011). Use
+  // fields=minimal → backend skips preview LATERALs. Use
   // for flat metadata (pickers, App allFolders); keep full for RapidView
   // card grids (scoped root/parent lists).
   fields?: 'minimal' | 'full'

@@ -6,8 +6,8 @@ import (
 	"foldex/internal/backupjobs"
 )
 
-// envTiming is the env-baseline Timing for one job. A weekly env anchor
-// becomes a one-day weekday set: the days live on the Timing now.
+// envTiming is the env-baseline backupjobs.Timing for one job. A weekly env anchor
+// becomes a one-day weekday set: the days live on the backupjobs.Timing now.
 func envTiming(job string, cfg Config) backupjobs.Timing {
 	t := backupjobs.Timing{Source: "env"}
 	var anchor backupjobs.Anchor

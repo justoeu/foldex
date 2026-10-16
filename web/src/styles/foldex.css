@@ -3773,7 +3773,6 @@ button.fx-drawer-backdrop {
   color: var(--fx-amber, #b45309);
 }
 
-.fx-sec-block { display: flex; flex-direction: column; gap: 8px; }
 .fx-sec-block-label {
   font-size: 10.5px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
   color: var(--fx-ink-4);

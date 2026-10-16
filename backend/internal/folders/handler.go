@@ -103,7 +103,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		q.RootOnly = true
 	}
 	// fields=minimal → slim projection (no preview LATERALs). Used by flat
-	// pickers and App's allFolders metadata query (N1-NEX-006 / N1-NEX-011).
+	// pickers and App's allFolders metadata query.
 	if v := r.URL.Query().Get("fields"); v == "minimal" {
 		q.Slim = true
 	}
@@ -112,7 +112,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	// same unlock-token proof. Root/flat listings (ParentID == nil) are
 	// never gated — only each protected folder's own preview_links/
 	// preview_folders are redacted there (see Repository.List).
-	// Re-check after List closes the password-change TOCTOU window (RACE-HER-005).
+	// Re-check after List closes the password-change TOCTOU window.
 	if q.ParentID != nil {
 		token := r.Header.Get(UnlockHeader)
 		if err := h.contentGate.Check(r.Context(), authctx.MustUser(r.Context()), *q.ParentID, token); err != nil {
@@ -219,10 +219,10 @@ func (h *Handler) unlock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Reserve an attempt slot under one lock immediately before bcrypt, so
-	// parallel wrong passwords cannot all race past maxUnlockAttempts
-	// (RACE-HER-004). Everything between Begin and the commit below is pure
+	// parallel wrong passwords cannot all race past maxUnlockAttempts.
+	// Everything between Begin and the commit below is pure
 	// CPU, so there is no path that leaks the slot.
-	if until, ok := beginUnlockAttempt(h.limiter, key); !ok {
+	if until, ok := h.limiter.Begin(key); !ok {
 		h.writeLocked(w, until)
 		return
 	}

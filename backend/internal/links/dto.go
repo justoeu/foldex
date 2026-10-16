@@ -33,7 +33,7 @@ type CreateInput struct {
 	Pinned      bool               `json:"pinned"`
 	// IsPublic opts the link into the anonymous /go/{slug} redirect. Default
 	// false: a title-derived slug is guessable, so the destination cannot
-	// rest on it (SEC-SEN-002). The owner's own session always resolves.
+	// rest on it. The owner's own session always resolves.
 	IsPublic bool `json:"is_public"`
 	// CheckInterval opts the link into the changecheck worker. Nil/empty =
 	// disabled. Must be one of "hourly"/"daily"/"weekly" or Validate rejects.
@@ -118,7 +118,7 @@ type UpdateInput struct {
 	// in the repository).
 	CheckInterval    *string `json:"-"`
 	CheckIntervalSet bool    `json:"-"`
-	// IfMatchUpdatedAt is optional optimistic concurrency (RACE-HER-012):
+	// IfMatchUpdatedAt is optional optimistic concurrency:
 	// when set, UPDATE requires row.updated_at equality; 0 rows → 409 conflict.
 	// Omitted = last-writer-wins (default single-user clients).
 	IfMatchUpdatedAt *time.Time `json:"if_match_updated_at"`

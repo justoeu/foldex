@@ -2,19 +2,18 @@ package server
 
 import (
 	"context"
+	"foldex/internal/auth/ipblock"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"foldex/internal/auth"
 )
 
 func gated(t *testing.T, blocked ...string) http.Handler {
 	t.Helper()
-	list := auth.NewBlocklist(func(context.Context) ([]string, error) { return blocked, nil })
+	list := ipblock.NewBlocklist(func(context.Context) ([]string, error) { return blocked, nil })
 	return blocklistGate(list)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("reached"))

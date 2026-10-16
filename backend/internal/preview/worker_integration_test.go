@@ -57,7 +57,7 @@ func TestWorker_ProcessesEnqueuedJob(t *testing.T) {
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	w := NewWorker(pool, 1, 3*time.Second, logger)
+	w := NewWorker(links.NewRepository(pool), 1, 3*time.Second, logger)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	w.Start(ctx)
@@ -164,14 +164,15 @@ func TestWorker_ScreenshotFallback_ManualUploadWinsAfterCapture(t *testing.T) {
 	require.NoError(t, err)
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	worker := NewWorker(pool, 1, 3*time.Second, logger)
+	worker := NewWorker(links.NewRepository(pool), 1, 3*time.Second, logger)
 	worker.screenshotURLPolicy = func(context.Context, string) bool { return true }
 	uploader := &memUploader{}
 	manualURL := fmt.Sprintf("/api/files/images/%d.jpg", link.ID)
 	worker.WithScreenshotFallback(stubScreenshotter{
 		payload: testPNG(t),
 		beforeReturn: func() {
-			require.NoError(t, repo.UpdateOGImage(context.Background(), uid, link.ID, manualURL))
+			_, ogErr := repo.ReplaceOGImage(context.Background(), uid, link.ID, manualURL)
+			require.NoError(t, ogErr)
 		},
 	}, uploader)
 
@@ -240,7 +241,7 @@ func TestWorker_ScreenshotFallback_NewerRefreshWinsAndReruns(t *testing.T) {
 	link, err := repo.Create(context.Background(), uid, links.CreateInput{URL: target.URL, Title: "refresh race"})
 	require.NoError(t, err)
 
-	worker := NewWorker(pool, 1, 3*time.Second, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	worker := NewWorker(links.NewRepository(pool), 1, 3*time.Second, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	worker.screenshotURLPolicy = func(context.Context, string) bool { return true }
 	uploader := &memUploader{}
 	shot := &refreshDuringCaptureScreenshotter{
@@ -290,7 +291,7 @@ func TestWorker_ScreenshotFallback_SkipsLoopbackTarget(t *testing.T) {
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	w := NewWorker(pool, 1, 3*time.Second, logger)
+	w := NewWorker(links.NewRepository(pool), 1, 3*time.Second, logger)
 
 	up := &memUploader{}
 	w.WithScreenshotFallback(stubScreenshotter{payload: []byte("PNG-DATA")}, up)
@@ -370,7 +371,7 @@ func TestWorker_ScreenshotFallback_SuccessAndFailureConverge(t *testing.T) {
 			}
 			uid := testdb.SeedUser(t, pool, tc.name+"@test.local", "admin")
 			logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-			worker := NewWorker(pool, 1, 3*time.Second, logger)
+			worker := NewWorker(links.NewRepository(pool), 1, 3*time.Second, logger)
 			worker.screenshotURLPolicy = func(context.Context, string) bool { return true }
 			uploader := &memUploader{uploadErr: tc.uploadErr}
 			var captureCalls atomic.Int64
@@ -436,7 +437,7 @@ func TestWorker_ShortCircuitsWhenImageAlreadyPresent(t *testing.T) {
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	w := NewWorker(pool, 1, 3*time.Second, logger)
+	w := NewWorker(links.NewRepository(pool), 1, 3*time.Second, logger)
 
 	up := &memUploader{}
 	w.WithScreenshotFallback(stubScreenshotter{payload: []byte("nope")}, up)
@@ -449,7 +450,8 @@ func TestWorker_ShortCircuitsWhenImageAlreadyPresent(t *testing.T) {
 
 	// Simulate a user upload landing BEFORE the worker starts / picks the job
 	// (avoids racing Start's requeuePending ticker against the OG write).
-	require.NoError(t, lrepo.UpdateOGImage(context.Background(), uid, link.ID, "/api/files/images/1.png"))
+	_, ogErr := lrepo.ReplaceOGImage(context.Background(), uid, link.ID, "/api/files/images/1.png")
+	require.NoError(t, ogErr)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	w.Start(ctx)
@@ -482,7 +484,7 @@ func TestWorker_MarksFailureOnUnreachable(t *testing.T) {
 
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	w := NewWorker(pool, 1, 500*time.Millisecond, logger)
+	w := NewWorker(links.NewRepository(pool), 1, 500*time.Millisecond, logger)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	w.Start(ctx)

@@ -267,7 +267,3 @@ type doerTransport struct{ d HTTPDoer }
 func (t doerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return t.d.Do(req)
 }
-
-// senderError is the error a Sender returns when the entire batch fails
-// (repo unavailable). Kept exported so handlers can errors.Is against it.
-var ErrRepoUnavailable = errors.New("push: subscription repo unavailable")

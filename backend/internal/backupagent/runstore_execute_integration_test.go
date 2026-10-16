@@ -5,6 +5,7 @@ package backupagent
 import (
 	"context"
 	"errors"
+	"foldex/internal/backupjobs"
 	"log/slog"
 	"testing"
 	"time"
@@ -66,15 +67,15 @@ func TestExecute_RecordsOutcomeEvenWhenTheJobContextDies(t *testing.T) {
 	a := &Agent{
 		cfg:     Config{StaleRunMin: 240},
 		pool:    pool,
-		runs:    NewRunStore(pool),
+		runs:    backupjobs.NewRunStore(pool),
 		metrics: NewMetrics(),
 		logger:  slog.New(slog.DiscardHandler),
 	}
 	jobCtx, cancel := context.WithCancel(ctx)
-	spec := jobSpec{name: JobDump, run: func(runCtx context.Context, _ int64) (*Artifact, map[string]any, string, error) {
+	spec := jobSpec{name: backupjobs.JobDump, run: func(runCtx context.Context, _ int64) (*backupjobs.Artifact, map[string]any, string, error) {
 		cancel() // shutdown arrives mid-job
 		<-runCtx.Done()
-		return nil, nil, ReasonDumpFailed, errors.New("interrupted")
+		return nil, nil, backupjobs.ReasonDumpFailed, errors.New("interrupted")
 	}}
 	a.execute(jobCtx, spec, time.Now(), 0)
 
@@ -82,7 +83,7 @@ func TestExecute_RecordsOutcomeEvenWhenTheJobContextDies(t *testing.T) {
 	require.NoError(t, pool.QueryRow(ctx,
 		`SELECT status, last_error FROM backup_run ORDER BY id DESC LIMIT 1`).Scan(&status, &reason))
 	assert.Equal(t, "failed", status)
-	assert.Equal(t, ReasonShutdown, reason,
+	assert.Equal(t, backupjobs.ReasonShutdown, reason,
 		"a cancelled run must land as failed(shutdown) on a fresh context — an unrecorded outcome is a stale running row")
 }
 
@@ -92,16 +93,16 @@ func TestCheckSchema_RefusesAnOlderDatabase(t *testing.T) {
 	_, err := pool.Exec(ctx, `CREATE TABLE schema_migrations (version bigint NOT NULL, dirty boolean NOT NULL)`)
 	require.NoError(t, err)
 	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DROP TABLE schema_migrations`) })
-	a := &Agent{runs: NewRunStore(pool)}
+	a := &Agent{runs: backupjobs.NewRunStore(pool)}
 
-	_, err = pool.Exec(ctx, `INSERT INTO schema_migrations VALUES ($1, false)`, RequiredSchemaVersion-1)
+	_, err = pool.Exec(ctx, `INSERT INTO schema_migrations VALUES ($1, false)`, backupjobs.RequiredSchemaVersion-1)
 	require.NoError(t, err)
 	err = a.CheckSchema(ctx)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "migrations first",
 		"the gate must fail with an instruction, not a missing-table error mid-job")
 
-	_, err = pool.Exec(ctx, `UPDATE schema_migrations SET version = $1`, RequiredSchemaVersion)
+	_, err = pool.Exec(ctx, `UPDATE schema_migrations SET version = $1`, backupjobs.RequiredSchemaVersion)
 	require.NoError(t, err)
 	assert.NoError(t, a.CheckSchema(ctx))
 }
@@ -120,12 +121,12 @@ func TestExecute_LockBusyFailsTheClaimedRequestAndSkipsTheSlot(t *testing.T) {
 	a := &Agent{
 		cfg:     Config{StaleRunMin: 240},
 		pool:    pool,
-		runs:    NewRunStore(pool),
+		runs:    backupjobs.NewRunStore(pool),
 		metrics: NewMetrics(),
 		logger:  slog.New(slog.DiscardHandler),
 	}
 	ran := false
-	spec := jobSpec{name: JobDump, run: func(context.Context, int64) (*Artifact, map[string]any, string, error) {
+	spec := jobSpec{name: backupjobs.JobDump, run: func(context.Context, int64) (*backupjobs.Artifact, map[string]any, string, error) {
 		ran = true
 		return nil, nil, "", nil
 	}}
@@ -141,7 +142,7 @@ func TestExecute_LockBusyFailsTheClaimedRequestAndSkipsTheSlot(t *testing.T) {
 	// failed(lock_busy) so the operator who clicked sees an outcome.
 	_, err = pool.Exec(ctx, `INSERT INTO backup_run (job, status, scheduled_for) VALUES ('dump','requested', now())`)
 	require.NoError(t, err)
-	id, ok, err := a.runs.ClaimRequested(ctx, JobDump)
+	id, ok, err := a.runs.ClaimRequested(ctx, backupjobs.JobDump)
 	require.NoError(t, err)
 	require.True(t, ok)
 	a.execute(ctx, spec, time.Now(), id)
@@ -149,7 +150,7 @@ func TestExecute_LockBusyFailsTheClaimedRequestAndSkipsTheSlot(t *testing.T) {
 	var status, reason string
 	require.NoError(t, pool.QueryRow(ctx, `SELECT status, last_error FROM backup_run WHERE id = $1`, id).Scan(&status, &reason))
 	assert.Equal(t, "failed", status)
-	assert.Equal(t, ReasonLockBusy, reason)
+	assert.Equal(t, backupjobs.ReasonLockBusy, reason)
 }
 
 func TestExecute_ClaimedRequestRunsOnItsOwnRowNotANewOne(t *testing.T) {
@@ -159,18 +160,18 @@ func TestExecute_ClaimedRequestRunsOnItsOwnRowNotANewOne(t *testing.T) {
 	a := &Agent{
 		cfg:     Config{StaleRunMin: 240},
 		pool:    pool,
-		runs:    NewRunStore(pool),
+		runs:    backupjobs.NewRunStore(pool),
 		metrics: NewMetrics(),
 		logger:  slog.New(slog.DiscardHandler),
 	}
 	_, err := pool.Exec(ctx, `INSERT INTO backup_run (job, status, scheduled_for) VALUES ('dump','requested', now())`)
 	require.NoError(t, err)
-	id, ok, err := a.runs.ClaimRequested(ctx, JobDump)
+	id, ok, err := a.runs.ClaimRequested(ctx, backupjobs.JobDump)
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	spec := jobSpec{name: JobDump, run: func(context.Context, int64) (*Artifact, map[string]any, string, error) {
-		return &Artifact{Key: "k", Bytes: 1, SHA256: "aa"}, nil, "", nil
+	spec := jobSpec{name: backupjobs.JobDump, run: func(context.Context, int64) (*backupjobs.Artifact, map[string]any, string, error) {
+		return &backupjobs.Artifact{Key: "k", Bytes: 1, SHA256: "aa"}, nil, "", nil
 	}}
 	a.execute(ctx, spec, time.Now(), id)
 

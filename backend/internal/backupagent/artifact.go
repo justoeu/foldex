@@ -1,7 +1,6 @@
 package backupagent
 
 import (
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +10,7 @@ import (
 
 	"filippo.io/age"
 
+	"foldex/internal/metrics"
 	"foldex/internal/pkg/logsafe"
 )
 
@@ -48,9 +48,6 @@ var artifactPrefixes = []string{dumpKeyPrefix, userZipKeyPrefix, mirrorKeyPrefix
 // absurd case so a bug there cannot ship a trivially-openable dump.
 const minArtifactPassphrase = 12
 
-// ErrArtifactKeyRejected is returned for a key outside artifactPrefixes.
-var ErrArtifactKeyRejected = errors.New("backupagent: object key is outside the backup namespaces")
-
 type artifactRequest struct {
 	Key        string `json:"key"`
 	Passphrase string `json:"passphrase"`
@@ -82,25 +79,11 @@ func validArtifactKey(key string) bool {
 
 // artifactAuth wraps h in the same bearer check the metrics endpoint uses.
 //
-// Deliberately a copy of Metrics.Handler's guard rather than a shared helper:
-// there are exactly two of them, they protect different things, and the
-// metrics comment already explains why it in turn mirrors internal/metrics
-// byte for byte. Three call sites would earn an extraction; two subtly
-// different copies of a security check age badly, so this one is kept
-// identical on purpose.
+// The guard itself is the shared one in internal/metrics; only the disabled
+// message differs, so an operator can tell WHICH bridge is off from the 503
+// body.
 func artifactAuth(token string, h http.HandlerFunc) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if token == "" {
-			http.Error(w, "artifact bridge disabled", http.StatusServiceUnavailable)
-			return
-		}
-		if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+token)) != 1 {
-			w.Header().Set("WWW-Authenticate", "Bearer")
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		h(w, r)
-	})
+	return metrics.BearerTokenGuard(token, "artifact bridge disabled", h)
 }
 
 // serveArtifact streams one stored artifact, re-encrypted to the caller's

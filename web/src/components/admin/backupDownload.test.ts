@@ -53,7 +53,7 @@ describe('saveBackupArtifact', () => {
     const sink: Recorded = { chunks: [], closed: false, aborted: [] }
     const cancelled: unknown[] = []
     const dropped = new Error('network dropped')
-    const fetchImpl = vi.fn().mockResolvedValue({
+    const downloadArtifact = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
       body: bodyThatDiesAfterOneChunk(dropped, cancelled),
@@ -61,7 +61,7 @@ describe('saveBackupArtifact', () => {
 
     await expect(saveBackupArtifact(7, 'a-long-enough-pass', 'foldex.dump.age', {
       picker: pickerFor(sink),
-      fetchImpl: fetchImpl as never,
+      downloadArtifact: downloadArtifact as never,
     })).rejects.toThrow('network dropped')
 
     // A chunk did reach the disk — otherwise this test would be proving the
@@ -74,7 +74,7 @@ describe('saveBackupArtifact', () => {
 
   it('closes the file exactly once when the stream completes', async () => {
     const sink: Recorded = { chunks: [], closed: false, aborted: [] }
-    const fetchImpl = vi.fn().mockResolvedValue({
+    const downloadArtifact = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
       body: new ReadableStream({
@@ -84,22 +84,23 @@ describe('saveBackupArtifact', () => {
 
     await saveBackupArtifact(7, 'a-long-enough-pass', 'foldex.dump', {
       picker: pickerFor(sink),
-      fetchImpl: fetchImpl as never,
+      downloadArtifact: downloadArtifact as never,
     })
 
     expect(sink.closed).toBe(true)
     expect(sink.aborted).toEqual([])
+    expect(downloadArtifact).toHaveBeenCalledWith(7, 'a-long-enough-pass', expect.any(AbortSignal))
   })
 
   /* A 200 with no body is not a download; without this guard the file would be
      closed empty and look like a backup of nothing. */
   it('refuses a response that carries no stream', async () => {
     const sink: Recorded = { chunks: [], closed: false, aborted: [] }
-    const fetchImpl = vi.fn().mockResolvedValue({ ok: true, status: 200, body: null } as unknown as Response)
+    const downloadArtifact = vi.fn().mockResolvedValue({ ok: true, status: 200, body: null } as unknown as Response)
 
     await expect(saveBackupArtifact(7, 'a-long-enough-pass', 'x.age', {
       picker: pickerFor(sink),
-      fetchImpl: fetchImpl as never,
+      downloadArtifact: downloadArtifact as never,
     })).rejects.toThrow(/not streamable/)
     expect(sink.closed).toBe(false)
     expect(sink.aborted).toHaveLength(1)
@@ -108,14 +109,14 @@ describe('saveBackupArtifact', () => {
   /* The picker opens before the request precisely so a cancelled dialog costs
      nothing — no request means no download spent from the budget of three. */
   it('spends no download when the operator cancels the save dialog', async () => {
-    const fetchImpl = vi.fn()
+    const downloadArtifact = vi.fn()
     const picker = vi.fn().mockRejectedValue(new DOMException('user aborted', 'AbortError'))
 
     await expect(saveBackupArtifact(7, 'a-long-enough-pass', 'x.age', {
       picker: picker as never,
-      fetchImpl: fetchImpl as never,
+      downloadArtifact: downloadArtifact as never,
     })).rejects.toThrow(/aborted/)
-    expect(fetchImpl).not.toHaveBeenCalled()
+    expect(downloadArtifact).not.toHaveBeenCalled()
   })
 })
 

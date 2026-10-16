@@ -272,7 +272,7 @@ func (h *Handler) oauthStartTarget(ctx context.Context, purpose string, inviteID
 		state, err = h.repo.CreateOAuthState(ctx, ProviderGoogle, purpose, pkce.Verifier, nil, inviteID, ttl)
 	} else {
 		state, err = h.repo.CreateOAuthLinkState(ctx, ProviderGoogle, pkce.Verifier,
-			proof.UserID, proof.SessionID, proof.TokenVersion, ttl)
+			SessionProof{UserID: proof.UserID, SessionID: proof.SessionID, TokenVersion: proof.TokenVersion}, ttl)
 	}
 	if err != nil {
 		return "", "", err
@@ -733,7 +733,7 @@ func (h *Handler) OAuthUnlink(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	switch err := h.repo.UnlinkIdentity(r.Context(), p.UserID, p.SessionID, user.TokenVersion,
+	switch err := h.repo.UnlinkIdentity(r.Context(), SessionProof{UserID: p.UserID, SessionID: p.SessionID, TokenVersion: user.TokenVersion},
 		ProviderGoogle, in.Password); {
 	case errors.Is(err, ErrPasswordMissing), errors.Is(err, ErrLastCredential):
 		h.stepUpPasswordUser.Release(passwordKey)

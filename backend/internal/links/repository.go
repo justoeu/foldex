@@ -422,31 +422,11 @@ func (r *Repository) Delete(ctx context.Context, uid authctx.UserID, id int64, u
 	return nil
 }
 
-// UpdateOGImage sets the og_image_url field for the given link. Side effect:
-// preview_status is also forced to 'ok' (and preview_error cleared) — a manual
-// upload means "the user supplied the image, the preview pipeline is done".
-// This both stops the worker from auto-screenshotting later AND removes the
-// "capturando…" label in the UI immediately.
-func (r *Repository) UpdateOGImage(ctx context.Context, uid authctx.UserID, id int64, imageURL string) error {
-	ct, err := r.pool.Exec(ctx, `
-        UPDATE link
-        SET og_image_url   = $1,
-            preview_status = 'ok',
-            preview_error  = NULL,
-            updated_at     = now()
-        WHERE user_id = $2 AND id = $3
-    `, imageURL, int64(uid), id)
-	if err != nil {
-		return fmt.Errorf("update og_image_url: %w", err)
-	}
-	if ct.RowsAffected() == 0 {
-		return domainerr.ErrNotFound
-	}
-	return nil
-}
-
 // ReplaceOGImage publishes a manual image and returns the exact local URL it
 // superseded so the caller can safely clean up after the row lock is released.
+// Side effect: preview_status is forced to 'ok' (preview_error cleared) — a
+// manual upload means the preview pipeline is done, which stops the worker
+// from auto-screenshotting later and clears the capturing label immediately.
 func (r *Repository) ReplaceOGImage(ctx context.Context, uid authctx.UserID, id int64, imageURL string) (*string, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {

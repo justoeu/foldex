@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -62,7 +63,7 @@ type MirrorJob struct {
 	recipients []age.Recipient
 	spoolDir   string
 
-	// lastSuccess and restoreBusy are seams over RunStore/lock probing so the
+	// lastSuccess and restoreBusy are seams over backupjobs.RunStore/lock probing so the
 	// diff-and-copy pipeline is provable without a database.
 	lastSuccess func(context.Context) (time.Time, error)
 	restoreBusy func(context.Context) (bool, error)
@@ -146,7 +147,7 @@ func (j *MirrorJob) Run(ctx context.Context) (*backupjobs.Artifact, map[string]a
 		return nil, nil, backupjobs.ReasonMirrorCopyFailed, err
 	}
 
-	stats := &MirrorStats{
+	stats := &backupjobs.MirrorStats{
 		ObjectsScanned: int64(len(src)),
 		ObjectsCopied:  int64(len(delta)),
 		BytesCopied:    bytesCopied,
@@ -231,12 +232,7 @@ func destSuffixKey(srcKey string, encrypted bool) string {
 
 // hasTraversal reports whether any path component of key is "..".
 func hasTraversal(key string) bool {
-	for _, part := range strings.Split(key, "/") {
-		if part == ".." {
-			return true
-		}
-	}
-	return strings.HasPrefix(key, "/")
+	return slices.Contains(strings.Split(key, "/"), "..") || strings.HasPrefix(key, "/")
 }
 
 // copyDelta streams the delta source→destination through a bounded worker
@@ -263,10 +259,7 @@ func (j *MirrorJob) copyDelta(ctx context.Context, delta []ObjectInfo) (int64, e
 }
 
 func copyWorkerCount(n int) int {
-	if n > resourcebudget.BackgroundWorkerConcurrency {
-		return resourcebudget.BackgroundWorkerConcurrency
-	}
-	return n
+	return min(n, resourcebudget.BackgroundWorkerConcurrency)
 }
 
 func (j *MirrorJob) startCopyWorkers(ctx context.Context, cancel context.CancelFunc, workers int, firstErr *error, bytesCopied *atomic.Int64) (chan ObjectInfo, *sync.WaitGroup) {

@@ -108,7 +108,7 @@ func (r *Repository) CreateOAuthState(ctx context.Context, provider, purpose, ve
 // CreateOAuthLinkState stores a recently stepped-up state only while the exact
 // session and password epoch that produced the proof are still current.
 func (r *Repository) CreateOAuthLinkState(ctx context.Context, provider, verifier string,
-	uid authctx.UserID, sessionID int64, tokenVersion int, ttl time.Duration) (string, error) {
+	sp SessionProof, ttl time.Duration) (string, error) {
 
 	raw, hash, err := secrets.NewToken()
 	if err != nil {
@@ -126,7 +126,7 @@ func (r *Repository) CreateOAuthLinkState(ctx context.Context, provider, verifie
 		WHERE s.id = $4 AND s.user_id = $5
 		  AND s.revoked_at IS NULL AND s.access_expires_at > now()
 		  AND u.status = 'active' AND u.token_version = $6
-		RETURNING id`, hash, verifier, provider, sessionID, int64(uid), tokenVersion, intervalArg(ttl)).Scan(&id)
+		RETURNING id`, hash, verifier, provider, sp.SessionID, int64(sp.UserID), sp.TokenVersion, intervalArg(ttl)).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", ErrOAuthLinkInvalid
 	}
@@ -480,8 +480,8 @@ func retirePasswordTx(ctx context.Context, tx pgx.Tx, uid int64, challengeVersio
 // removal cannot slip between "you still have a password" and the DELETE. The
 // constraint trigger would catch that too, but as a 500 rather than as the
 // 409 the UI can explain.
-func (r *Repository) UnlinkIdentity(ctx context.Context, uid authctx.UserID, keepSession int64,
-	tokenVersion int, provider, password string) error {
+func (r *Repository) UnlinkIdentity(ctx context.Context, sp SessionProof,
+	provider, password string) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("unlink begin: %w", err)
@@ -495,17 +495,17 @@ func (r *Repository) UnlinkIdentity(ctx context.Context, uid authctx.UserID, kee
 	if err := tx.QueryRow(ctx, `
 		SELECT password_hash, token_version, status,
 		       (SELECT count(*) FROM user_identity i WHERE i.user_id = app_user.id)
-		FROM app_user WHERE id = $1 FOR NO KEY UPDATE`, int64(uid)).
+		FROM app_user WHERE id = $1 FOR NO KEY UPDATE`, int64(sp.UserID)).
 		Scan(&passwordHash, &liveVersion, &status, &identities); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNoUser
 		}
 		return fmt.Errorf("unlink lookup: %w", err)
 	}
-	if status != StatusActive || liveVersion != tokenVersion {
+	if status != StatusActive || liveVersion != sp.TokenVersion {
 		return ErrSessionInvalid
 	}
-	if err := requireLiveSessionTx(ctx, tx, uid, keepSession); err != nil {
+	if err := requireLiveSessionTx(ctx, tx, sp.UserID, sp.SessionID); err != nil {
 		return err
 	}
 	if identities == 0 {
@@ -519,7 +519,7 @@ func (r *Repository) UnlinkIdentity(ctx context.Context, uid authctx.UserID, kee
 	}
 
 	ct, err := tx.Exec(ctx,
-		`DELETE FROM user_identity WHERE user_id = $1 AND provider = $2`, int64(uid), provider)
+		`DELETE FROM user_identity WHERE user_id = $1 AND provider = $2`, int64(sp.UserID), provider)
 	if err != nil {
 		return fmt.Errorf("unlink identity: %w", err)
 	}
@@ -528,13 +528,13 @@ func (r *Repository) UnlinkIdentity(ctx context.Context, uid authctx.UserID, kee
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE app_user SET token_version = token_version + 1, updated_at = now()
-		WHERE id = $1 AND token_version = $2`, int64(uid), tokenVersion); err != nil {
+		WHERE id = $1 AND token_version = $2`, int64(sp.UserID), sp.TokenVersion); err != nil {
 		return fmt.Errorf("unlink bump epoch: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE session SET revoked_at = now(), revoked_reason = $3
 		WHERE user_id = $1 AND id <> $2 AND revoked_at IS NULL`,
-		int64(uid), keepSession, ReasonPasswordChanged); err != nil {
+		int64(sp.UserID), sp.SessionID, ReasonPasswordChanged); err != nil {
 		return fmt.Errorf("unlink revoke sessions: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -604,7 +604,7 @@ func (r *Repository) ProvisionOAuthUser(ctx context.Context, email, name, provid
 		INSERT INTO app_user (email, email_normalized, name, role, status, email_verified_at)
 		VALUES ($1, $2, $3, $4, 'active', now())
 		RETURNING `+userColumns,
-		strings.TrimSpace(email), NormalizeEmail(email), strings.TrimSpace(name), string(role)))
+		strings.TrimSpace(email), NormalizeEmail(email), capProfileName(name), string(role)))
 	if err != nil {
 		// A concurrent callback for the same address loses the unique index here.
 		if pgerr.UniqueConstraint(err) == "app_user_email_norm_uniq" {

@@ -116,7 +116,7 @@ type Handler struct {
 	// "run the compiled-in floors", which is also what the policy package
 	// returns when nothing was ever saved — so an unwired handler and a
 	// never-configured instance behave identically.
-	policy PolicyReader
+	policy *policy.Repository
 
 	// abuse supplies the live rate-limit magnitudes (ADR-47). Nil is safe and
 	// means the compiled defaults, which is also what the cache answers before
@@ -205,7 +205,7 @@ type HandlerConfig struct {
 
 	// Policy supplies the owner-configurable rules. Optional: nil runs the
 	// compiled-in floors.
-	Policy PolicyReader
+	Policy *policy.Repository
 
 	// Abuse supplies the owner-configurable rate-limit magnitudes. Optional:
 	// nil runs the compiled defaults, and so does a cache whose store is
@@ -449,8 +449,13 @@ func (h *Handler) Bootstrap(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
+	name, err := validateProfileName(in.Name)
+	if err != nil {
+		httperr.Write(w, err)
+		return
+	}
 
-	user, err := h.repo.Bootstrap(r.Context(), in.Email, strings.TrimSpace(in.Name), in.Password)
+	user, err := h.repo.Bootstrap(r.Context(), in.Email, name, in.Password)
 	switch {
 	case errors.Is(err, ErrAlreadySetUp):
 		h.bootstrapIP.CommitFail(bootstrapKeyPrefix + ip)
@@ -814,7 +819,12 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 				// removal. Consume it and fall through to anonymous; the next
 				// sign-in derives the honest purpose (enrollment for admins
 				// under the policy, plain entry otherwise).
-				if ch.Purpose == PurposeTOTP && !u.HasSecondFactor() {
+				// Enabled is the UNFILTERED aggregate on purpose: /me accepts
+				// the pending challenge while ANY factor can satisfy it, even
+				// an e-mail factor on an instance whose admin policy is
+				// TOTP-only. Deriving from the shared status must not narrow
+				// that acceptance.
+				if ch.Purpose == PurposeTOTP && !h.twoFactorStatusWithTOTPOnly(r.Context(), u).Enabled {
 					if err := h.repo.ConsumeChallenge(r.Context(), ch.ID); err != nil {
 						h.logger.Error("consume orphaned challenge", "err", err)
 					}
@@ -927,10 +937,9 @@ func (h *Handler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	var name *string
 	if in.Name != nil {
-		trimmed := strings.TrimSpace(*in.Name)
-		if utf8.RuneCountInString(trimmed) > maxProfileNameRunes {
-			httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_name",
-				"name must be at most 120 characters"))
+		trimmed, err := validateProfileName(*in.Name)
+		if err != nil {
+			httperr.Write(w, err)
 			return
 		}
 		name = &trimmed
@@ -1115,8 +1124,13 @@ func (h *Handler) AcceptInvite(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
+	name, err := validateProfileName(in.Name)
+	if err != nil {
+		httperr.Write(w, err)
+		return
+	}
 
-	user, err := h.repo.AcceptInvite(r.Context(), in.Token, strings.TrimSpace(in.Name), in.Password)
+	user, err := h.repo.AcceptInvite(r.Context(), in.Token, name, in.Password)
 	switch {
 	case errors.Is(err, ErrInviteInvalid):
 		h.inviteIP.CommitFail(key)
@@ -1212,27 +1226,6 @@ func floorDuration(start time.Time, d time.Duration) {
 	}
 }
 
-// PolicyReader supplies the instance rules this handler enforces. It is an
-// interface so internal/auth does not import internal/policy, which would make
-// the dependency circular the moment policy needs to name a role.
-//
-// All three methods are required rather than discovered by type assertion: an
-// optional-capability dance would let a fake that forgot GoogleProvisioning
-// compile and silently disable auto-provisioning, and "the feature quietly does
-// nothing" is the failure mode hardest to notice in a test suite.
-type PolicyReader interface {
-	PasswordMinLength(ctx context.Context) int
-	// OTPTTL is how long a mailed code stays usable.
-	OTPTTL(ctx context.Context) time.Duration
-	// OTPResendCooldown is the minimum gap between two sends.
-	OTPResendCooldown(ctx context.Context) time.Duration
-	// GoogleAllows reports whether the address may join through Google.
-	GoogleAllows(ctx context.Context, email string) bool
-	// GoogleProvisioning reports whether an unknown Google address may create an
-	// account, and with which role.
-	GoogleProvisioning(ctx context.Context) (bool, authctx.Role)
-}
-
 // passwordFloor is the configured minimum, never below the compiled-in one.
 //
 // The max() is not belt-and-braces: it is what makes the policy screen unable
@@ -1252,7 +1245,7 @@ func (h *Handler) liveFeatures(ctx context.Context) AuthFeatures {
 	return f
 }
 
-func passwordFloorOf(ctx context.Context, policy PolicyReader) int {
+func passwordFloorOf(ctx context.Context, policy *policy.Repository) int {
 	if policy == nil {
 		return MinPasswordLen
 	}
@@ -1286,7 +1279,7 @@ func (h *Handler) validatePassword(ctx context.Context, p string) error {
 	return validatePasswordAgainst(ctx, h.policy, p)
 }
 
-func validatePasswordAgainst(ctx context.Context, policy PolicyReader, p string) error {
+func validatePasswordAgainst(ctx context.Context, policy *policy.Repository, p string) error {
 	minLen := passwordFloorOf(ctx, policy)
 	if utf8.RuneCountInString(p) < minLen {
 		return httperr.New(http.StatusBadRequest, "password_too_short",
@@ -1298,6 +1291,29 @@ func validatePasswordAgainst(ctx context.Context, policy PolicyReader, p string)
 			fmt.Sprintf("password must be at most %d bytes", MaxPasswordLen))
 	}
 	return nil
+}
+
+// validateProfileName trims raw and enforces the display-name rune cap every
+// name-writing route shares (profile edit, admin create, bootstrap, invite
+// acceptance). It returns the trimmed name to store so the length that was
+// judged is the value that is persisted.
+// capProfileName truncates an IdP-asserted display name to the profile cap.
+// Rejecting would lock the person out over a string they did not type here.
+func capProfileName(raw string) string {
+	name := strings.TrimSpace(raw)
+	if utf8.RuneCountInString(name) > maxProfileNameRunes {
+		name = string([]rune(name)[:maxProfileNameRunes])
+	}
+	return name
+}
+
+func validateProfileName(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if utf8.RuneCountInString(trimmed) > maxProfileNameRunes {
+		return "", httperr.New(http.StatusBadRequest, "invalid_name",
+			fmt.Sprintf("name must be at most %d characters", maxProfileNameRunes))
+	}
+	return trimmed, nil
 }
 
 func validateEmail(email string) error {

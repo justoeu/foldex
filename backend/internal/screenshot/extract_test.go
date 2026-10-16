@@ -24,8 +24,8 @@ func TestExtractMetadata_RejectsNonHTTPTargetBeforeBrowserLaunch(t *testing.T) {
 
 func TestExtractMetadata_CancelledContext(t *testing.T) {
 	pool := NewPool()
-	pool.captureSem <- struct{}{}
-	defer func() { <-pool.captureSem }()
+	require.True(t, pool.captureSem.TryAcquire())
+	defer pool.captureSem.Release()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 

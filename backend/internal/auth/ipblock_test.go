@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"foldex/internal/auth/ipblock"
 	"sync"
 	"testing"
 	"time"
@@ -15,8 +16,8 @@ import (
 // block that does not work" — it is an instance nobody can reach, installed by
 // the person who most needed to reach it, from a button next to a scary number.
 func TestValidateBlockIP_RefusesTheAddressYouAreCallingFrom(t *testing.T) {
-	_, err := ValidateBlockIP("203.0.113.9", "203.0.113.9", nil)
-	assert.ErrorIs(t, err, ErrBlockSelf)
+	_, err := ipblock.ValidateBlockIP("203.0.113.9", "203.0.113.9", nil)
+	assert.ErrorIs(t, err, ipblock.ErrBlockSelf)
 }
 
 // The self rail compares NORMALIZED addresses. An operator connected over IPv6
@@ -24,8 +25,8 @@ func TestValidateBlockIP_RefusesTheAddressYouAreCallingFrom(t *testing.T) {
 // "203.0.113.9" is one spelling away from locking themselves out.
 func TestValidateBlockIP_SelfRailSurvivesRespelling(t *testing.T) {
 	for _, caller := range []string{"::ffff:203.0.113.9", "203.0.113.9:54321", "[::ffff:203.0.113.9]"} {
-		_, err := ValidateBlockIP("203.0.113.9", caller, nil)
-		assert.ErrorIs(t, err, ErrBlockSelf, "caller spelling %q", caller)
+		_, err := ipblock.ValidateBlockIP("203.0.113.9", caller, nil)
+		assert.ErrorIs(t, err, ipblock.ErrBlockSelf, "caller spelling %q", caller)
 	}
 }
 
@@ -34,8 +35,8 @@ func TestValidateBlockIP_SelfRailSurvivesRespelling(t *testing.T) {
 // that exists for exactly this kind of lockout.
 func TestValidateBlockIP_RefusesLoopbackAndUnspecified(t *testing.T) {
 	for _, ip := range []string{"127.0.0.1", "127.0.0.53", "::1", "0.0.0.0", "::"} {
-		_, err := ValidateBlockIP(ip, "203.0.113.9", nil)
-		assert.ErrorIs(t, err, ErrBlockLoopback, "address %q", ip)
+		_, err := ipblock.ValidateBlockIP(ip, "203.0.113.9", nil)
+		assert.ErrorIs(t, err, ipblock.ErrBlockLoopback, "address %q", ip)
 	}
 }
 
@@ -46,29 +47,29 @@ func TestValidateBlockIP_RefusesLoopbackAndUnspecified(t *testing.T) {
 // equality would pass anything the network merely covers.
 func TestValidateBlockIP_RefusesATrustedProxyByNetwork(t *testing.T) {
 	inTenNet := func(ip string) bool { return len(ip) >= 3 && ip[:3] == "10." }
-	_, err := ValidateBlockIP("10.4.2.7", "203.0.113.9", inTenNet)
-	assert.ErrorIs(t, err, ErrBlockProxy)
+	_, err := ipblock.ValidateBlockIP("10.4.2.7", "203.0.113.9", inTenNet)
+	assert.ErrorIs(t, err, ipblock.ErrBlockProxy)
 
-	ok, err := ValidateBlockIP("198.51.100.4", "203.0.113.9", inTenNet)
+	ok, err := ipblock.ValidateBlockIP("198.51.100.4", "203.0.113.9", inTenNet)
 	require.NoError(t, err)
 	assert.Equal(t, "198.51.100.4", ok)
 }
 
 func TestValidateBlockIP_RefusesGarbage(t *testing.T) {
 	for _, ip := range []string{"", "not-an-ip", "999.1.1.1", "10.0.0.0/8", "; DROP TABLE"} {
-		_, err := ValidateBlockIP(ip, "203.0.113.9", nil)
-		assert.ErrorIs(t, err, ErrBlockMalformed, "input %q", ip)
+		_, err := ipblock.ValidateBlockIP(ip, "203.0.113.9", nil)
+		assert.ErrorIs(t, err, ipblock.ErrBlockMalformed, "input %q", ip)
 	}
 }
 
 // A stored address and a compared one must be one string. Two spellings of the
 // same host would mean a block that is installed and never matches.
 func TestValidateBlockIP_NormalizesWhatItReturns(t *testing.T) {
-	got, err := ValidateBlockIP("::ffff:198.51.100.4", "203.0.113.9", nil)
+	got, err := ipblock.ValidateBlockIP("::ffff:198.51.100.4", "203.0.113.9", nil)
 	require.NoError(t, err)
 	assert.Equal(t, "198.51.100.4", got, "an IPv4-mapped address must collapse to its v4 form")
 
-	got, err = ValidateBlockIP("198.51.100.4:8080", "203.0.113.9", nil)
+	got, err = ipblock.ValidateBlockIP("198.51.100.4:8080", "203.0.113.9", nil)
 	require.NoError(t, err)
 	assert.Equal(t, "198.51.100.4", got, "a port must not become part of the identity")
 }
@@ -77,7 +78,7 @@ func TestValidateBlockIP_NormalizesWhatItReturns(t *testing.T) {
 // would turn a transient error into a total outage — and the people locked out
 // would include the ones who could fix it.
 func TestBlocklist_FailsOpenWhenTheLoadErrors(t *testing.T) {
-	list := NewBlocklist(func(context.Context) ([]string, error) {
+	list := ipblock.NewBlocklist(func(context.Context) ([]string, error) {
 		return nil, errors.New("database is down")
 	})
 	assert.False(t, list.Blocked(context.Background(), "203.0.113.9"),
@@ -89,7 +90,7 @@ func TestBlocklist_FailsOpenWhenTheLoadErrors(t *testing.T) {
 func TestBlocklist_BacksOffAfterAFailedLoad(t *testing.T) {
 	var calls int
 	var mu sync.Mutex
-	list := NewBlocklist(func(context.Context) ([]string, error) {
+	list := ipblock.NewBlocklist(func(context.Context) ([]string, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		calls++
@@ -108,7 +109,7 @@ func TestBlocklist_BacksOffAfterAFailedLoad(t *testing.T) {
 func TestBlocklist_KeepsTheLastGoodSnapshotOnFailure(t *testing.T) {
 	fail := false
 	var mu sync.Mutex
-	list := NewBlocklist(func(context.Context) ([]string, error) {
+	list := ipblock.NewBlocklist(func(context.Context) ([]string, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		if fail {
@@ -131,7 +132,7 @@ func TestBlocklist_KeepsTheLastGoodSnapshotOnFailure(t *testing.T) {
 func TestBlocklist_InvalidateMakesTheNextLookupReload(t *testing.T) {
 	blocked := []string{}
 	var mu sync.Mutex
-	list := NewBlocklist(func(context.Context) ([]string, error) {
+	list := ipblock.NewBlocklist(func(context.Context) ([]string, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		return append([]string{}, blocked...), nil
@@ -150,13 +151,13 @@ func TestBlocklist_InvalidateMakesTheNextLookupReload(t *testing.T) {
 // An empty address is what an unparseable RemoteAddr normalizes to. Treating it
 // as a lookup key would let one malformed entry match every such request.
 func TestBlocklist_EmptyAddressIsNeverBlocked(t *testing.T) {
-	list := NewBlocklist(func(context.Context) ([]string, error) { return []string{""}, nil })
+	list := ipblock.NewBlocklist(func(context.Context) ([]string, error) { return []string{""}, nil })
 	assert.False(t, list.Blocked(context.Background(), ""))
 }
 
 // The lookup runs on every request; the refresh must not race itself.
 func TestBlocklist_ConcurrentLookupsAreSafe(t *testing.T) {
-	list := NewBlocklist(func(context.Context) ([]string, error) {
+	list := ipblock.NewBlocklist(func(context.Context) ([]string, error) {
 		return []string{"203.0.113.9"}, nil
 	})
 	var wg sync.WaitGroup
@@ -172,6 +173,6 @@ func TestBlocklist_ConcurrentLookupsAreSafe(t *testing.T) {
 }
 
 func TestBlocklistTTL_IsShortEnoughToWatchAndLongEnoughToCache(t *testing.T) {
-	assert.LessOrEqual(t, BlocklistTTL, time.Minute)
-	assert.GreaterOrEqual(t, BlocklistTTL, 5*time.Second)
+	assert.LessOrEqual(t, ipblock.BlocklistTTL, time.Minute)
+	assert.GreaterOrEqual(t, ipblock.BlocklistTTL, 5*time.Second)
 }

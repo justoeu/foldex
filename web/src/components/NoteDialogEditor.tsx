@@ -8,6 +8,9 @@ import { NoteToolbar } from './NoteToolbar'
 import { SlugField } from './SlugField'
 import { TagPicker } from './TagPicker'
 import { useNoteDialogController } from './useNoteDialogController'
+import { NoteTitleField } from './note-dialog/NoteTitleField'
+import { NoteActionBar } from './note-dialog/NoteActionBar'
+import { NoteConflictNotice } from './note-dialog/NoteConflictNotice'
 
 type Props = Readonly<{
   note: Note | null
@@ -24,12 +27,7 @@ export function NoteDialogEditor({ note, defaultFolderId, onClose }: Props) {
     <>
       <div className="fx-modal-body" style={{ gridTemplateColumns: '1fr' }}>
         <div className="fx-modal-col">
-          <label className="fx-field">
-            <span className="fx-field-label">{t('note_dialog.title_label')}</span>
-            <div className="fx-input">
-              <input autoFocus value={controller.title} onChange={(event) => controller.setTitle(event.target.value)} placeholder={t('note_dialog.title_placeholder')} aria-label={t('common.title_aria')} />
-            </div>
-          </label>
+          <NoteTitleField title={controller.title} onChange={controller.setTitle} />
 
           <SlugField
             title={controller.title}
@@ -84,19 +82,14 @@ export function NoteDialogEditor({ note, defaultFolderId, onClose }: Props) {
         </div>
       </div>
 
-      {controller.saveError && (
-        <div role="alert" style={{ fontSize: 11, color: 'var(--fx-danger)', display: 'flex', alignItems: 'center', gap: 4, padding: '0 20px 8px' }}>
-          <Icon d={I.alert} size={12} /> {controller.saveError}
-        </div>
-      )}
+      <NoteConflictNotice message={controller.saveError} />
 
-      <footer className="fx-modal-foot">
-        <button type="button" className="fx-confirm-btn" onClick={onClose}>{t('common.cancel')}</button>
-        <button type="button" className="fx-confirm-btn fx-confirm-btn-primary" onClick={() => void controller.submit()} disabled={!controller.title.trim() || controller.busy}>
-          <Icon d={controller.isEdit ? I.check : I.plus} size={13} stroke={2.2} />{' '}
-          {controller.isEdit ? t('note_dialog.submit_save') : t('note_dialog.submit_create')}
-        </button>
-      </footer>
+      <NoteActionBar
+        isEdit={controller.isEdit}
+        canSubmit={!!controller.title.trim() && !controller.busy}
+        onCancel={onClose}
+        onSubmit={() => void controller.submit()}
+      />
     </>
   )
 }

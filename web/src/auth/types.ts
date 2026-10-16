@@ -7,6 +7,9 @@
  */
 export const MIN_PASSWORD_LEN = 8
 
+/** bcrypt truncates at 72 BYTES; the ceiling every password form enforces. */
+export const MAX_PASSWORD_BYTES = 72
+
 /**
  * The four roles of ADR-33, ordered from most to least privileged.
  *
@@ -112,8 +115,6 @@ type TwoFactorPendingBase = {
 export type TwoFactorPending =
   | (TwoFactorPendingBase & { purpose: 'totp' })
   | (TwoFactorPendingBase & { purpose: 'enroll_2fa' })
-
-export type TwoFactorPurpose = TwoFactorPending['purpose']
 
 /**
  * The states GET /api/auth/me and the credential endpoints can report.

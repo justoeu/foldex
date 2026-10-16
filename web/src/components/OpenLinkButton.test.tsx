@@ -1,9 +1,11 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { screen, waitFor, within } from '@testing-library/react'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { act, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { CopyLinkButton, OpenLinkButton } from './OpenLinkButton'
 import { ListView } from './ListView'
-import { CopyToastHost } from './CopyToast'
+import { LinkCard } from './LinkCard'
+import { CompactGrid } from './CompactGrid'
+import { CopyToastHost, showCopyToast } from './CopyToast'
 import { renderWithProviders } from '../test/renderWithProviders'
 import type { Link } from '../api/types'
 
@@ -73,6 +75,19 @@ describe('OpenLinkButton', () => {
     renderWithProviders(<OpenLinkButton link={baseLink} />)
     const go = screen.getByRole('link', { name: /open example article/i }) as HTMLAnchorElement
     expect(go.getAttribute('href')).toContain('/go/')
+  })
+
+  // Cards clip their own overflow, so the menu MUST portal out of the card
+  // subtree — an in-place menu would render cut in half. The portal target
+  // is the actual assertion: merely finding role=menu would pass either way.
+  it('portals the menu to document.body, outside the rendered subtree', async () => {
+    const { container } = renderWithProviders(<OpenLinkButton link={baseLink} />)
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: /more access options/i }))
+
+    const menu = screen.getByRole('menu')
+    expect(menu.parentElement).toBe(document.body)
+    expect(container.contains(menu)).toBe(false)
   })
 
   it('menu copies the link', async () => {
@@ -157,5 +172,94 @@ describe('the three views wire the group', () => {
     expect(screen.getByRole('button', { name: /copy the link example article/i })).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /more access options/i }))
     expect(screen.getByRole('menu')).toBeInTheDocument()
+  })
+
+  it('LinkCard carries the copy button and its menu copies the url', async () => {
+    renderWithProviders(
+      <LinkCard
+        link={{
+          ...baseLink,
+          slug: 'example-article',
+          description: 'Body',
+          favicon_url: null,
+          og_image_url: null,
+          preview_error: null,
+          last_clicked_at: null,
+          updated_at: '2026-10-01T10:00:00Z',
+        } as Link}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+        onPin={vi.fn()}
+        onRefreshPreview={vi.fn()}
+        onAddImage={vi.fn()}
+        onMarkSeen={vi.fn()}
+      />,
+    )
+    const user = userEvent.setup()
+    const writeText = clipboardMock(user)
+    expect(screen.getByRole('button', { name: /copy the link example article/i })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /more access options/i }))
+    await user.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: /copy link/i }))
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('https://example.com/article'))
+  })
+
+  it('CompactGrid link rows carry the copy button and its menu copies the url', async () => {
+    renderWithProviders(
+      <CompactGrid
+        folders={[]}
+        entries={[{ kind: 'link', ...baseLink }]}
+        sort="created"
+        onEdit={vi.fn()}
+        onEditNote={vi.fn()}
+        onOpenFolder={vi.fn()}
+        onEditFolder={vi.fn()}
+      />,
+    )
+    const user = userEvent.setup()
+    const writeText = clipboardMock(user)
+    expect(screen.getByRole('button', { name: /copy the link example article/i })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /more access options/i }))
+    await user.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: /copy link/i }))
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('https://example.com/article'))
+  })
+})
+
+describe('CopyToastHost', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  // The toast is instructions the user still has to act on, but it is not a
+  // dialog: it must clear itself or the next copy's message is unreadable
+  // behind a stale one. Fake timers pin the exact 3200 ms lifetime — one
+  // millisecond early it must still be up, at 3200 it must be gone.
+  it('auto-dismisses after 3200 ms and not before', () => {
+    vi.useFakeTimers()
+    renderWithProviders(<CopyToastHost />)
+
+    act(() => showCopyToast('Copied — paste it in an incognito window'))
+    expect(screen.getByRole('status')).toHaveTextContent(/incognito window/i)
+
+    act(() => vi.advanceTimersByTime(3199))
+    expect(screen.getByRole('status')).toBeInTheDocument()
+
+    act(() => vi.advanceTimersByTime(1))
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  })
+
+  it('a second toast restarts the dismissal clock', () => {
+    vi.useFakeTimers()
+    renderWithProviders(<CopyToastHost />)
+
+    act(() => showCopyToast('first message'))
+    act(() => vi.advanceTimersByTime(3000))
+    act(() => showCopyToast('second message'))
+    expect(screen.getByRole('status')).toHaveTextContent('second message')
+
+    act(() => vi.advanceTimersByTime(3000))
+    expect(screen.getByRole('status')).toHaveTextContent('second message')
+
+    act(() => vi.advanceTimersByTime(200))
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
   })
 })

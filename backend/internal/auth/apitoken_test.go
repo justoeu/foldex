@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"foldex/internal/auth/twofa"
 	"strings"
 	"testing"
 
@@ -66,7 +67,7 @@ func TestAPITokenPrefixIsStableAndDistinctive(t *testing.T) {
 
 func TestRandomCodeWithoutGrouping(t *testing.T) {
 	t.Parallel()
-	c, err := randomCode(8, 0)
+	c, err := twofa.RandomCode(8, 0)
 	require.NoError(t, err)
 	assert.Len(t, c, 8)
 	assert.NotContains(t, c, "-")

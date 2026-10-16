@@ -3,9 +3,8 @@ import { useTranslation } from 'react-i18next'
 import { bootstrap } from '../../api/auth'
 import { apiErrorCode, apiErrorStatus } from '../../lib/apiError'
 import { useAuth } from '../../auth/AuthProvider'
-import { PasswordStrength } from '../PasswordStrength'
 import { AuthShell, AuthError, AuthField, AuthSubmit } from './AuthShell'
-import { PasswordInput } from '../PasswordInput'
+import { PasswordBlock } from './PasswordBlock'
 import { passwordGateLen, usePasswordFloor } from '../../hooks/useInstancePolicy'
 
 export function SetupScreen() {
@@ -75,35 +74,17 @@ export function SetupScreen() {
           />
         </AuthField>
 
-        <AuthField
-          id="fx-setup-password"
-          label={t('auth.password')}
-          hint={t('auth.password_min', { count: minLen })}
-        >
-          <PasswordInput
-            id="fx-setup-password"
-            className="fx-auth-input"
-            autoComplete="new-password"
-            required
-            aria-invalid={tooShort || undefined}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-          />
-        </AuthField>
-        <PasswordStrength value={password} />
-
-        <AuthField id="fx-setup-confirm" label={t('auth.confirm_password')}>
-          <PasswordInput
-            id="fx-setup-confirm"
-            className="fx-auth-input"
-            autoComplete="new-password"
-            required
-            aria-invalid={mismatch || undefined}
-            value={confirm}
-            onChange={(e) => setConfirm(e.target.value)}
-          />
-        </AuthField>
-        {mismatch ? <p className="fx-auth-hint fx-auth-hint-error">{t('auth_errors.password_mismatch')}</p> : null}
+        <PasswordBlock
+          passwordId="fx-setup-password"
+          confirmId="fx-setup-confirm"
+          password={password}
+          confirm={confirm}
+          minLen={minLen}
+          passwordInvalid={tooShort}
+          showMismatchHint
+          onPasswordChange={setPassword}
+          onConfirmChange={setConfirm}
+        />
 
         <AuthSubmit busy={busy} disabled={tooShort || mismatch}>{t('auth_setup.submit')}</AuthSubmit>
       </form>

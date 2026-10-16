@@ -11,7 +11,16 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"foldex/internal/pkg/authctx"
 	"foldex/internal/pkg/clickctx"
+)
+
+// Kind is the closed set of click_log entity kinds.
+type Kind string
+
+const (
+	KindLink Kind = "link"
+	KindNote Kind = "note"
 )
 
 // Record writes one click_log row unless clickctx.Allow suppresses it.
@@ -20,11 +29,11 @@ import (
 // The ranking projection is UPSERTed in the same gate: a suppressed click
 // must not move last_clicked_at, and a recorded click must not leave stats
 // behind click_log (INV-056 — click_log is the source of truth).
-func Record(ctx context.Context, tx pgx.Tx, kind string, entityID, ownerID int64) error {
-	if clickctx.Allow(ctx, kind, entityID) {
+func Record(ctx context.Context, tx pgx.Tx, kind Kind, entityID int64, ownerID authctx.UserID) error {
+	if clickctx.Allow(ctx, string(kind), entityID) {
 		_, err := tx.Exec(ctx,
 			`INSERT INTO click_log (entity_kind, entity_id, user_id) VALUES ($1, $2, $3)`,
-			kind, entityID, ownerID)
+			string(kind), entityID, int64(ownerID))
 		if err != nil {
 			return fmt.Errorf("insert click_log: %w", err)
 		}
@@ -35,7 +44,7 @@ func Record(ctx context.Context, tx pgx.Tx, kind string, entityID, ownerID int64
 			DO UPDATE SET
 				click_count = entity_click_stats.click_count + 1,
 				last_clicked_at = now()`,
-			kind, entityID, ownerID)
+			string(kind), entityID, int64(ownerID))
 		if err != nil {
 			return fmt.Errorf("upsert entity_click_stats: %w", err)
 		}
@@ -46,9 +55,9 @@ func Record(ctx context.Context, tx pgx.Tx, kind string, entityID, ownerID int64
 // RefreshOwner rebuilds the ranking projection from click_log for one owner.
 // Bulk writers (import, restore) call this after inserting historical rows
 // that never went through Record.
-func RefreshOwner(ctx context.Context, tx pgx.Tx, ownerID int64) error {
+func RefreshOwner(ctx context.Context, tx pgx.Tx, ownerID authctx.UserID) error {
 	if _, err := tx.Exec(ctx, `
-		DELETE FROM entity_click_stats WHERE user_id = $1`, ownerID); err != nil {
+		DELETE FROM entity_click_stats WHERE user_id = $1`, int64(ownerID)); err != nil {
 		return fmt.Errorf("clear entity_click_stats: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
@@ -56,7 +65,7 @@ func RefreshOwner(ctx context.Context, tx pgx.Tx, ownerID int64) error {
 		SELECT user_id, entity_kind, entity_id, count(*)::bigint, max(clicked_at)
 		FROM click_log
 		WHERE user_id = $1
-		GROUP BY user_id, entity_kind, entity_id`, ownerID); err != nil {
+		GROUP BY user_id, entity_kind, entity_id`, int64(ownerID)); err != nil {
 		return fmt.Errorf("refresh entity_click_stats: %w", err)
 	}
 	return nil

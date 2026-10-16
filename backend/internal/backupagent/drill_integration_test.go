@@ -4,6 +4,7 @@ package backupagent
 
 import (
 	"context"
+	"foldex/internal/backupjobs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,31 +22,31 @@ func TestLatestSucceededDump_PicksTheNewestArtifact(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.Shared(t)
 	require.NoError(t, testdb.Reset(ctx, pool))
-	s := NewRunStore(pool)
+	s := backupjobs.NewRunStore(pool)
 
 	_, err := s.LatestSucceededDump(ctx)
-	require.ErrorIs(t, err, ErrNoDumpToDrill, "an empty history has nothing whose restorability could be proven")
+	require.ErrorIs(t, err, backupjobs.ErrNoDumpToDrill, "an empty history has nothing whose restorability could be proven")
 
 	// A failed dump, an older success, a newer success and a succeeded run of
 	// ANOTHER job: only the newest succeeded dump is drillable.
-	idFail, err := s.Begin(ctx, JobDump, time.Now())
+	idFail, err := s.Begin(ctx, backupjobs.JobDump, time.Now())
 	require.NoError(t, err)
-	require.NoError(t, s.Fail(ctx, idFail, ReasonUploadFailed))
+	require.NoError(t, s.Fail(ctx, idFail, backupjobs.ReasonUploadFailed))
 
-	idOld, err := s.Begin(ctx, JobDump, time.Now())
+	idOld, err := s.Begin(ctx, backupjobs.JobDump, time.Now())
 	require.NoError(t, err)
-	require.NoError(t, s.Succeed(ctx, idOld, &Artifact{Key: "backups/dump/old", Bytes: 1, SHA256: "aa"}, nil))
+	require.NoError(t, s.Succeed(ctx, idOld, &backupjobs.Artifact{Key: "backups/dump/old", Bytes: 1, SHA256: "aa"}, nil))
 	_, err = pool.Exec(ctx, `UPDATE backup_run SET started_at = now() - interval '2 days' WHERE id = $1`, idOld)
 	require.NoError(t, err)
 
-	idDrill, err := s.Begin(ctx, JobDrill, time.Now())
+	idDrill, err := s.Begin(ctx, backupjobs.JobDrill, time.Now())
 	require.NoError(t, err)
 	require.NoError(t, s.Succeed(ctx, idDrill, nil, nil))
 
-	idNew, err := s.Begin(ctx, JobDump, time.Now())
+	idNew, err := s.Begin(ctx, backupjobs.JobDump, time.Now())
 	require.NoError(t, err)
 	meta := map[string]any{"tables": map[string]any{"link": 3}, "schema_version": 40, "encrypted": true}
-	require.NoError(t, s.Succeed(ctx, idNew, &Artifact{Key: "backups/dump/new", Bytes: 2, SHA256: "bb"}, meta))
+	require.NoError(t, s.Succeed(ctx, idNew, &backupjobs.Artifact{Key: "backups/dump/new", Bytes: 2, SHA256: "bb"}, meta))
 
 	ref, err := s.LatestSucceededDump(ctx)
 	require.NoError(t, err)
@@ -63,17 +64,17 @@ func TestSetDrillSource_StampsOnlyTheOwnRow(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.Shared(t)
 	require.NoError(t, testdb.Reset(ctx, pool))
-	mine := NewRunStore(pool)
+	mine := backupjobs.NewRunStore(pool)
 
-	dumpID, err := mine.Begin(ctx, JobDump, time.Now())
+	dumpID, err := mine.Begin(ctx, backupjobs.JobDump, time.Now())
 	require.NoError(t, err)
-	require.NoError(t, mine.Succeed(ctx, dumpID, &Artifact{Key: "k", Bytes: 1, SHA256: "aa"}, nil))
-	drillID, err := mine.Begin(ctx, JobDrill, time.Now())
+	require.NoError(t, mine.Succeed(ctx, dumpID, &backupjobs.Artifact{Key: "k", Bytes: 1, SHA256: "aa"}, nil))
+	drillID, err := mine.Begin(ctx, backupjobs.JobDrill, time.Now())
 	require.NoError(t, err)
 
 	// A foreign claim token must not write the linkage — same guard as the
 	// run outcomes.
-	other := NewRunStore(pool)
+	other := backupjobs.NewRunStore(pool)
 	require.NoError(t, other.SetDrillSource(ctx, drillID, dumpID))
 	var linked *int64
 	require.NoError(t, pool.QueryRow(ctx, `SELECT drill_of_run_id FROM backup_run WHERE id = $1`, drillID).Scan(&linked))
@@ -127,7 +128,7 @@ func TestDrill_EndToEndWithRealPostgresBinaries(t *testing.T) {
 	_, err = pool.Exec(ctx, `CREATE TABLE schema_migrations (version bigint NOT NULL, dirty boolean NOT NULL)`)
 	require.NoError(t, err)
 	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DROP TABLE schema_migrations`) })
-	_, err = pool.Exec(ctx, `INSERT INTO schema_migrations VALUES ($1, false)`, RequiredSchemaVersion)
+	_, err = pool.Exec(ctx, `INSERT INTO schema_migrations VALUES ($1, false)`, backupjobs.RequiredSchemaVersion)
 	require.NoError(t, err)
 
 	// Content that must survive the round-trip: a user and a link.
@@ -159,14 +160,14 @@ func TestDrill_EndToEndWithRealPostgresBinaries(t *testing.T) {
 	require.Empty(t, reason)
 	require.NotNil(t, meta["tables"], "the dump must record the source counts the drill compares against")
 
-	runs := NewRunStore(pool)
-	dumpID, err := runs.Begin(ctx, JobDump, time.Now())
+	runs := backupjobs.NewRunStore(pool)
+	dumpID, err := runs.Begin(ctx, backupjobs.JobDump, time.Now())
 	require.NoError(t, err)
 	require.NoError(t, runs.Succeed(ctx, dumpID, artifact, meta))
 
 	drill, err := NewDrillJob(cfg, runs, store, testLogger())
 	require.NoError(t, err)
-	drillID, err := runs.Begin(ctx, JobDrill, time.Now())
+	drillID, err := runs.Begin(ctx, backupjobs.JobDrill, time.Now())
 	require.NoError(t, err)
 
 	dArtifact, dMeta, dReason, err := drill.Run(ctx, drillID)
@@ -180,7 +181,7 @@ func TestDrill_EndToEndWithRealPostgresBinaries(t *testing.T) {
 	require.True(t, ok)
 	assert.EqualValues(t, 1, got["link"])
 	assert.EqualValues(t, 1, got["app_user"])
-	assert.EqualValues(t, RequiredSchemaVersion, dMeta["schema_version"])
+	assert.EqualValues(t, backupjobs.RequiredSchemaVersion, dMeta["schema_version"])
 
 	// And the row the admin surface reads says which dump was proven.
 	var linked int64
@@ -232,7 +233,7 @@ func TestDrill_RestoresAnArtifactThatNamesAForeignRole(t *testing.T) {
 	_, err = pool.Exec(ctx, `CREATE TABLE schema_migrations (version bigint NOT NULL, dirty boolean NOT NULL)`)
 	require.NoError(t, err)
 	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DROP TABLE schema_migrations`) })
-	_, err = pool.Exec(ctx, `INSERT INTO schema_migrations VALUES ($1, false)`, RequiredSchemaVersion)
+	_, err = pool.Exec(ctx, `INSERT INTO schema_migrations VALUES ($1, false)`, backupjobs.RequiredSchemaVersion)
 	require.NoError(t, err)
 
 	// The role the target cluster will not have. A managed Postgres supplies
@@ -281,14 +282,14 @@ func TestDrill_RestoresAnArtifactThatNamesAForeignRole(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, reason)
 
-	runs := NewRunStore(pool)
-	dumpID, err := runs.Begin(ctx, JobDump, time.Now())
+	runs := backupjobs.NewRunStore(pool)
+	dumpID, err := runs.Begin(ctx, backupjobs.JobDump, time.Now())
 	require.NoError(t, err)
 	require.NoError(t, runs.Succeed(ctx, dumpID, artifact, meta))
 
 	drill, err := NewDrillJob(cfg, runs, store, testLogger())
 	require.NoError(t, err)
-	drillID, err := runs.Begin(ctx, JobDrill, time.Now())
+	drillID, err := runs.Begin(ctx, backupjobs.JobDrill, time.Now())
 	require.NoError(t, err)
 
 	_, dMeta, dReason, err := drill.Run(ctx, drillID)
@@ -306,19 +307,19 @@ func TestLatestSucceededDump_AFailedRunWithAKeyIsNeverTheSource(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.Shared(t)
 	require.NoError(t, testdb.Reset(ctx, pool))
-	s := NewRunStore(pool)
+	s := backupjobs.NewRunStore(pool)
 
 	// A run can fail AFTER its artifact landed (e.g. the prune phase, or a
 	// janitor-expired straggler that had already uploaded): key present,
 	// status failed. Selecting by key-presence alone would drill an artifact
 	// whose run the operator was told failed.
-	id, err := s.Begin(ctx, JobDump, time.Now())
+	id, err := s.Begin(ctx, backupjobs.JobDump, time.Now())
 	require.NoError(t, err)
-	_, err = pool.Exec(ctx, `UPDATE backup_run SET artifact_key='backups/dump/x', artifact_sha256='aa', status='failed', last_error=$2, finished_at=now() WHERE id=$1`, id, ReasonUploadFailed)
+	_, err = pool.Exec(ctx, `UPDATE backup_run SET artifact_key='backups/dump/x', artifact_sha256='aa', status='failed', last_error=$2, finished_at=now() WHERE id=$1`, id, backupjobs.ReasonUploadFailed)
 	require.NoError(t, err)
 
 	_, err = s.LatestSucceededDump(ctx)
-	assert.ErrorIs(t, err, ErrNoDumpToDrill,
+	assert.ErrorIs(t, err, backupjobs.ErrNoDumpToDrill,
 		"status='succeeded' is the filter — artifact_key IS NOT NULL alone would bless a failed run's artifact")
 }
 

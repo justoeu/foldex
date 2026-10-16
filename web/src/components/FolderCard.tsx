@@ -1,6 +1,7 @@
 import { memo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
+import { FolderLockButton } from './sidebar/FolderRow'
 import { primaryColor } from '../lib/tagColor'
 import { useObjectStoreGeneration } from '../api/status'
 import { fileUrlWithStoreGeneration, safeImageUrl } from '../lib/url'
@@ -169,14 +170,7 @@ function FolderCardImpl({ folder, onOpen, onEdit, onDropLink, onDropNote, onDrop
                   onClick={() => onOpen(folder.id)}
                 >
                   {folder.has_password && (
-                    <span
-                      className="fx-folder-lock-icon"
-                      aria-hidden="true"
-                      data-tooltip={t('folder_card.locked_tooltip')}
-                      data-tooltip-side="top"
-                    >
-                      <Icon d={I.lock} size={12} />
-                    </span>
+                    <FolderLockButton />
                   )}
                   {folder.name}
                 </button>

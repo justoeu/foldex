@@ -6,6 +6,7 @@ package roleperm
 
 import (
 	"fmt"
+	"maps"
 	"reflect"
 
 	"foldex/internal/pkg/authctx"
@@ -64,13 +65,14 @@ func Resolve(stored map[authctx.Role][]authctx.Permission) Grants {
 }
 
 func grantsForRole(role authctx.Role, stored []authctx.Permission, compiled map[authctx.Role]map[authctx.Permission]bool) map[authctx.Permission]bool {
-	set := make(map[authctx.Permission]bool, len(authctx.AllPermissions))
 	if !authctx.IsRoleEditable(role) {
-		for p, ok := range compiled[role] {
-			set[p] = ok
+		set := maps.Clone(compiled[role])
+		if set == nil {
+			set = make(map[authctx.Permission]bool, len(authctx.AllPermissions))
 		}
 		return set
 	}
+	set := make(map[authctx.Permission]bool, len(authctx.AllPermissions))
 	for _, p := range stored {
 		if !authctx.IsPermissionLocked(p) {
 			set[p] = true

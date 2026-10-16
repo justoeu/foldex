@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"foldex/internal/backupjobs"
 	"io"
 	"log/slog"
 	"os/exec"
@@ -171,7 +172,7 @@ func TestDumpRun_FailuresMapToNormalizedReasons(t *testing.T) {
 
 		_, _, reason, err := job.Run(context.Background())
 		require.Error(t, err)
-		assert.Equal(t, ReasonDumpFailed, reason)
+		assert.Equal(t, backupjobs.ReasonDumpFailed, reason)
 		assert.Empty(t, store.uploads, "a failed dump must never upload its partial output")
 	})
 
@@ -182,7 +183,7 @@ func TestDumpRun_FailuresMapToNormalizedReasons(t *testing.T) {
 
 		_, _, reason, err := job.Run(context.Background())
 		require.Error(t, err)
-		assert.Equal(t, ReasonDumpFailed, reason)
+		assert.Equal(t, backupjobs.ReasonDumpFailed, reason)
 		assert.Empty(t, store.uploads)
 	})
 
@@ -194,7 +195,7 @@ func TestDumpRun_FailuresMapToNormalizedReasons(t *testing.T) {
 
 		_, _, reason, err := job.Run(context.Background())
 		require.Error(t, err)
-		assert.Equal(t, ReasonUploadFailed, reason)
+		assert.Equal(t, backupjobs.ReasonUploadFailed, reason)
 	})
 }
 
@@ -242,7 +243,7 @@ func TestDumpRun_PruneRunsOnlyInAgentModeAndNeverFailsTheRun(t *testing.T) {
 		require.NoError(t, err, "the dump landed; a failed prune must not turn success into failure")
 		assert.Empty(t, reason)
 		assert.NotNil(t, artifact)
-		assert.Equal(t, ReasonPruneFailed, meta["prune_error"])
+		assert.Equal(t, backupjobs.ReasonPruneFailed, meta["prune_error"])
 	})
 }
 

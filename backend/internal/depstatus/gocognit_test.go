@@ -1,7 +1,11 @@
 package depstatus
 
-import "testing"
+import (
+	"testing"
+
+	"foldex/internal/testsupport"
+)
 
 func TestS3776_RefreshAtMost15(t *testing.T) {
-	assertCognitAtMost(t, cognitScores(t), "(*Checker).refresh", 15)
+	testsupport.AssertCognitAtMost(t, testsupport.CognitScores(t), "(*Checker).refresh", 15)
 }

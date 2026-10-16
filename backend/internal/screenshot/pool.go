@@ -13,6 +13,8 @@ import (
 	"github.com/go-rod/rod/lib/launcher"
 	"github.com/go-rod/rod/lib/launcher/flags"
 	"github.com/go-rod/rod/lib/proto"
+
+	"foldex/internal/pkg/semaphore"
 )
 
 const (
@@ -37,7 +39,7 @@ type Pool struct {
 	closed      bool
 	shutdown    chan struct{}
 	closeDone   chan struct{}
-	captureSem  chan struct{}
+	captureSem  *semaphore.Semaphore
 
 	queueTimeout          time.Duration
 	startupTimeout        time.Duration
@@ -63,7 +65,7 @@ func NewPool() *Pool {
 		generations:           make(map[*pooledBrowser]struct{}),
 		shutdown:              make(chan struct{}),
 		closeDone:             make(chan struct{}),
-		captureSem:            make(chan struct{}, 1),
+		captureSem:            semaphore.New(1),
 		queueTimeout:          defaultCaptureQueueTimeout,
 		startupTimeout:        defaultBrowserStartupTimeout,
 		executionTimeout:      defaultCaptureExecutionTimeout,
@@ -548,6 +550,32 @@ func (p *Pool) finishClose(ctx context.Context, startup *browserStartup, generat
 		}
 	}
 }
+
+// remaining is the time left until deadline, floored at zero so an expired
+// deadline yields an immediate timeout instead of a negative wait.
+func remaining(deadline time.Time) time.Duration {
+	return max(0, time.Until(deadline))
+}
+
+// acquireSlot waits for the one capture slot, bounded by the queue timeout.
+// Shutdown wins over waiting: a queued capture must not start once Close has
+// begun. The error shape matches the hand-rolled select this replaced —
+// errPoolClosed on shutdown, the wait context's error on timeout/cancel.
+func (p *Pool) acquireSlot(ctx context.Context) error {
+	deadline := time.Now().Add(p.queueTimeout)
+	waitCtx, waitCancel := context.WithTimeout(ctx, remaining(deadline))
+	defer waitCancel()
+	if err := p.captureSem.Acquire(waitCtx, p.shutdown); err != nil {
+		if errors.Is(err, semaphore.ErrAborted) {
+			return errPoolClosed
+		}
+		return fmt.Errorf("screenshot: wait for slot: %w", waitCtx.Err())
+	}
+	return nil
+}
+
+// releaseSlot returns the capture slot taken by acquireSlot.
+func (p *Pool) releaseSlot() { p.captureSem.Release() }
 
 func waitForTeardown(ctx context.Context, done <-chan struct{}) bool {
 	if done == nil {

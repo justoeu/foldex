@@ -43,7 +43,7 @@ const (
 	pgusernameFlag = "--username="
 )
 
-// drillRuns is the slice of RunStore the drill needs; a fake stands in for it
+// drillRuns is the slice of backupjobs.RunStore the drill needs; a fake stands in for it
 // in the unit tests, which have no database.
 type drillRuns interface {
 	LatestSucceededDump(ctx context.Context) (*backupjobs.DumpRunRef, error)
@@ -166,7 +166,7 @@ func loadIdentityFile(path string) ([]age.Identity, error) {
 }
 
 // Run executes one drill under the backup_run row runID. It never returns an
-// Artifact — a drill ships nothing; its product is the verdict.
+// backupjobs.Artifact — a drill ships nothing; its product is the verdict.
 func (j *DrillJob) Run(ctx context.Context, runID int64) (*backupjobs.Artifact, map[string]any, string, error) {
 	src, reason, err := j.pickDump(ctx, runID)
 	if err != nil {

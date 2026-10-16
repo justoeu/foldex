@@ -28,7 +28,7 @@ import (
 //
 // viewer is the resolved principal of the request (0 when anonymous): the
 // redirect serves opted-in (is_public) rows to anyone and anything else only
-// to its owner (SEC-SEN-002).
+// to its owner.
 //
 // click_log is the only writer for click data — there's no longer a
 // denormalized counter on `link`, so this is a single INSERT (counter views
@@ -52,7 +52,7 @@ func (r *Repository) clickAndResolveWhere(ctx context.Context, viewer authctx.Us
 	}
 	defer tx.Rollback(ctx)
 
-	// SEC-SEN-002: the destination and the click row are the two things a
+	// The destination and the click row are the two things a
 	// slug guess must not buy. Title-derived slugs are guessable, so the
 	// anonymous branch requires the owner's explicit opt-in; the owner's
 	// viewer keeps card/palette navigation identical. Locked folders stay a
@@ -86,7 +86,7 @@ func (r *Repository) clickAndResolveWhere(ctx context.Context, viewer authctx.Us
 	// user_id comes from the row we just resolved, not from a session — /go/ is
 	// public. It is a denormalized accelerator (migration 000018); entity_kind /
 	// entity_id remain authoritative for WHAT was clicked.
-	if err := clicklog.Record(ctx, tx, "link", id, owner); err != nil {
+	if err := clicklog.Record(ctx, tx, clicklog.KindLink, id, authctx.UserID(owner)); err != nil {
 		return "", err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -98,7 +98,7 @@ func (r *Repository) clickAndResolveWhere(ctx context.Context, viewer authctx.Us
 // SystemUpdatePreview starts a new generation when status is pending. Terminal
 // writes use the conditional methods below and never advance the generation.
 // Manual OG upload wins: never overwrite a non-empty og_image_url (CAS vs
-// concurrent UpdateOGImage).
+// concurrent ReplaceOGImage).
 //
 // Terminal statuses (ok/failed) only apply while preview_status is still
 // 'pending'. A concurrent refreshPreview that already

@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import { Icon, I } from './icons'
+import { useAbortableValidation } from '../hooks/useAbortableValidation'
 import { useEscape } from '../hooks/useEscape'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import {
@@ -11,6 +12,7 @@ import {
   type RestoreReport,
 } from '../api/backup'
 import { apiErrorText } from '../lib/apiError'
+import { formatBytes } from '../lib/formatBytes'
 import { ConflictModePicker, type ConflictMode } from './ConflictModePicker'
 
 type Props = Readonly<{
@@ -56,46 +58,29 @@ function restoreSubmitLabel(restoring: boolean, mode: ConflictMode, t: TFunction
 
 export function BackupRestoreDialog({ file, onClose, onRestored }: Props) {
   const { t } = useTranslation()
-  const [validation, setValidation] = useState<BackupValidation | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [errMsg, setErrMsg] = useState<string | null>(null)
   const [mode, setMode] = useState<ConflictMode>('skip')
   const [restoring, setRestoring] = useState(false)
   const [report, setReport] = useState<RestoreReport | null>(null)
-  const validationAbortRef = useRef<AbortController | null>(null)
+  const {
+    data: validation,
+    loading,
+    errMsg,
+    setErrMsg,
+    abort: abortValidation,
+  } = useAbortableValidation<BackupValidation>(
+    (signal) => validateBackup(file, signal),
+    [file, t],
+  )
   const restoreLockedRef = useRef(false)
   const restoreBackup = useRestoreBackup()
 
   const requestClose = () => {
     if (restoreLockedRef.current || report) return
-    validationAbortRef.current?.abort()
+    abortValidation()
     onClose()
   }
 
   useEscape(requestClose, true)
-
-  useEffect(() => {
-    const controller = new AbortController()
-    validationAbortRef.current = controller
-    setLoading(true)
-    setValidation(null)
-    setErrMsg(null)
-    validateBackup(file, controller.signal)
-      .then((v) => {
-        if (!controller.signal.aborted) setValidation(v)
-      })
-      .catch((e) => {
-        if (!controller.signal.aborted) setErrMsg(apiErrorText(e, t('common.unknown_error')))
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false)
-        if (validationAbortRef.current === controller) validationAbortRef.current = null
-      })
-    return () => {
-      controller.abort()
-      if (validationAbortRef.current === controller) validationAbortRef.current = null
-    }
-  }, [file, t])
 
   const handleRestore = async () => {
     if (restoreLockedRef.current) return
@@ -263,14 +248,3 @@ function RestoreReportBlock({ r, t }: Readonly<{ r: RestoreReport; t: TFunction 
   )
 }
 
-function formatBytes(b: number): string {
-  if (b < 1024) return `${b} B`
-  const units = ['KB', 'MB', 'GB']
-  let n = b / 1024
-  let i = 0
-  while (n >= 1024 && i < units.length - 1) {
-    n /= 1024
-    i++
-  }
-  return `${n.toFixed(n >= 10 ? 0 : 1)} ${units[i]}`
-}

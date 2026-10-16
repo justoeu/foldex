@@ -3,9 +3,6 @@ import { Icon, I } from './icons'
 import { GradientPicker } from './GradientPicker'
 import { DEFAULT_ENTITY_COLORS, type ColorMode } from '../lib/entityColors'
 
-export type { ColorMode }
-export { DEFAULT_ENTITY_COLORS }
-
 type Props = Readonly<{
   mode: ColorMode
   onModeChange: (m: ColorMode) => void

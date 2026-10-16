@@ -85,6 +85,12 @@ export function useAppDialogController(allFolders: Folder[] | undefined) {
     setEditNoteId(null)
   }, [])
 
+  // Reading a note happens in-app (INV-130): the view dialog's open state
+  // lives here so any surface (cards, command palette) opens the same reader.
+  const [viewNoteId, setViewNoteId] = useState<number | null>(null)
+  const openViewNote = useCallback((id: number) => setViewNoteId(id), [])
+  const closeViewNote = useCallback(() => setViewNoteId(null), [])
+
   usePasteUrl(openPastedLink)
   useHotkeys('alt+n', (event) => {
     event.preventDefault()
@@ -121,6 +127,9 @@ export function useAppDialogController(allFolders: Folder[] | undefined) {
     openNewNote,
     openEditNote,
     closeNote,
+    viewNoteId,
+    openViewNote,
+    closeViewNote,
   }
 }
 

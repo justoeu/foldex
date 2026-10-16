@@ -10,8 +10,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -48,12 +46,7 @@ type Worker struct {
 	opts   Options
 	logger *slog.Logger
 
-	ctx     context.Context
-	cancel  context.CancelFunc
-	stopped atomic.Bool
-	start   sync.Once
-	stop    sync.Once
-	wg      sync.WaitGroup
+	life mailoutbox.Lifecycle
 }
 
 func New(outbox *mailoutbox.Outbox, m mailer.Mailer, cfg mailoutbox.AMQPConfig,
@@ -80,91 +73,23 @@ func New(outbox *mailoutbox.Outbox, m mailer.Mailer, cfg mailoutbox.AMQPConfig,
 
 // Start launches the consume loop and returns immediately.
 func (w *Worker) Start(parent context.Context) {
-	w.start.Do(func() {
-		if w.stopped.Load() {
-			return
-		}
-		w.ctx, w.cancel = context.WithCancel(parent)
-		w.wg.Add(1)
-		go w.loop()
+	w.life.Start(parent, func(ctx context.Context) {
+		mailoutbox.ReconnectLoop(ctx, w.life.Stopped, w.logger, "mail worker connection", true, reconnectDelay, func() error {
+			// Republishing happens on its own confirming channel. Mixing it into the
+			// consuming channel would put confirm mode on something that never
+			// publishes, and a retry that is acked without being confirmed AND routed
+			// is a message deleted from the only place it still existed.
+			return mailoutbox.ConsumeOnce(ctx, mailoutbox.ConsumeConfig{
+				Kind: mailoutbox.HandlerKindWorker, Cfg: w.cfg,
+				Queue: w.cfg.Topology.QueueName(), Prefetch: w.opts.Prefetch,
+				OnDelivery: func(h *mailoutbox.AMQPHandler, d amqp.Delivery) { w.handle(h.Publish, d) },
+			})
+		})
 	})
 }
 
-// Stop rejects new work, cancels in-flight sends and joins the loop. Ordering
-// matches every other worker in this codebase: stopped first, then cancel,
-// then wait.
-func (w *Worker) Stop() {
-	w.stop.Do(func() {
-		w.stopped.Store(true)
-		if w.cancel != nil {
-			w.cancel()
-		}
-		w.wg.Wait()
-	})
-}
-
-func (w *Worker) loop() {
-	defer w.wg.Done()
-	for {
-		if w.stopped.Load() || w.ctx.Err() != nil {
-			return
-		}
-		if err := w.consume(); err != nil && w.ctx.Err() == nil {
-			w.logger.Error("mail worker connection", "err", err)
-		}
-		select {
-		case <-w.ctx.Done():
-			return
-		case <-time.After(mailoutbox.ReconnectWait(reconnectDelay)):
-		}
-	}
-}
-
-// consume runs one connection's worth of deliveries, returning when it drops.
-func (w *Worker) consume() error {
-	conn, err := mailoutbox.Dial(w.cfg)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = conn.Close() }()
-
-	ch, err := conn.Channel()
-	if err != nil {
-		return err
-	}
-	defer func() { _ = ch.Close() }()
-	if _, err := w.cfg.Topology.Declare(ch); err != nil {
-		return err
-	}
-	if err := ch.Qos(w.opts.Prefetch, 0, false); err != nil {
-		return err
-	}
-	// Republishing happens on its own confirming channel. Mixing it into the
-	// consuming channel would put confirm mode on something that never
-	// publishes, and a retry that is acked without being confirmed AND routed
-	// is a message deleted from the only place it still existed.
-	pub, err := mailoutbox.NewConfirmingChannel(conn)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = pub.Close() }()
-
-	deliveries, err := ch.Consume(w.cfg.Topology.QueueName(), "", false, false, false, false, nil)
-	if err != nil {
-		return err
-	}
-	for {
-		select {
-		case <-w.ctx.Done():
-			return nil
-		case d, ok := <-deliveries:
-			if !ok {
-				return nil
-			}
-			w.handle(pub, d)
-		}
-	}
-}
+// Stop rejects new work, cancels in-flight sends and joins the loop.
+func (w *Worker) Stop() { w.life.Stop() }
 
 // handle delivers one message and decides its fate.
 //
@@ -228,7 +153,7 @@ func (w *Worker) send(msg mailoutbox.WireMessage) (reason string, fatal bool, er
 		}
 		return "render_failed", true, err
 	}
-	ctx, cancel := context.WithTimeout(w.ctx, w.opts.SendTimeout)
+	ctx, cancel := context.WithTimeout(w.life.Ctx(), w.opts.SendTimeout)
 	defer cancel()
 	if err := w.mail.Send(ctx, m); err != nil {
 		return sendReason(err), false, err
@@ -242,7 +167,7 @@ func (w *Worker) route(pub *mailoutbox.ConfirmingChannel, d amqp.Delivery, attem
 	// exactly here, and abandoning the republish would leave the message unacked
 	// on the send queue to be retried immediately by the next worker, with no
 	// backoff at all.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(w.ctx), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(w.life.Ctx()), 10*time.Second)
 	defer cancel()
 
 	if err := w.cfg.Topology.Republish(ctx, pub, d.Body, attempt, reason, dead); err != nil {

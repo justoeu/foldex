@@ -12,6 +12,7 @@ import { useLinkDialogForm } from '../hooks/useLinkDialogForm'
 import { useLinkDialogImage } from '../hooks/useLinkDialogImage'
 import { useLinkDialogSubmit } from '../hooks/useLinkDialogSubmit'
 import { useExistingLinkByURL } from '../hooks/useExistingLinkByURL'
+import { PickExistingLinkButton } from './note-dialog/PickExistingLinkButton'
 import { useFolders } from '../api/folders'
 import { safeImageUrl, safeLinkHref, hostOf } from '../lib/url'
 import { nextCheckPreview } from '../lib/time'
@@ -138,15 +139,7 @@ function DuplicateURLNotice({
         <div className="fx-inline-error-title">{t('link_dialog.error_url_taken')}</div>
         <div>{where}</div>
       </div>
-      {onOpenExisting && (
-        <button
-          type="button"
-          className="fx-confirm-btn"
-          onClick={() => onOpenExisting(link)}
-        >
-          {t('link_dialog.open_existing')}
-        </button>
-      )}
+      {onOpenExisting && <PickExistingLinkButton link={link} onOpenExisting={onOpenExisting} />}
     </div>
   )
 }

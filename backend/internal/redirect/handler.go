@@ -49,7 +49,7 @@ func (h *Handler) Mount(r chi.Router) {
 // BIGSERIAL shared across every account, so leaving /go/42 enabled would let
 // anyone walk 1, 2, 3… and enumerate — and silently CLICK-LOG — every link
 // on the instance, including other people's. Slugs are not a secret either,
-// which is why the resolution below is viewer-scoped (SEC-SEN-002): the
+// which is why the resolution below is viewer-scoped: the
 // anonymous surface answers only opted-in (is_public) rows, while the
 // owner's session — the cards, palette and push notifications that all
 // navigate through /go/ — keeps the exact same behaviour.

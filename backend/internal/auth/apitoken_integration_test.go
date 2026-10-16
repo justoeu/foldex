@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"foldex/internal/auth"
+	"foldex/internal/testdb"
 )
 
 // mint creates a token and returns its plaintext.
@@ -280,7 +281,7 @@ func TestConcurrentAPITokenCreationNeverExceedsCap(t *testing.T) {
 				map[string]any{"name": "concurrent " + itoa(int64(i))})
 		}()
 	}
-	waitForBlockedSQLCount(t, h.pool, "SELECT id FROM app_user WHERE id = $1 FOR NO KEY UPDATE", len(clients))
+	testdb.WaitForBlockedSQLCount(t, h.pool, "SELECT id FROM app_user WHERE id = $1 FOR NO KEY UPDATE", len(clients))
 	require.NoError(t, blocker.Commit(ctx))
 
 	var created, refused int

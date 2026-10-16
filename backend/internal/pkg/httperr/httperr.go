@@ -90,7 +90,6 @@ func New(status int, code, msg string) *Error {
 var (
 	ErrNotFound     = Wrap(http.StatusNotFound, "not_found", "resource not found", domainerr.ErrNotFound)
 	ErrBadRequest   = New(http.StatusBadRequest, "bad_request", "invalid request")
-	ErrConflict     = New(http.StatusConflict, "conflict", "resource conflict")
 	ErrInternal     = New(http.StatusInternalServerError, "internal", "internal error")
 	ErrUnauthorized = New(http.StatusUnauthorized, "unauthorized", "unauthorized")
 )

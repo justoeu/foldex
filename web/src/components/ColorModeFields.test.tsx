@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { screen } from '@testing-library/react'
-import { ColorModeFields, DEFAULT_ENTITY_COLORS } from './ColorModeFields'
+import { ColorModeFields } from './ColorModeFields'
+import { DEFAULT_ENTITY_COLORS } from '../lib/entityColors'
 import { GradientPicker } from './GradientPicker'
 import { renderWithProviders } from '../test/renderWithProviders'
 

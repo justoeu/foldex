@@ -71,7 +71,7 @@ func ListWithContentGate[T any](ctx context.Context, gate ContentGate, uid authc
 // check and the write. The destination folder of a move is deliberately
 // never gated (INV-065: writing into a locked folder reveals nothing).
 //
-// Lock order is folder BEFORE entity — the same order DeleteCascade takes
+// Lock order is folder BEFORE entity — the same order deleteCascade takes
 // (whole hierarchy, then entities) — so the two can never deadlock. The
 // first folder_id read is unlocked; after the folder row is locked the
 // entity row is locked and membership is re-verified. A folder change in

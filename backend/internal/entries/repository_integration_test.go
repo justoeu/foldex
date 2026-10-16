@@ -239,7 +239,7 @@ func TestList_QueryParityWithLinkAndNoteRepositories(t *testing.T) {
 	require.NoError(t, err)
 	_, err = f.lrepo.ClickAndResolve(ctx, rootLink.ID, uid)
 	require.NoError(t, err)
-	_, err = f.nrepo.SystemViewAndResolve(ctx, rootNote.Slug, uid)
+	_, err = f.nrepo.SystemViewAndResolveBySlug(ctx, rootNote.Slug, uid)
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -337,7 +337,7 @@ func TestList_ClickRankedSortsKeepCrossKindOrdering(t *testing.T) {
 	require.NoError(t, err)
 	tx, err := f.pool.Begin(ctx)
 	require.NoError(t, err)
-	require.NoError(t, clicklog.RefreshOwner(ctx, tx, int64(uid)))
+	require.NoError(t, clicklog.RefreshOwner(ctx, tx, uid))
 	require.NoError(t, tx.Commit(ctx))
 
 	byClicks, err := f.erepo.List(ctx, uid, entries.ListQuery{Sort: "clicks"})
@@ -362,8 +362,8 @@ func TestRecord_IncrementsEntityClickStats(t *testing.T) {
 
 	tx, err := f.pool.Begin(ctx)
 	require.NoError(t, err)
-	require.NoError(t, clicklog.Record(ctx, tx, "link", link.ID, int64(uid)))
-	require.NoError(t, clicklog.Record(ctx, tx, "link", link.ID, int64(uid)))
+	require.NoError(t, clicklog.Record(ctx, tx, clicklog.KindLink, link.ID, uid))
+	require.NoError(t, clicklog.Record(ctx, tx, clicklog.KindLink, link.ID, uid))
 	require.NoError(t, tx.Commit(ctx))
 
 	var count int64

@@ -182,8 +182,8 @@ func TestDeadLetterWatcher_StopIsIdempotentAndUnblocksTheReconnectWait(t *testin
 	// — the first Start created it — so what proves the guard held is that the
 	// second Start left that same cancelled context in place instead of
 	// swapping in a live one and leaking a goroutine past shutdown.
-	before := w.ctx
+	before := w.life.Ctx()
 	w.Start(context.Background())
-	require.Same(t, before, w.ctx, "a second Start must not replace the context")
-	require.Error(t, w.ctx.Err(), "the context must stay cancelled after Stop")
+	require.Same(t, before, w.life.Ctx(), "a second Start must not replace the context")
+	require.Error(t, w.life.Ctx().Err(), "the context must stay cancelled after Stop")
 }

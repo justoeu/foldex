@@ -38,8 +38,8 @@ func TestPoolClose_NilAndIdleSafe(t *testing.T) {
 
 func TestCapture_CancelledContext(t *testing.T) {
 	pool := NewPool()
-	pool.captureSem <- struct{}{}
-	defer func() { <-pool.captureSem }()
+	require.True(t, pool.captureSem.TryAcquire())
+	defer pool.captureSem.Release()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -51,8 +51,8 @@ func TestCapture_CancelledContext(t *testing.T) {
 func TestCapture_QueueBudgetExpiresWithLiveCaller(t *testing.T) {
 	pool := NewPool()
 	pool.queueTimeout = 5 * time.Millisecond
-	pool.captureSem <- struct{}{}
-	defer func() { <-pool.captureSem }()
+	require.True(t, pool.captureSem.TryAcquire())
+	defer pool.captureSem.Release()
 
 	_, err := pool.Capture(context.Background(), "https://example.com")
 	require.ErrorIs(t, err, context.DeadlineExceeded)
@@ -62,7 +62,7 @@ func TestCapture_QueueBudgetExpiresWithLiveCaller(t *testing.T) {
 func TestCloseRejectsQueuedCaptureImmediately(t *testing.T) {
 	pool := NewPool()
 	pool.queueTimeout = time.Second
-	pool.captureSem <- struct{}{}
+	require.True(t, pool.captureSem.TryAcquire())
 	result := make(chan error, 1)
 	go func() {
 		_, err := pool.Capture(context.Background(), "https://example.com")
@@ -76,7 +76,7 @@ func TestCloseRejectsQueuedCaptureImmediately(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("queued capture did not observe pool shutdown")
 	}
-	<-pool.captureSem
+	pool.captureSem.Release()
 }
 
 func TestCapture_RejectsNonHTTPTargetBeforeBrowserLaunch(t *testing.T) {
@@ -107,7 +107,7 @@ func TestConfiguredLauncher_DisablesDirectUDPBypasses(t *testing.T) {
 }
 
 func TestCaptureSerializesProcessProxyAttribution(t *testing.T) {
-	assert.Equal(t, 1, cap(NewPool().captureSem))
+	assert.Equal(t, 1, NewPool().captureSem.Cap())
 }
 
 type fakeBrowserLauncher struct {
@@ -464,14 +464,14 @@ func TestCaptureQueueTimeDoesNotConsumeExecutionBudget(t *testing.T) {
 	pool.current = &pooledBrowser{browser: &rod.Browser{}, stopped: make(chan struct{})}
 	pool.generations[pool.current] = struct{}{}
 
-	pool.captureSem <- struct{}{}
+	require.True(t, pool.captureSem.TryAcquire())
 	result := make(chan error, 1)
 	go func() {
 		_, err := pool.Capture(context.Background(), "http://93.184.216.34/page")
 		result <- err
 	}()
 	time.Sleep(50 * time.Millisecond)
-	<-pool.captureSem
+	pool.captureSem.Release()
 
 	require.NoError(t, <-result)
 	assert.Greater(t, <-remaining, 150*time.Millisecond)

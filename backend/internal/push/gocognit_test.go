@@ -1,7 +1,11 @@
 package push
 
-import "testing"
+import (
+	"testing"
+
+	"foldex/internal/testsupport"
+)
 
 func TestS3776_LoadOrGenerateAtMost15(t *testing.T) {
-	assertCognitAtMost(t, cognitScores(t), "LoadOrGenerate", 15)
+	testsupport.AssertCognitAtMost(t, testsupport.CognitScores(t), "LoadOrGenerate", 15)
 }

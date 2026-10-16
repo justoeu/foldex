@@ -452,6 +452,27 @@ describe('SettingsPage — locked folders reset', () => {
     expect(state.folderPasswords[8]).toBe('folder-pass')
   })
 
+  // No master configured at all: the server answers 400
+  // `master_not_configured`, and the screen must translate that code into
+  // its own sentence ("Set a master password first") rather than the generic
+  // save failure — the code branch is the only thing pointing the user at
+  // the fix. `state.masterPassword` is deliberately left unset; the mock
+  // route already mirrors the real 400.
+  it('shows reset_no_master when reset answers 400 master_not_configured', async () => {
+    expect(state.masterPassword).toBeUndefined()
+    lockedFolder(21, 'VaultNoMaster')
+    await renderAtSection('locked')
+
+    await waitFor(() => expect(screen.getByText('VaultNoMaster')).toBeInTheDocument())
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: /reset password/i }))
+    await user.type(screen.getByLabelText('Master password'), 'anything-goes')
+    await user.click(screen.getByRole('button', { name: /^reset$/i }))
+
+    expect(await screen.findByText(/set a master password first/i)).toBeInTheDocument()
+    expect(state.folderPasswords[21]).toBe('folder-pass')
+  })
+
   it('shows empty state when no folders are locked', async () => {
     await renderAtSection('locked')
     await waitFor(() => expect(screen.getByText(/no password-protected folders/i)).toBeInTheDocument())

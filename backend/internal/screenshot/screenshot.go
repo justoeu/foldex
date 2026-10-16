@@ -21,18 +21,10 @@ func (p *Pool) Capture(ctx context.Context, pageURL string) ([]byte, error) {
 		return nil, fmt.Errorf("screenshot: invalid http(s) target")
 	}
 
-	waitCtx, waitCancel := context.WithTimeout(ctx, p.queueTimeout)
-	select {
-	case p.captureSem <- struct{}{}:
-		waitCancel()
-		defer func() { <-p.captureSem }()
-	case <-p.shutdown:
-		waitCancel()
-		return nil, errPoolClosed
-	case <-waitCtx.Done():
-		waitCancel()
-		return nil, fmt.Errorf("screenshot: wait for slot: %w", waitCtx.Err())
+	if err := p.acquireSlot(ctx); err != nil {
+		return nil, err
 	}
+	defer p.releaseSlot()
 
 	browser, hold, err := p.acquireBrowser(ctx)
 	if err != nil {

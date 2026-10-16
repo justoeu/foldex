@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"foldex/internal/auth/ipblock"
 	"net"
 	"net/http"
 	"strings"
@@ -71,7 +72,7 @@ func mountFrontDoor(r chi.Router, d Deps) {
 		return parsed != nil && containsIP(trustedNets, parsed)
 	}
 	if d.AuthRepo != nil {
-		blocklist := auth.NewBlocklist(d.AuthRepo.BlockedIPs)
+		blocklist := ipblock.NewBlocklist(d.AuthRepo.BlockedIPs)
 		r.Use(blocklistGate(blocklist))
 		if d.AdminHandler != nil {
 			d.AdminHandler.WithBlocklist(blocklist, isTrustedProxy)
@@ -113,20 +114,29 @@ func mountCORS(r chi.Router, d Deps) {
 	}))
 }
 
-func newFileHandler(d Deps, linksRepo *links.Repository) *links.ScreenshotHandler {
-	if d.Screenshotter == nil || d.Storage == nil {
-		return nil
+// newFileHandlers splits file serving from screenshot capture: files need
+// only object storage, capture additionally needs the browser. A build with
+// storage but no Chromium still serves/uploads/deletes images.
+func newFileHandlers(d Deps, linksRepo *links.Repository) (*links.FileHandler, *links.ScreenshotHandler) {
+	if d.Storage == nil {
+		return nil, nil
+	}
+	fileHandler := links.NewFileHandler(linksRepo, d.Storage, d.Logger).
+		WithEnqueuer(d.Worker).
+		WithFolderGate(folders.NewRepository(d.Pool), d.FolderUnlockKey)
+	if d.Screenshotter == nil {
+		return fileHandler, nil
 	}
 	if d.ScreenshotURL == nil {
 		d.Logger.Error("server: Screenshotter is set but ScreenshotURL is nil — refusing to mount /api/links/{id}/screenshot without an SSRF gate")
 		panic("server: Screenshotter is set but ScreenshotURL is nil — refusing to mount /api/links/{id}/screenshot without an SSRF gate")
 	}
-	return links.NewScreenshotHandler(linksRepo, d.Screenshotter, d.Storage, d.ScreenshotURL, d.Logger).
-		WithEnqueuer(d.Worker).
-		WithFolderGate(folders.NewRepository(d.Pool), d.FolderUnlockKey)
+	shot := links.NewScreenshotHandler(linksRepo, d.Screenshotter, d.Storage, d.ScreenshotURL, d.Logger)
+	shot.FileHandler = fileHandler
+	return fileHandler, shot
 }
 
-func publicShareRoutes(r chi.Router, d Deps, linksRepo *links.Repository, notesRepo *notes.Repository, fileHandler *links.ScreenshotHandler) {
+func publicShareRoutes(r chi.Router, d Deps, linksRepo *links.Repository, notesRepo *notes.Repository, fileHandler *links.FileHandler) {
 	r.Group(func(pub chi.Router) {
 		// /n/ and /go/ resolve viewer-scoped: the owner's session keeps them
 		// working, everyone else needs the row's explicit public opt-in. The
@@ -149,7 +159,7 @@ func publicShareRoutes(r chi.Router, d Deps, linksRepo *links.Repository, notesR
 	}
 }
 
-func mountAPI(r chi.Router, d Deps, grants authgate.Grants, linksRepo *links.Repository, notesRepo *notes.Repository, fileHandler *links.ScreenshotHandler) {
+func mountAPI(r chi.Router, d Deps, grants authgate.Grants, linksRepo *links.Repository, notesRepo *notes.Repository, fileHandler *links.FileHandler, shotHandler *links.ScreenshotHandler) {
 	r.Route("/api", func(api chi.Router) {
 		api.Use(auth.VaryCookie)
 		if d.AuthHandler != nil {
@@ -159,7 +169,7 @@ func mountAPI(r chi.Router, d Deps, grants authgate.Grants, linksRepo *links.Rep
 			principalStack(pr, d)
 			adminSurface(pr, d, grants)
 			contentCRUD(pr, d, grants, linksRepo, notesRepo)
-			storageOrUnavailable(pr, d, grants, notesRepo, fileHandler)
+			storageOrUnavailable(pr, d, grants, notesRepo, fileHandler, shotHandler)
 		})
 	})
 }
@@ -211,7 +221,11 @@ func adminSurface(pr chi.Router, d Deps, grants authgate.Grants) {
 		}
 		ar.Get("/addon/download", addonHandler.Download)
 		ar.Head("/addon/download", addonHandler.Download)
-		auth.NewAbuseHandler(auth.NewRepository(d.Pool),
+		abuseRepo := d.AuthRepo
+		if abuseRepo == nil {
+			abuseRepo = auth.NewRepository(d.Pool)
+		}
+		auth.NewAbuseHandler(abuseRepo,
 			abusepolicy.NewRepository(d.Pool), d.AbusePolicy,
 			d.Logger, d.AdminHandler.AuditPolicyChange, grants).Mount(ar)
 		if d.PolicyHandler != nil {
@@ -322,10 +336,14 @@ const (
 	pathLinkScreenshot = "/links/{id}/screenshot"
 )
 
-func storageOrUnavailable(pr chi.Router, d Deps, grants authgate.Grants, notesRepo *notes.Repository, fileHandler *links.ScreenshotHandler) {
+func storageOrUnavailable(pr chi.Router, d Deps, grants authgate.Grants, notesRepo *notes.Repository, fileHandler *links.FileHandler, shotHandler *links.ScreenshotHandler) {
 	writeGate := authgate.RequireWrite(grants, authctx.PermContentWrite)
 	if fileHandler != nil {
-		pr.With(writeGate).Post(pathLinkScreenshot, fileHandler.CaptureAndStore)
+		if shotHandler != nil {
+			pr.With(writeGate).Post(pathLinkScreenshot, shotHandler.CaptureAndStore)
+		} else {
+			pr.With(writeGate).Post(pathLinkScreenshot, http.HandlerFunc(writeStorageUnavailable))
+		}
 		pr.With(writeGate).Post(pathLinkImage, fileHandler.UploadImage)
 		pr.With(writeGate).Delete(pathLinkImage, fileHandler.DeleteImage)
 		pr.Get("/files/*", fileHandler.ProxyFile)

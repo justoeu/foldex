@@ -1,10 +1,14 @@
 package mailer
 
-import "testing"
+import (
+	"testing"
+
+	"foldex/internal/testsupport"
+)
 
 func TestS3776_SendLoadAssetsRenderAtMost15(t *testing.T) {
-	scores := cognitScores(t)
-	assertCognitAtMost(t, scores, "(*smtpMailer).Send", 15)
-	assertCognitAtMost(t, scores, "loadAssets", 15)
-	assertCognitAtMost(t, scores, "(*assets).render", 15)
+	scores := testsupport.CognitScores(t)
+	testsupport.AssertCognitAtMost(t, scores, "(*smtpMailer).Send", 15)
+	testsupport.AssertCognitAtMost(t, scores, "loadAssets", 15)
+	testsupport.AssertCognitAtMost(t, scores, "(*assets).render", 15)
 }

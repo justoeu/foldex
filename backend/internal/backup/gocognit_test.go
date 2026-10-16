@@ -1,13 +1,11 @@
 package backup
 
 import (
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+
+	"foldex/internal/testsupport"
 )
 
 func TestCognitiveComplexity_ExportAndInspectArchive(t *testing.T) {
@@ -20,7 +18,7 @@ func TestCognitiveComplexity_ExportAndInspectArchive(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := cognitOf(t, tc.file, tc.name)
+			got := testsupport.CognitOf(t, tc.file, tc.name)
 			assert.LessOrEqual(t, got, 15,
 				"%s cognitive=%d — extract early returns / unexported helpers, no NOSONAR", tc.name, got)
 		})
@@ -38,7 +36,7 @@ func TestCognitiveComplexity_RestoreHelpers(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := cognitOf(t, tc.file, tc.name)
+			got := testsupport.CognitOf(t, tc.file, tc.name)
 			assert.LessOrEqual(t, got, 15,
 				"%s cognitive=%d — extract early returns / unexported helpers, no NOSONAR", tc.name, got)
 		})
@@ -55,7 +53,7 @@ func TestCognitiveComplexity_RestoreDuplicateStagedAndCopy(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := cognitOf(t, tc.file, tc.name)
+			got := testsupport.CognitOf(t, tc.file, tc.name)
 			assert.LessOrEqual(t, got, 15,
 				"%s cognitive=%d — extract early returns / unexported helpers, no NOSONAR", tc.name, got)
 		})
@@ -72,27 +70,9 @@ func TestCognitiveComplexity_LoadRestoreLedgerAndManifestIntegrity(t *testing.T)
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := cognitOf(t, tc.file, tc.name)
+			got := testsupport.CognitOf(t, tc.file, tc.name)
 			assert.LessOrEqual(t, got, 15,
 				"%s cognitive=%d — extract early returns / unexported helpers, no NOSONAR", tc.name, got)
 		})
 	}
-}
-
-func cognitOf(t *testing.T, file, want string) int {
-	t.Helper()
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, file, nil, 0)
-	require.NoError(t, err)
-	var found *ast.FuncDecl
-	ast.Inspect(f, func(n ast.Node) bool {
-		fn, ok := n.(*ast.FuncDecl)
-		if ok && cognitFuncName(fn) == want {
-			found = fn
-			return false
-		}
-		return true
-	})
-	require.NotNil(t, found, "%s must live in %s", want, file)
-	return cognitComplexity(found)
 }

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"foldex/internal/ports"
 	"io"
 	"log/slog"
 	"net/http"
@@ -579,6 +580,28 @@ func TestBackupWithoutObjectStoreAnswers503WithEnvelope(t *testing.T) {
 	assert.NotEmpty(t, body.Error.Message)
 }
 
+// File serving must not depend on Chromium: storage alone yields a file
+// handler (only the capture route degrades to 503).
+func TestNewFileHandlers_StorageAloneServesFiles(t *testing.T) {
+	t.Parallel()
+	d := fullyWiredDeps()
+	d.Screenshotter = nil
+	files, shot := newFileHandlers(d, nil)
+	require.NotNil(t, files, "storage without a screenshotter must still serve files")
+	assert.Nil(t, shot)
+
+	d.Storage = nil
+	files, shot = newFileHandlers(d, nil)
+	assert.Nil(t, files)
+	assert.Nil(t, shot)
+
+	d = fullyWiredDeps()
+	files, shot = newFileHandlers(d, nil)
+	require.NotNil(t, files)
+	require.NotNil(t, shot)
+	assert.Same(t, files, shot.FileHandler, "capture and files share one handler state")
+}
+
 func TestStatusRouteIsMounted(t *testing.T) {
 	t.Parallel()
 	router := New(Deps{
@@ -687,7 +710,7 @@ func (stubBucket) DeleteObjects(context.Context, []string) error { return nil }
 
 var (
 	_ links.Screenshotter  = stubShotter{}
-	_ links.Uploader       = stubUploader{}
+	_ ports.Uploader       = stubUploader{}
 	_ backup.StorageBucket = stubBucket{}
 )
 

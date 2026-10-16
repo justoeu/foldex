@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"foldex/internal/mailer"
@@ -72,12 +71,7 @@ type Relay struct {
 	logger *slog.Logger
 	opts   Options
 
-	ctx     context.Context
-	cancel  context.CancelFunc
-	stopped atomic.Bool
-	start   sync.Once
-	stop    sync.Once
-	wg      sync.WaitGroup
+	life Lifecycle
 }
 
 func NewRelay(repo *Repository, sink Sink, opts Options, logger *slog.Logger) *Relay {
@@ -112,37 +106,13 @@ func NewRelay(repo *Repository, sink Sink, opts Options, logger *slog.Logger) *R
 }
 
 // Start launches the polling loop. It returns immediately.
-//
-// Guarded so a second call cannot replace the context out from under the
-// running loop and leak it — the same reason Stop is a sync.Once.
 func (rl *Relay) Start(parent context.Context) {
-	rl.start.Do(func() {
-		if rl.stopped.Load() {
-			return
-		}
-		rl.ctx, rl.cancel = context.WithCancel(parent)
-		rl.wg.Add(1)
-		go rl.loop()
-	})
+	rl.life.Start(parent, func(context.Context) { rl.loop() })
 }
 
-// Stop rejects new work, cancels in-flight sends and joins the loop.
-//
-// Ordering matters and is the same as every other worker in this codebase: set
-// stopped FIRST so a tick already in progress does not claim more rows, then
-// cancel, then wait.
-func (rl *Relay) Stop() {
-	rl.stop.Do(func() {
-		rl.stopped.Store(true)
-		if rl.cancel != nil {
-			rl.cancel()
-		}
-		rl.wg.Wait()
-	})
-}
+func (rl *Relay) Stop() { rl.life.Stop() }
 
 func (rl *Relay) loop() {
-	defer rl.wg.Done()
 	ticker := time.NewTicker(rl.opts.PollInterval)
 	defer ticker.Stop()
 	purge := time.NewTicker(defaultPurgeInterval)
@@ -155,7 +125,7 @@ func (rl *Relay) loop() {
 
 	for {
 		select {
-		case <-rl.ctx.Done():
+		case <-rl.life.Ctx().Done():
 			return
 		case <-purge.C:
 			rl.purge()
@@ -164,7 +134,7 @@ func (rl *Relay) loop() {
 			for rl.drain() {
 				// A full batch means more is waiting; keep going rather than
 				// idling until the next tick with a backlog on the floor.
-				if rl.stopped.Load() || rl.ctx.Err() != nil {
+				if rl.life.Stopped() || rl.life.Ctx().Err() != nil {
 					return
 				}
 			}
@@ -187,12 +157,12 @@ func (rl *Relay) drain() bool {
 }
 
 func (rl *Relay) claimBatch() ([]Outgoing, bool) {
-	if rl.stopped.Load() || rl.ctx.Err() != nil {
+	if rl.life.Stopped() || rl.life.Ctx().Err() != nil {
 		return nil, false
 	}
-	msgs, err := rl.repo.Claim(rl.ctx, rl.opts.Batch)
+	msgs, err := rl.repo.Claim(rl.life.Ctx(), rl.opts.Batch)
 	if err != nil {
-		if rl.ctx.Err() == nil {
+		if rl.life.Ctx().Err() == nil {
 			rl.logger.Error("mail outbox claim", "err", err)
 		}
 		return nil, false
@@ -227,7 +197,7 @@ func (rl *Relay) deliverGuarded(m Outgoing) {
 func (rl *Relay) dispatchBatch(jobs chan Outgoing, wg *sync.WaitGroup, msgs []Outgoing) bool {
 	for _, m := range msgs {
 		select {
-		case <-rl.ctx.Done():
+		case <-rl.life.Ctx().Done():
 			close(jobs)
 			wg.Wait()
 			return false
@@ -239,26 +209,86 @@ func (rl *Relay) dispatchBatch(jobs chan Outgoing, wg *sync.WaitGroup, msgs []Ou
 	return len(msgs) == rl.opts.Batch
 }
 
-func (rl *Relay) deliver(m Outgoing) {
-	ctx, cancel := context.WithTimeout(rl.ctx, rl.opts.SendTimeout)
-	err := rl.sink.Deliver(ctx, m)
-	cancel()
+// errInvalidClaim marks a claimed row that cannot be settled: without an id
+// and a claim token the CAS settle statements can never match it, so running
+// it through the sink would send mail whose outcome is unrecordable.
+var errInvalidClaim = errors.New("mailoutbox: invalid claim")
 
-	// Settling uses a context detached from the relay's: a send that succeeded
-	// and then could not be recorded is redelivered on the next claim, and
-	// during shutdown that is exactly when the cancellation lands.
-	settleCtx, settleCancel := context.WithTimeout(context.WithoutCancel(rl.ctx), 5*time.Second)
-	defer settleCancel()
+// validateClaim is the pure check that a claimed row is settleable at all.
+// It reads no state and cannot fail for a row Claim actually produced — the
+// columns it checks are the ones Claim itself writes.
+func validateClaim(m Outgoing) error {
+	switch {
+	case m.ID <= 0:
+		return fmt.Errorf("%w: missing id", errInvalidClaim)
+	case m.ClaimToken == "":
+		return fmt.Errorf("%w: missing claim token", errInvalidClaim)
+	default:
+		return nil
+	}
+}
 
-	if err == nil {
-		if merr := rl.repo.MarkPublished(settleCtx, m.ID, m.ClaimToken); merr != nil {
-			rl.logger.Error("mail outbox settle", "id", m.ID, "err", merr)
+// claimStage names how a finished delivery is settled.
+type claimStage int
+
+const (
+	stageSettledPublished claimStage = iota
+	stageSettledRetry
+	stageSettledPermanent
+)
+
+// claimRecovery maps a delivery outcome to its settle stage, in order. The
+// table keeps the decision in one place: deliver runs the claim, then the
+// first matching row says what happens to it.
+var claimRecovery = []struct {
+	match func(error) bool
+	stage claimStage
+}{
+	{func(err error) bool { return err == nil }, stageSettledPublished},
+	{func(err error) bool { return errors.Is(err, ErrPermanent) }, stageSettledPermanent},
+	{func(error) bool { return true }, stageSettledRetry},
+}
+
+func claimStageFor(err error) claimStage {
+	for _, row := range claimRecovery {
+		if row.match(err) {
+			return row.stage
 		}
+	}
+	return stageSettledRetry
+}
+
+func (rl *Relay) deliver(m Outgoing) {
+	if err := validateClaim(m); err != nil {
+		rl.logger.Error("mail outbox invalid claim", "id", m.ID, "err", err)
 		return
 	}
+	ctx, cancel := context.WithTimeout(rl.life.Ctx(), rl.opts.SendTimeout)
+	err := rl.sink.Deliver(ctx, m)
+	cancel()
+	rl.recoverClaim(m, err)
+}
 
-	reason := failureReason(err)
-	fatal := errors.Is(err, ErrPermanent)
+// recoverClaim settles one delivered claim according to claimRecovery and
+// reports the stage it landed in. Settling uses a context detached from
+// the relay's: a send that succeeded and then could not be recorded is
+// redelivered on the next claim, and during shutdown that is exactly when
+// the cancellation lands.
+func (rl *Relay) recoverClaim(m Outgoing, deliverErr error) (claimStage, error) {
+	stage := claimStageFor(deliverErr)
+	settleCtx, settleCancel := context.WithTimeout(context.WithoutCancel(rl.life.Ctx()), 5*time.Second)
+	defer settleCancel()
+
+	if stage == stageSettledPublished {
+		if merr := rl.repo.MarkPublished(settleCtx, m.ID, m.ClaimToken); merr != nil {
+			rl.logger.Error("mail outbox settle", "id", m.ID, "err", merr)
+			return stage, merr
+		}
+		return stage, nil
+	}
+
+	reason := failureReason(deliverErr)
+	fatal := stage == stageSettledPermanent
 	retryIn := backoff(m.Attempts)
 	rl.logger.Warn("mail delivery failed",
 		"template", m.Template, "attempt", m.Attempts, "reason", reason,
@@ -266,15 +296,17 @@ func (rl *Relay) deliver(m Outgoing) {
 	if merr := rl.repo.MarkFailed(settleCtx, m.ID, m.ClaimToken, reason,
 		retryIn, rl.opts.MaxAttempts, fatal); merr != nil {
 		rl.logger.Error("mail outbox settle failure", "id", m.ID, "err", merr)
+		return stage, merr
 	}
+	return stage, nil
 }
 
 func (rl *Relay) requeueStuck() {
-	ctx, cancel := context.WithTimeout(rl.ctx, 10*time.Second)
+	ctx, cancel := context.WithTimeout(rl.life.Ctx(), 10*time.Second)
 	defer cancel()
 	n, err := rl.repo.RequeueStuck(ctx, rl.opts.ClaimTTL)
 	if err != nil {
-		if rl.ctx.Err() == nil {
+		if rl.life.Ctx().Err() == nil {
 			rl.logger.Error("mail outbox requeue", "err", err)
 		}
 		return
@@ -285,9 +317,9 @@ func (rl *Relay) requeueStuck() {
 }
 
 func (rl *Relay) purge() {
-	ctx, cancel := context.WithTimeout(rl.ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(rl.life.Ctx(), 30*time.Second)
 	defer cancel()
-	if _, err := rl.repo.Purge(ctx, rl.opts.PublishedTTL, rl.opts.FailedTTL); err != nil && rl.ctx.Err() == nil {
+	if _, err := rl.repo.Purge(ctx, rl.opts.PublishedTTL, rl.opts.FailedTTL); err != nil && rl.life.Ctx().Err() == nil {
 		rl.logger.Error("mail outbox purge", "err", err)
 	}
 }

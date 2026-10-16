@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import type { Folder } from '../api/types'
 import { isGradient, parseGradient } from '../lib/tagColor'
 import { suggestColor } from '../lib/suggestColor'
-import type { ColorMode } from '../components/ColorModeFields'
+import type { ColorMode } from '../lib/entityColors'
 import type { FolderDialogValues } from '../lib/folderDialogPayload'
 
 export function useFolderDialogForm(

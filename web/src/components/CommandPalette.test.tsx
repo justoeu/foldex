@@ -238,6 +238,37 @@ describe('CommandPalette keyboard activation', () => {
   // had to grow with every new group. A tag-only match is results — this
   // is the extension-regression the derived hasResults guard makes
   // structural.
+  // INV-130: activating a note opens the in-app reader, never the public
+  // /n/{slug} share page in a new tab.
+  it('Enter on a note opens it in-app instead of navigating to /n/', async () => {
+    state.notes.push({
+      id: 9, title: 'Field Notes', slug: 'field-notes', body_text_snippet: 'snippet',
+      tags: [], created_at: '', updated_at: '',
+    } as any)
+    const onViewNote = vi.fn()
+    const onClose = vi.fn()
+    renderPalette(<CommandPalette open onClose={onClose} onViewNote={onViewNote} />)
+    const user = userEvent.setup()
+    const input = await screen.findByPlaceholderText(/Search by/i)
+    await user.type(input, 'Field')
+    await waitFor(() => expect(screen.getByText('Field Notes')).toBeInTheDocument())
+    await user.keyboard('{Enter}')
+    expect(onViewNote).toHaveBeenCalledWith(9)
+    expect(openSpy).not.toHaveBeenCalled()
+    expect(onClose).toHaveBeenCalled()
+  })
+
+  it('clicking a tag row filters by that tag', async () => {
+    state.tags.push({ id: 3, name: 'jira', color: '#1f6feb', icon: null })
+    const onSelectTag = vi.fn()
+    renderPalette(<CommandPalette open onClose={vi.fn()} onSelectTag={onSelectTag} />)
+    const user = userEvent.setup()
+    const input = await screen.findByPlaceholderText(/Search by/i)
+    await user.type(input, 'jira')
+    await user.click(await screen.findByRole('button', { name: /filter by jira/i }))
+    expect(onSelectTag).toHaveBeenCalledWith({ id: 3, name: 'jira' })
+  })
+
   it('a query matching only a tag is results, not "no matches"', async () => {
     state.tags.push({ id: 1, name: 'jira', color: '#1f6feb', icon: null })
     renderPalette(<CommandPalette open onClose={vi.fn()} />)

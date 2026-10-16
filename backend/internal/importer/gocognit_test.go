@@ -1,9 +1,13 @@
 package importer
 
-import "testing"
+import (
+	"testing"
+
+	"foldex/internal/testsupport"
+)
 
 func TestS3776_ValidateLinksAndParseUploadAtMost15(t *testing.T) {
-	scores := cognitScores(t)
-	assertCognitAtMost(t, scores, "(JSONFile).validateLinks", 15)
-	assertCognitAtMost(t, scores, "(*Handler).parseUpload", 15)
+	scores := testsupport.CognitScores(t)
+	testsupport.AssertCognitAtMost(t, scores, "(JSONFile).validateLinks", 15)
+	testsupport.AssertCognitAtMost(t, scores, "(*Handler).parseUpload", 15)
 }

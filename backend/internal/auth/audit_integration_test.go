@@ -5,6 +5,7 @@ package auth_test
 import (
 	"context"
 	"fmt"
+	"foldex/internal/auth/ipblock"
 	"net/http"
 	"testing"
 	"time"
@@ -150,6 +151,93 @@ func TestAudit_OwnFeedIncludesLinkClicks(t *testing.T) {
 	assert.Equal(t, "Clicked bookmark", *entries[0].Subject)
 	require.NotNil(t, entries[0].EntityID)
 	assert.Equal(t, linkID, *entries[0].EntityID)
+}
+
+// The merged feed in ONE call: interleaved audit rows and clicks come back in
+// a single time-descending order under a single combined limit, a click whose
+// link was deleted survives with an empty subject (the LEFT JOIN is the only
+// reason it does), and another account's clicks — not just its audit rows —
+// are absent. Each of these fails against a different one-line regression:
+// per-source limits, an INNER JOIN, or an unscoped click query.
+func TestAudit_OwnFeedMergesClicksDeletedLinkLimitAndTenantScope(t *testing.T) {
+	repo, pool, other, member := auditFixture(t)
+	ctx := context.Background()
+	base := time.Now().Add(-time.Hour).Truncate(time.Microsecond)
+	at := func(min int) time.Time { return base.Add(time.Duration(min) * time.Minute) }
+
+	insertLink := func(uid int64, title, slug string) int64 {
+		var id int64
+		require.NoError(t, pool.QueryRow(ctx, `
+			INSERT INTO link (user_id, url, title, slug)
+			VALUES ($1, $4, $2, $3) RETURNING id`,
+			uid, title, fmt.Sprintf("merged-%d-%s", uid, slug),
+			fmt.Sprintf("https://merged.example/%d/%s", uid, slug)).Scan(&id))
+		return id
+	}
+	insertClick := func(uid, linkID int64, when time.Time) {
+		_, err := pool.Exec(ctx, `
+			INSERT INTO click_log (user_id, entity_kind, entity_id, clicked_at)
+			VALUES ($1, 'link', $2, $3)`, uid, linkID, when)
+		require.NoError(t, err)
+	}
+	insertAudit := func(uid int64, subject string, when time.Time) {
+		_, err := pool.Exec(ctx, `
+			INSERT INTO audit_log (actor_id, action, subject, created_at)
+			VALUES ($1, 'link.created', $2, $3)`, uid, subject, when)
+		require.NoError(t, err)
+	}
+
+	ownedID := insertLink(int64(member.ID), "Owned bookmark", "owned")
+	deletedID := insertLink(int64(member.ID), "Deleted bookmark", "deleted")
+	otherID := insertLink(int64(other.ID), "Other bookmark", "other")
+
+	insertAudit(int64(member.ID), "audit-oldest", at(0))
+	insertClick(int64(member.ID), deletedID, at(1))
+	insertAudit(int64(member.ID), "audit-mid", at(2))
+	insertClick(int64(member.ID), ownedID, at(3))
+	insertClick(int64(member.ID), ownedID, at(4))
+	// Newest of all, on purpose: an unscoped click query would put another
+	// account's row at the head of this feed.
+	insertClick(int64(other.ID), otherID, at(5))
+	insertAudit(int64(other.ID), "other-audit", at(6))
+
+	_, err := pool.Exec(ctx, `DELETE FROM link WHERE id = $1`, deletedID)
+	require.NoError(t, err)
+
+	entries, err := repo.ListOwnActivity(ctx, member.ID, 0, nil, 50)
+	require.NoError(t, err)
+	require.Len(t, entries, 5, "only the caller's five rows belong in the feed")
+
+	subjects := make([]string, len(entries))
+	for i, e := range entries {
+		require.NotNil(t, e.Subject)
+		subjects[i] = *e.Subject
+		if i > 0 {
+			assert.False(t, e.CreatedAt.After(entries[i-1].CreatedAt),
+				"merged feed must be time-descending across both sources")
+		}
+		assert.NotEqual(t, "Other bookmark", *e.Subject)
+		assert.NotEqual(t, "other-audit", *e.Subject)
+	}
+	assert.Equal(t,
+		[]string{"Owned bookmark", "Owned bookmark", "audit-mid", "", "audit-oldest"},
+		subjects)
+
+	deleted := entries[3]
+	assert.Equal(t, "link.clicked", deleted.Action)
+	assert.Negative(t, deleted.ID)
+	require.NotNil(t, deleted.EntityID)
+	assert.Equal(t, deletedID, *deleted.EntityID,
+		"a deleted link's click keeps its entity id even though its title is gone")
+
+	// The limit applies AFTER the merge: a per-source limit would return up
+	// to six rows here (three clicks plus two audit rows), not the newest three.
+	limited, err := repo.ListOwnActivity(ctx, member.ID, 0, nil, 3)
+	require.NoError(t, err)
+	require.Len(t, limited, 3)
+	assert.Equal(t, entries[0].ID, limited[0].ID)
+	assert.Equal(t, entries[1].ID, limited[1].ID)
+	assert.Equal(t, entries[2].ID, limited[2].ID)
 }
 
 // The merged feed pages on its last row's id, and the two sources have
@@ -699,7 +787,7 @@ func TestFailureBursts_CountsPerAddress(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Blocklist
+// ipblock.Blocklist
 // ─────────────────────────────────────────────────────────────────────
 
 func TestIPBlock_RoundTripsAndIsIdempotent(t *testing.T) {
@@ -750,11 +838,11 @@ func TestIPBlock_RefusesToGrowPastTheCap(t *testing.T) {
 	_, err := pool.Exec(ctx, `
 		INSERT INTO ip_block (ip)
 		SELECT ('198.18.' || (i / 256) || '.' || (i % 256))::inet
-		FROM generate_series(0, $1) AS i`, auth.MaxIPBlocks-1)
+		FROM generate_series(0, $1) AS i`, ipblock.MaxIPBlocks-1)
 	require.NoError(t, err)
 
 	_, err = repo.BlockIP(ctx, "203.0.113.9", "", &owner.ID, owner.Email)
-	assert.ErrorIs(t, err, auth.ErrBlockFull)
+	assert.ErrorIs(t, err, ipblock.ErrBlockFull)
 }
 
 // The origins and risk cards say whether the address they name is already

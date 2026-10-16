@@ -106,4 +106,12 @@ describe('web deadcode contracts', () => {
   it('lib modules do not import upward from components', () => {
     expect(folderPayloadSrc).not.toMatch(/from ['"]\.\.\/components/)
   })
+
+  it('hooks import ColorMode from lib, not components', () => {
+    const modules = import.meta.glob('./hooks/*.{ts,tsx}', { query: '?raw', eager: true, import: 'default' }) as Record<string, string>
+    for (const [path, src] of Object.entries(modules)) {
+      if (path.includes('.test.')) continue
+      expect(src, path).not.toMatch(/ColorMode[^'"]*from ['"][^'"]*components\//)
+    }
+  })
 })

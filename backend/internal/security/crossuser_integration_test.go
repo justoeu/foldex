@@ -398,9 +398,9 @@ func TestCrossUser_PublicRoutesResolveWithoutASession(t *testing.T) {
 	assert.Equal(t, "https://bravo.example", dest, "an opted-in link resolves anonymously again")
 
 	// Notes share the same contract on their surface.
-	_, err = f.nrepo.SystemViewAndResolve(ctx, f.b.note.Slug, 0)
+	_, err = f.nrepo.SystemViewAndResolveBySlug(ctx, f.b.note.Slug, 0)
 	require.ErrorIs(t, err, domainerr.ErrNotFound)
-	owned, err := f.nrepo.SystemViewAndResolve(ctx, f.b.note.Slug, f.b.uid)
+	owned, err := f.nrepo.SystemViewAndResolveBySlug(ctx, f.b.note.Slug, f.b.uid)
 	require.NoError(t, err)
 	assert.Equal(t, f.b.note.ID, owned.ID)
 }
@@ -426,7 +426,7 @@ func TestClickLogOwnerMatchesEntityOwner(t *testing.T) {
 		require.NoError(t, err)
 		_, err = f.lrepo.ClickAndResolveBySlug(ctx, tn.link.Slug, tn.uid)
 		require.NoError(t, err)
-		_, err = f.nrepo.SystemViewAndResolve(ctx, tn.note.Slug, tn.uid)
+		_, err = f.nrepo.SystemViewAndResolveBySlug(ctx, tn.note.Slug, tn.uid)
 		require.NoError(t, err)
 	}
 

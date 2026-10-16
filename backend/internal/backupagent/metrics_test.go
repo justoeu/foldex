@@ -1,6 +1,7 @@
 package backupagent
 
 import (
+	"foldex/internal/backupjobs"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -46,12 +47,12 @@ func TestMetrics_ObserveWritesTheSeriesTheAlertRulesWatch(t *testing.T) {
 	m := NewMetrics()
 	finished := time.Date(2026, 8, 25, 3, 31, 0, 0, time.UTC)
 
-	m.ObserveFailure(JobDump, 2*time.Second, 3)
+	m.ObserveFailure(backupjobs.JobDump, 2*time.Second, 3)
 	_, body := scrape(t, m, "tk", "Bearer tk")
 	assert.Contains(t, body, `foldex_backup_consecutive_failures{job="dump"} 3`)
 	assert.Contains(t, body, `foldex_backup_runs_total{job="dump",status="failed"} 1`)
 
-	m.ObserveSuccess(JobDump, finished, 5*time.Second, 12345)
+	m.ObserveSuccess(backupjobs.JobDump, finished, 5*time.Second, 12345)
 	_, body = scrape(t, m, "tk", "Bearer tk")
 	assert.Contains(t, body, `foldex_backup_consecutive_failures{job="dump"} 0`,
 		"a success must reset the consecutive counter or the alert never clears")
@@ -66,12 +67,12 @@ func TestMetrics_ObserveWritesTheSeriesTheAlertRulesWatch(t *testing.T) {
 
 func TestMetrics_SeedPrimesStalenessAcrossRestarts(t *testing.T) {
 	m := NewMetrics()
-	m.SeedLastSuccess(JobDump, time.Time{})
+	m.SeedLastSuccess(backupjobs.JobDump, time.Time{})
 	_, body := scrape(t, m, "tk", "Bearer tk")
 	assert.False(t, strings.Contains(body, `foldex_backup_last_success_timestamp_seconds{job="dump"}`),
 		"never-succeeded must stay ABSENT so the absent() alert can see it — seeding zero would silence it")
 
-	m.SeedLastSuccess(JobDump, time.Date(2026, 8, 24, 3, 30, 0, 0, time.UTC))
+	m.SeedLastSuccess(backupjobs.JobDump, time.Date(2026, 8, 24, 3, 30, 0, 0, time.UTC))
 	_, body = scrape(t, m, "tk", "Bearer tk")
 	assert.Contains(t, body, `foldex_backup_last_success_timestamp_seconds{job="dump"}`)
 }

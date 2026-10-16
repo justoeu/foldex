@@ -143,8 +143,10 @@ func TestService_ExportProducesValidZipWithManifest(t *testing.T) {
 	imgB := fmt.Sprintf("images/%d.jpg", lb.ID)
 	bucket.objs[shotA] = []byte("img-1-bytes")
 	bucket.objs[imgB] = []byte("img-2-bytes")
-	require.NoError(t, lrepo.UpdateOGImage(ctx, uid, la.ID, "/api/files/"+shotA))
-	require.NoError(t, lrepo.UpdateOGImage(ctx, uid, lb.ID, "/api/files/"+imgB))
+	_, ogErr := lrepo.ReplaceOGImage(ctx, uid, la.ID, "/api/files/"+shotA)
+	require.NoError(t, ogErr)
+	_, ogErr = lrepo.ReplaceOGImage(ctx, uid, lb.ID, "/api/files/"+imgB)
+	require.NoError(t, ogErr)
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	svc := backup.NewService(pool, bucket, logger)
@@ -276,7 +278,8 @@ func TestService_ExportStreamsGlobalListingAndRetainsOnlyOwnedMetadata(t *testin
 	link, err := lrepo.Create(context.Background(), uid, links.CreateInput{URL: "https://owned", Title: "Owned"})
 	require.NoError(t, err)
 	ownedKey := fmt.Sprintf("images/%d.jpg", link.ID)
-	require.NoError(t, lrepo.UpdateOGImage(context.Background(), uid, link.ID, "/api/files/"+ownedKey))
+	_, ogErr := lrepo.ReplaceOGImage(context.Background(), uid, link.ID, "/api/files/"+ownedKey)
+	require.NoError(t, ogErr)
 
 	bucket := newStubBucket()
 	bucket.objs[ownedKey] = []byte("owned")

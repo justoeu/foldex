@@ -1,9 +1,13 @@
 package screenshot
 
-import "testing"
+import (
+	"testing"
+
+	"foldex/internal/testsupport"
+)
 
 func TestS3776_AcquireBrowserAndCloseAtMost15(t *testing.T) {
-	scores := cognitScores(t)
-	assertCognitAtMost(t, scores, "(*Pool).acquireBrowser", 15)
-	assertCognitAtMost(t, scores, "(*Pool).Close", 15)
+	scores := testsupport.CognitScores(t)
+	testsupport.AssertCognitAtMost(t, scores, "(*Pool).acquireBrowser", 15)
+	testsupport.AssertCognitAtMost(t, scores, "(*Pool).Close", 15)
 }

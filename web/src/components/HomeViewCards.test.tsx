@@ -103,6 +103,7 @@ describe('CardsView alpha ordering', () => {
         onOpenFolder={noop}
         onEditFolder={noop}
         onMoveLinkToFolder={noop}
+        onViewNote={noop}
         onMoveNoteToFolder={noop}
         onMergeEntries={noop}
         onMoveFolder={noop}
@@ -137,6 +138,7 @@ describe('CardsView mutation wiring', () => {
       onOpenFolder: noop,
       onEditFolder: noop,
       onMoveLinkToFolder: noop,
+      onViewNote: noop,
       onMoveNoteToFolder: noop,
       onMergeEntries: noop,
       onMoveFolder: noop,

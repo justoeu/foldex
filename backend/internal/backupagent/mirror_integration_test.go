@@ -4,6 +4,7 @@ package backupagent
 
 import (
 	"context"
+	"foldex/internal/backupjobs"
 	"testing"
 	"time"
 
@@ -24,7 +25,7 @@ func TestMirrorRun_DefersToARealRestoreInFlight(t *testing.T) {
 	source.listing = []ObjectInfo{{Key: "screens/1.png", Size: 3, LastModified: time.Now()}}
 	dest := newRecorderStore()
 
-	job, err := NewMirrorJob(Config{AllowPlaintext: true}, pool, NewRunStore(pool), source, dest, testLogger())
+	job, err := NewMirrorJob(Config{AllowPlaintext: true}, pool, backupjobs.NewRunStore(pool), source, dest, testLogger())
 	require.NoError(t, err)
 	job.restoreProbeEvery = 50 * time.Millisecond
 	job.restoreProbeDeadline = 300 * time.Millisecond
@@ -41,7 +42,7 @@ func TestMirrorRun_DefersToARealRestoreInFlight(t *testing.T) {
 
 	_, _, reason, err := job.Run(ctx)
 	require.Error(t, err)
-	assert.Equal(t, ReasonRestoreInFlight, reason)
+	assert.Equal(t, backupjobs.ReasonRestoreInFlight, reason)
 	assert.Empty(t, dest.uploads, "nothing may be mirrored while the restore holds the bucket")
 
 	// Lock released: the same job proceeds and copies.
@@ -59,12 +60,12 @@ func TestSucceed_MirrorStatsLandInTheirColumnsAndDumpLeavesThemNull(t *testing.T
 	ctx := context.Background()
 	pool := testdb.Shared(t)
 	require.NoError(t, testdb.Reset(ctx, pool))
-	s := NewRunStore(pool)
+	s := backupjobs.NewRunStore(pool)
 
-	mirrorID, err := s.Begin(ctx, JobMirror, time.Now())
+	mirrorID, err := s.Begin(ctx, backupjobs.JobMirror, time.Now())
 	require.NoError(t, err)
-	require.NoError(t, s.Succeed(ctx, mirrorID, &Artifact{
-		Mirror: &MirrorStats{ObjectsScanned: 12, ObjectsCopied: 3, BytesCopied: 4096},
+	require.NoError(t, s.Succeed(ctx, mirrorID, &backupjobs.Artifact{
+		Mirror: &backupjobs.MirrorStats{ObjectsScanned: 12, ObjectsCopied: 3, BytesCopied: 4096},
 	}, nil))
 
 	var scanned, copied, bytesCopied int64
@@ -78,9 +79,9 @@ func TestSucceed_MirrorStatsLandInTheirColumnsAndDumpLeavesThemNull(t *testing.T
 	assert.Nil(t, key, "the mirror ships a delta, never one artifact object")
 
 	// The dump's shape is untouched: artifact columns filled, counters NULL.
-	dumpID, err := s.Begin(ctx, JobDump, time.Now())
+	dumpID, err := s.Begin(ctx, backupjobs.JobDump, time.Now())
 	require.NoError(t, err)
-	require.NoError(t, s.Succeed(ctx, dumpID, &Artifact{Key: "backups/dump/x", Bytes: 7, SHA256: "aa"}, nil))
+	require.NoError(t, s.Succeed(ctx, dumpID, &backupjobs.Artifact{Key: "backups/dump/x", Bytes: 7, SHA256: "aa"}, nil))
 	var dumpKey string
 	var nullScanned *int64
 	require.NoError(t, pool.QueryRow(ctx, `
@@ -99,8 +100,8 @@ func TestIntervalLoop_TickerFiresAndRecordsRuns(t *testing.T) {
 	require.NoError(t, err)
 	agent.skewWarning = nil
 	executed := make(chan struct{}, 8)
-	agent.jobs = []jobSpec{{name: JobMirror,
-		run: func(context.Context, int64) (*Artifact, map[string]any, string, error) {
+	agent.jobs = []jobSpec{{name: backupjobs.JobMirror,
+		run: func(context.Context, int64) (*backupjobs.Artifact, map[string]any, string, error) {
 			// Non-blocking: if the assertion below has already passed its
 			// count, a full buffer must not park this send inside spec.run
 			// and wedge Stop()'s wg.Wait on a saturated machine.
@@ -108,11 +109,11 @@ func TestIntervalLoop_TickerFiresAndRecordsRuns(t *testing.T) {
 			case executed <- struct{}{}:
 			default:
 			}
-			return &Artifact{Mirror: &MirrorStats{ObjectsScanned: 1}}, nil, "", nil
+			return &backupjobs.Artifact{Mirror: &backupjobs.MirrorStats{ObjectsScanned: 1}}, nil, "", nil
 		}}}
 	// forceTiming, not a config interval: the override survives the sync
 	// loop's recompute, and no env value can express a sub-second cadence.
-	agent.forceTiming(JobMirror, Timing{Interval: 80 * time.Millisecond, Source: "env"})
+	agent.forceTiming(backupjobs.JobMirror, backupjobs.Timing{Interval: 80 * time.Millisecond, Source: "env"})
 	// A fresh success keeps boot catch-up (and its minutes of jitter) out of
 	// the way: what is under test is the ticker branch of the scheduler.
 	_, err = pool.Exec(ctx, `
@@ -148,14 +149,14 @@ func TestConsecutiveFailures_RestoreInFlightDoesNotCount(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.Shared(t)
 	require.NoError(t, testdb.Reset(ctx, pool))
-	s := NewRunStore(pool)
+	s := backupjobs.NewRunStore(pool)
 
-	for _, reason := range []string{ReasonRestoreInFlight, ReasonMirrorCopyFailed} {
-		id, err := s.Begin(ctx, JobMirror, time.Now())
+	for _, reason := range []string{backupjobs.ReasonRestoreInFlight, backupjobs.ReasonMirrorCopyFailed} {
+		id, err := s.Begin(ctx, backupjobs.JobMirror, time.Now())
 		require.NoError(t, err)
 		require.NoError(t, s.Fail(ctx, id, reason))
 	}
-	n, err := s.ConsecutiveFailures(ctx, JobMirror)
+	n, err := s.ConsecutiveFailures(ctx, backupjobs.JobMirror)
 	require.NoError(t, err)
 	assert.Equal(t, 1, n,
 		"a long per-user restore says nothing about whether the mirror WORKS — paging on it trains the operator to ignore the alert")

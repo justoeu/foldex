@@ -256,10 +256,7 @@ func runRestoreObjectTasks(ctx context.Context, tasks []restoreObjectTask) ([]re
 }
 
 func restoreWorkerCount(taskCount int) int {
-	if taskCount < restoreObjectConcurrency {
-		return taskCount
-	}
-	return restoreObjectConcurrency
+	return min(taskCount, restoreObjectConcurrency)
 }
 
 func startRestoreObjectWorkers(ctx context.Context, tasks []restoreObjectTask, jobs <-chan int, results []restoreObjectResult, count int, workers *sync.WaitGroup, fail func(error)) {

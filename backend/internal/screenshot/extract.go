@@ -30,18 +30,10 @@ func (p *Pool) ExtractMetadata(ctx context.Context, pageURL string) (PageMetadat
 		return PageMetadata{}, fmt.Errorf("screenshot: invalid http(s) target")
 	}
 
-	waitCtx, waitCancel := context.WithTimeout(ctx, p.queueTimeout)
-	select {
-	case p.captureSem <- struct{}{}:
-		waitCancel()
-		defer func() { <-p.captureSem }()
-	case <-p.shutdown:
-		waitCancel()
-		return PageMetadata{}, errPoolClosed
-	case <-waitCtx.Done():
-		waitCancel()
-		return PageMetadata{}, fmt.Errorf("screenshot: wait for slot: %w", waitCtx.Err())
+	if err := p.acquireSlot(ctx); err != nil {
+		return PageMetadata{}, err
 	}
+	defer p.releaseSlot()
 
 	browser, hold, err := p.acquireBrowser(ctx)
 	if err != nil {

@@ -3,12 +3,10 @@ package auth
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"time"
 	"unicode/utf8"
 
 	"foldex/internal/auth/ipblock"
-	"foldex/internal/pkg/auditctx"
 	"foldex/internal/pkg/authctx"
 )
 
@@ -62,23 +60,6 @@ type AuditRecord struct {
 	EntityKind string
 	EntityID   *int64
 	Subject    string
-}
-
-// WithRequest fills the context columns from the live request.
-//
-// One helper at every write site rather than three lines repeated: the address,
-// its provenance and the device are a SET — a row carrying an address without
-// the flag that says whether anyone vouched for it is the shape migration
-// 000033 refused, and the easiest way to recreate it is to copy two of the
-// three lines.
-func (rec AuditRecord) WithRequest(r *http.Request) AuditRecord {
-	if r == nil {
-		return rec
-	}
-	rec.IP = ipblock.Normalize(r.RemoteAddr)
-	rec.IPTrusted = auditctx.IPTrusted(r.Context())
-	rec.UserAgent = r.UserAgent()
-	return rec
 }
 
 // Audit appends one entry.

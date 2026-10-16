@@ -180,7 +180,7 @@ func optimizeRestoredNoteMedia(ctx context.Context, entry *zip.File) (imageopt.R
 	if len(data) > maxRestoredNoteMediaBytes {
 		return imageopt.Result{}, fmt.Errorf("note media exceeds restore limit")
 	}
-	optimized, err := imageopt.Optimize(data, imageopt.Options{MaxDim: 1024, Quality: 82})
+	optimized, err := imageopt.OptimizeForStore(data)
 	if err != nil {
 		return imageopt.Result{}, err
 	}
@@ -272,7 +272,7 @@ func realignLinkImageURLs(ctx context.Context, tx pgx.Tx, uid authctx.UserID, m 
 
 // attachPolymorphicTags inserts link_tag rows for links and notes using the
 // id mapping. Batches via temp table + CopyFrom + INSERT…ON CONFLICT
-// (N1-NEX-009) instead of per-row Exec. When countSkips is true, unmapped or
+// instead of per-row Exec. When countSkips is true, unmapped or
 // conflict-no-op rows bump skipped.LinkTags.
 func attachPolymorphicTags(ctx context.Context, tx pgx.Tx, m idMapping, snap *Snapshot, inserted, skipped *Counts, countSkips bool) error {
 	rows, unmapped := mappedRestoreTagRows(m, snap)
@@ -377,7 +377,7 @@ func copyPolymorphicClicks(ctx context.Context, tx pgx.Tx, uid authctx.UserID, m
 	if acct.inserted != nil {
 		acct.inserted.ClickLogs += int64(len(rows))
 	}
-	if err := clicklog.RefreshOwner(ctx, tx, int64(uid)); err != nil {
+	if err := clicklog.RefreshOwner(ctx, tx, uid); err != nil {
 		return err
 	}
 	return nil

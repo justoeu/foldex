@@ -8,7 +8,6 @@ import (
 	"errors"
 	"log/slog"
 	"math/big"
-	"strconv"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -372,7 +371,7 @@ func TestRepository_Delete_CascadesTagsAndClicks(t *testing.T) {
 	tagA, _ := trepo.Create(ctx, uid, tags.CreateInput{Name: "a", Color: "#fff"})
 	created, err := nrepo.Create(ctx, uid, notes.CreateInput{Title: "Doomed", TagIDs: []int64{tagA.ID}})
 	require.NoError(t, err)
-	_, err = nrepo.SystemViewAndResolve(ctx, created.Slug, uid)
+	_, err = nrepo.SystemViewAndResolveBySlug(ctx, created.Slug, uid)
 	require.NoError(t, err)
 
 	require.NoError(t, nrepo.Delete(ctx, uid, created.ID, nil, "", nil))
@@ -503,13 +502,13 @@ func TestRepository_ViewAndResolve_LogsClickByIDAndSlug(t *testing.T) {
 	require.NoError(t, err)
 	assert.EqualValues(t, 0, got.ClickCount, "Get must never write click_log")
 
-	_, err = nrepo.SystemViewAndResolve(ctx, created.Slug, uid)
+	_, err = nrepo.SystemViewAndResolveBySlug(ctx, created.Slug, uid)
 	require.NoError(t, err)
 	got, err = nrepo.Get(ctx, uid, created.ID)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, got.ClickCount)
 
-	_, err = nrepo.SystemViewAndResolve(ctx, strconv.FormatInt(created.ID, 10), uid)
+	_, err = nrepo.SystemViewAndResolveByID(ctx, created.ID, uid)
 	require.NoError(t, err)
 	got, err = nrepo.Get(ctx, uid, created.ID)
 	require.NoError(t, err)
@@ -518,7 +517,7 @@ func TestRepository_ViewAndResolve_LogsClickByIDAndSlug(t *testing.T) {
 
 func TestRepository_ViewAndResolve_NotFound(t *testing.T) {
 	ctx, _, nrepo, _, _ := setup(t)
-	_, err := nrepo.SystemViewAndResolve(ctx, "does-not-exist", 0)
+	_, err := nrepo.SystemViewAndResolveBySlug(ctx, "does-not-exist", 0)
 	require.ErrorIs(t, err, domainerr.ErrNotFound)
 }
 
@@ -529,7 +528,7 @@ func TestRepository_ViewAndResolve_OverflowDoesNotWrap(t *testing.T) {
 
 	overflow := new(big.Int).Lsh(big.NewInt(1), 64)
 	overflow.Add(overflow, big.NewInt(created.ID))
-	_, err = nrepo.SystemViewAndResolve(ctx, overflow.String(), 0)
+	_, err = nrepo.SystemViewAndResolveBySlug(ctx, overflow.String(), 0)
 	require.ErrorIs(t, err, domainerr.ErrNotFound)
 
 	got, err := nrepo.Get(ctx, uid, created.ID)
@@ -566,7 +565,7 @@ func TestCrossContamination_LinkAndNoteRowsDoNotLeak(t *testing.T) {
 
 	_, err = lrepo.ClickAndResolve(ctx, link.ID, uid)
 	require.NoError(t, err)
-	_, err = nrepo.SystemViewAndResolve(ctx, note.Slug, uid)
+	_, err = nrepo.SystemViewAndResolveBySlug(ctx, note.Slug, uid)
 	require.NoError(t, err)
 
 	gotLink, err := lrepo.Get(ctx, uid, link.ID)

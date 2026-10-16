@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { GENERATED_MAX_LENGTH } from '../../lib/generatePassword'
 import { passwordGateLen } from '../../hooks/useInstancePolicy'
-import { canSubmit, passwordEndpoint, passwordMode, passwordsMismatch } from './PasswordCard.submit'
+import { canSubmit, passwordMode, passwordsMismatch } from './PasswordCard.submit'
 
 /**
  * CC-DAE-010 — PasswordRow mounts change or create from user.has_password.
@@ -19,7 +19,6 @@ describe('PasswordRowModeCharter', () => {
     input: Parameters<typeof canSubmit>[0]
     can: boolean
     mode: 'change' | 'create'
-    endpoint: '/api/auth/password/change' | '/api/auth/password/set'
     mismatch: boolean
   }> = [
     {
@@ -35,7 +34,6 @@ describe('PasswordRowModeCharter', () => {
       },
       can: true,
       mode: 'change',
-      endpoint: '/api/auth/password/change',
       mismatch: false,
     },
     {
@@ -51,7 +49,6 @@ describe('PasswordRowModeCharter', () => {
       },
       can: true,
       mode: 'change',
-      endpoint: '/api/auth/password/change',
       mismatch: false,
     },
     {
@@ -67,7 +64,6 @@ describe('PasswordRowModeCharter', () => {
       },
       can: false,
       mode: 'change',
-      endpoint: '/api/auth/password/change',
       mismatch: false,
     },
     {
@@ -83,7 +79,6 @@ describe('PasswordRowModeCharter', () => {
       },
       can: false,
       mode: 'change',
-      endpoint: '/api/auth/password/change',
       mismatch: false,
     },
     {
@@ -99,7 +94,6 @@ describe('PasswordRowModeCharter', () => {
       },
       can: true,
       mode: 'create',
-      endpoint: '/api/auth/password/set',
       mismatch: false,
     },
     {
@@ -115,7 +109,6 @@ describe('PasswordRowModeCharter', () => {
       },
       can: false,
       mode: 'create',
-      endpoint: '/api/auth/password/set',
       mismatch: false,
     },
     {
@@ -131,7 +124,6 @@ describe('PasswordRowModeCharter', () => {
       },
       can: true,
       mode: 'create',
-      endpoint: '/api/auth/password/set',
       mismatch: false,
     },
     {
@@ -147,14 +139,12 @@ describe('PasswordRowModeCharter', () => {
       },
       can: true,
       mode: 'create',
-      endpoint: '/api/auth/password/set',
       mismatch: true,
     },
   ]
 
-  it.each(cases)('$name', ({ input, can, mode, endpoint, mismatch }) => {
+  it.each(cases)('$name', ({ input, can, mode, mismatch }) => {
     expect(passwordMode(input.hasPassword)).toBe(mode)
-    expect(passwordEndpoint(input.hasPassword)).toBe(endpoint)
     expect(canSubmit(input)).toBe(can)
     expect(passwordsMismatch(input.next, input.confirm)).toBe(mismatch)
   })

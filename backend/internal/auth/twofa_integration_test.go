@@ -392,11 +392,11 @@ func TestChallengeMutationsCannotCommitAfterCredentialEpochChange(t *testing.T) 
 			go func() {
 				revokeResult <- h.repo.RevokeAllForUser(ctx, user.ID, auth.ReasonLogoutAll)
 			}()
-			waitForBlockedSQL(t, h.pool, "UPDATE app_user SET token_version = token_version + 1")
+			testdb.WaitForBlockedSQL(t, h.pool, "UPDATE app_user SET token_version = token_version + 1")
 
 			mutationResult := make(chan error, 1)
 			go func() { mutationResult <- tc.mutate(h.repo, challengeID) }()
-			waitForBlockedSQL(t, h.pool, "SELECT id FROM app_user WHERE id = $1 FOR NO KEY UPDATE")
+			testdb.WaitForBlockedSQL(t, h.pool, "SELECT id FROM app_user WHERE id = $1 FOR NO KEY UPDATE")
 
 			require.NoError(t, blocker.Commit(ctx))
 			require.NoError(t, <-revokeResult)
@@ -422,14 +422,14 @@ func TestIssueSessionCannotCommitAfterCredentialEpochChange(t *testing.T) {
 
 	revokeResult := make(chan error, 1)
 	go func() { revokeResult <- h.repo.RevokeAllForUser(ctx, user.ID, auth.ReasonLogoutAll) }()
-	waitForBlockedSQL(t, h.pool, "UPDATE app_user SET token_version = token_version + 1")
+	testdb.WaitForBlockedSQL(t, h.pool, "UPDATE app_user SET token_version = token_version + 1")
 
 	sessionResult := make(chan error, 1)
 	go func() {
 		_, _, err := h.repo.IssueSession(ctx, user.ID, user.TokenVersion, testSessionTTL(), "", "")
 		sessionResult <- err
 	}()
-	waitForBlockedSQL(t, h.pool, "SELECT id FROM app_user")
+	testdb.WaitForBlockedSQL(t, h.pool, "SELECT id FROM app_user")
 
 	require.NoError(t, blocker.Commit(ctx))
 	require.NoError(t, <-revokeResult)
@@ -792,7 +792,7 @@ func TestConcurrentEmailOTPRequestsReserveAndCreateOnlyOneCode(t *testing.T) {
 			results <- err
 		}()
 	}
-	waitForBlockedSQLCount(t, h.pool, "SELECT id FROM app_user WHERE id = $1 FOR NO KEY UPDATE", 2)
+	testdb.WaitForBlockedSQLCount(t, h.pool, "SELECT id FROM app_user WHERE id = $1 FOR NO KEY UPDATE", 2)
 	require.NoError(t, blocker.Commit(ctx))
 
 	var created, throttled int
@@ -877,7 +877,7 @@ func TestCredentialEpochRepositoryRefusalsAreTyped(t *testing.T) {
 		UserID: user.ID, Purpose: auth.PurposeTOTP, TokenVersion: stale, TTL: time.Minute,
 	})
 	assert.ErrorIs(t, err, auth.ErrChallengeInvalid)
-	assert.ErrorIs(t, h.repo.StartTOTPEnrollment(ctx, user.ID, stale, 0, []byte("cipher"), []byte("nonce")),
+	assert.ErrorIs(t, h.repo.StartTOTPEnrollment(ctx, auth.SessionProof{UserID: user.ID, SessionID: 0, TokenVersion: stale}, []byte("cipher"), []byte("nonce")),
 		auth.ErrChallengeInvalid)
 	_, _, err = h.repo.CompleteTOTPEnrollment(ctx, auth.EnrollmentComplete{
 		UID: user.ID, TokenVersion: stale, RecoveryHashes: [][]byte{[]byte("h")},
@@ -891,7 +891,7 @@ func TestCredentialEpochRepositoryRefusalsAreTyped(t *testing.T) {
 		UserID: user.ID, Purpose: auth.PurposeTOTP, TokenVersion: user.TokenVersion, TTL: time.Minute,
 	})
 	require.NoError(t, err)
-	require.NoError(t, h.repo.StartTOTPEnrollment(ctx, user.ID, user.TokenVersion, 0,
+	require.NoError(t, h.repo.StartTOTPEnrollment(ctx, auth.SessionProof{UserID: user.ID, SessionID: 0, TokenVersion: user.TokenVersion},
 		[]byte("cipher"), []byte("nonce")))
 	testdb.SetUserStatus(t, h.pool, user.ID, "disabled")
 
@@ -906,7 +906,7 @@ func TestCredentialEpochRepositoryRefusalsAreTyped(t *testing.T) {
 		UserID: user.ID, Purpose: auth.PurposeTOTP, TokenVersion: user.TokenVersion, TTL: time.Minute,
 	})
 	assert.ErrorIs(t, err, auth.ErrChallengeInvalid)
-	assert.ErrorIs(t, h.repo.StartTOTPEnrollment(ctx, user.ID, user.TokenVersion, 0,
+	assert.ErrorIs(t, h.repo.StartTOTPEnrollment(ctx, auth.SessionProof{UserID: user.ID, SessionID: 0, TokenVersion: user.TokenVersion},
 		[]byte("replacement"), []byte("replacement")), auth.ErrChallengeInvalid)
 	_, _, err = h.repo.CompleteTOTPEnrollment(ctx, auth.EnrollmentComplete{
 		UID: user.ID, TokenVersion: user.TokenVersion, RecoveryHashes: [][]byte{[]byte("h")},
@@ -1885,14 +1885,14 @@ func TestConfirmTOTP_SeedReplacementBetweenVerifyAndConfirmCannotActivateTheRepl
 	require.NoError(t, err)
 	user, err := h.repo.GetUser(context.Background(), uid)
 	require.NoError(t, err)
-	require.NoError(t, h.repo.StartTOTPEnrollment(context.Background(), uid, user.TokenVersion, sid,
+	require.NoError(t, h.repo.StartTOTPEnrollment(context.Background(), auth.SessionProof{UserID: uid, SessionID: sid, TokenVersion: user.TokenVersion},
 		firstCiphertext, firstNonce))
 	verified, err := h.repo.LoadTOTPSecret(context.Background(), uid)
 	require.NoError(t, err)
 
 	replacementCiphertext, replacementNonce, err := h.cipher.Encrypt([]byte("KRSXG5DSNFXGOIDB"))
 	require.NoError(t, err)
-	require.NoError(t, h.repo.StartTOTPEnrollment(context.Background(), uid, user.TokenVersion, sid,
+	require.NoError(t, h.repo.StartTOTPEnrollment(context.Background(), auth.SessionProof{UserID: uid, SessionID: sid, TokenVersion: user.TokenVersion},
 		replacementCiphertext, replacementNonce))
 
 	_, _, err = h.repo.CompleteTOTPEnrollment(context.Background(), auth.EnrollmentComplete{
@@ -2175,11 +2175,11 @@ func TestTOTPMutationsRefuseProofFromAStaleCredentialEpoch(t *testing.T) {
 		mutate func(*auth.Repository, authctx.UserID, int64, int, auth.TOTPProof) error
 	}{
 		{"disable", func(repo *auth.Repository, uid authctx.UserID, sid int64, version int, proof auth.TOTPProof) error {
-			return repo.DisableTOTP(context.Background(), uid, sid, version, "a good password",
+			return repo.DisableTOTP(context.Background(), auth.SessionProof{UserID: uid, SessionID: sid, TokenVersion: version}, "a good password",
 				auth.SecondFactorProof{Method: auth.MethodTOTP, TOTP: &proof})
 		}},
 		{"regenerate", func(repo *auth.Repository, uid authctx.UserID, sid int64, version int, proof auth.TOTPProof) error {
-			return repo.RegenerateRecoveryCodes(context.Background(), uid, sid, version,
+			return repo.RegenerateRecoveryCodes(context.Background(), auth.SessionProof{UserID: uid, SessionID: sid, TokenVersion: version},
 				"a good password", auth.SecondFactorProof{Method: auth.MethodTOTP, TOTP: &proof},
 				[][]byte{[]byte("replacement")})
 		}},

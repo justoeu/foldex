@@ -1,5 +1,5 @@
 import { afterEach, describe, it, expect, vi } from 'vitest'
-import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { act, render, screen, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { FolderCard, parseDropId } from './FolderCard'
 import type { Folder, PreviewTile } from '../api/types'

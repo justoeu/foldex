@@ -69,7 +69,8 @@ func seedSnapshot(t *testing.T, pool *pgxpool.Pool, uid authctx.UserID, bucket *
 	// belongs to nobody and no longer travels in that user's export.
 	key := fmt.Sprintf("screenshots/%d.jpg", la.ID)
 	bucket.objs[key] = []byte("img-A")
-	require.NoError(t, lrepo.UpdateOGImage(ctx, uid, la.ID, "/api/files/"+key))
+	_, ogErr := lrepo.ReplaceOGImage(ctx, uid, la.ID, "/api/files/"+key)
+	require.NoError(t, ogErr)
 	return seeded{tagID: tag.ID, folderID: folder.ID, linkA: la.ID, linkB: lb.ID}
 }
 
@@ -359,7 +360,7 @@ func TestRestore_NotesRoundTripWipeMode(t *testing.T) {
 	n, err = nrepo.Update(ctx, uid, n.ID, notes.UpdateInput{IsPublic: &pub}, nil, "")
 	require.NoError(t, err)
 	require.True(t, n.IsPublic)
-	_, err = nrepo.SystemViewAndResolve(ctx, n.Slug, uid)
+	_, err = nrepo.SystemViewAndResolveBySlug(ctx, n.Slug, uid)
 	require.NoError(t, err)
 
 	zr := exportToReader(t, svc, uid)

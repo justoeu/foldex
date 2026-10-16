@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"foldex/internal/backupjobs"
 	"io"
 	"os"
 	"os/exec"
@@ -20,16 +21,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fakeDrillRuns stands in for RunStore: the unit tests have no database, and
+// fakeDrillRuns stands in for backupjobs.RunStore: the unit tests have no database, and
 // the pick/link steps are exactly the seam the drillRuns interface exists for.
 type fakeDrillRuns struct {
-	src     *DumpRunRef
+	src     *backupjobs.DumpRunRef
 	pickErr error
 	linked  [][2]int64
 	linkErr error
 }
 
-func (f *fakeDrillRuns) LatestSucceededDump(context.Context) (*DumpRunRef, error) {
+func (f *fakeDrillRuns) LatestSucceededDump(context.Context) (*backupjobs.DumpRunRef, error) {
 	if f.pickErr != nil {
 		return nil, f.pickErr
 	}
@@ -126,7 +127,7 @@ func newDrillFixture(t *testing.T) *drillFixture {
 	store.uploads[key] = cipher.Bytes()
 	sum := sha256.Sum256(cipher.Bytes())
 
-	runs := &fakeDrillRuns{src: &DumpRunRef{
+	runs := &fakeDrillRuns{src: &backupjobs.DumpRunRef{
 		ID:     7,
 		Key:    key,
 		SHA256: hex.EncodeToString(sum[:]),
@@ -227,11 +228,11 @@ func TestDrillRun_FullPipelineDownloadsVerifiesRestoresAndCleansUp(t *testing.T)
 
 func TestDrillRun_NoDumpToValidate(t *testing.T) {
 	f := newDrillFixture(t)
-	f.runs.pickErr = ErrNoDumpToDrill
+	f.runs.pickErr = backupjobs.ErrNoDumpToDrill
 
 	_, _, reason, err := f.job.Run(context.Background(), 1)
 	require.Error(t, err)
-	assert.Equal(t, ReasonDrillNoDump, reason)
+	assert.Equal(t, backupjobs.ReasonDrillNoDump, reason)
 	assert.Empty(t, f.rec.calls, "with nothing to validate, no cluster is ever started")
 }
 
@@ -241,7 +242,7 @@ func TestDrillRun_DownloadFailure(t *testing.T) {
 
 	_, _, reason, err := f.job.Run(context.Background(), 1)
 	require.Error(t, err)
-	assert.Equal(t, ReasonDrillDownloadFailed, reason)
+	assert.Equal(t, backupjobs.ReasonDrillDownloadFailed, reason)
 	assert.Empty(t, f.rec.calls)
 	assert.Empty(t, f.leftovers(t), "teardown runs on the failure path too")
 }
@@ -254,7 +255,7 @@ func TestDrillRun_DigestMismatchStopsBeforeAnyRestore(t *testing.T) {
 
 	_, _, reason, err := f.job.Run(context.Background(), 1)
 	require.Error(t, err)
-	assert.Equal(t, ReasonDrillDigestMismatch, reason)
+	assert.Equal(t, backupjobs.ReasonDrillDigestMismatch, reason)
 	assert.Empty(t, f.rec.calls, "unverified bytes must never reach pg_restore")
 	assert.Empty(t, f.leftovers(t))
 }
@@ -268,7 +269,7 @@ func TestDrillRun_DecryptFailures(t *testing.T) {
 
 		_, _, reason, runErr := f.job.Run(context.Background(), 1)
 		require.Error(t, runErr)
-		assert.Equal(t, ReasonDrillDecryptFailed, reason)
+		assert.Equal(t, backupjobs.ReasonDrillDecryptFailed, reason)
 		assert.Empty(t, f.leftovers(t))
 	})
 
@@ -278,7 +279,7 @@ func TestDrillRun_DecryptFailures(t *testing.T) {
 
 		_, _, reason, runErr := f.job.Run(context.Background(), 1)
 		require.Error(t, runErr)
-		assert.Equal(t, ReasonDrillDecryptFailed, reason)
+		assert.Equal(t, backupjobs.ReasonDrillDecryptFailed, reason)
 		assert.NotContains(t, runErr.Error(), "AGE-SECRET-KEY", "never any key material in errors")
 	})
 }
@@ -306,7 +307,7 @@ func TestDrillRun_RestoreFailureTearsDownTheStartedCluster(t *testing.T) {
 
 	_, _, reason, err := f.job.Run(context.Background(), 1)
 	require.Error(t, err)
-	assert.Equal(t, ReasonDrillRestoreFailed, reason)
+	assert.Equal(t, backupjobs.ReasonDrillRestoreFailed, reason)
 	// The cluster HAD started, so teardown must stop it — and the raw stderr
 	// stays in the error (log side), never in the reason (backup_run side).
 	assert.Equal(t, []string{"initdb", "pg_ctl start", "createdb", "pg_restore", "pg_ctl stop"}, f.rec.names())
@@ -319,7 +320,7 @@ func TestDrillRun_InitFailureNeverStopsWhatNeverStarted(t *testing.T) {
 
 	_, _, reason, err := f.job.Run(context.Background(), 1)
 	require.Error(t, err)
-	assert.Equal(t, ReasonDrillRestoreFailed, reason)
+	assert.Equal(t, backupjobs.ReasonDrillRestoreFailed, reason)
 	assert.Equal(t, []string{"initdb"}, f.rec.names(),
 		"pg_ctl stop against a data dir that never started would only add a second error")
 	assert.Empty(t, f.leftovers(t))
@@ -333,7 +334,7 @@ func TestDrillRun_CountsMismatch(t *testing.T) {
 
 	_, _, reason, err := f.job.Run(context.Background(), 1)
 	require.Error(t, err)
-	assert.Equal(t, ReasonDrillCountsMismatch, reason)
+	assert.Equal(t, backupjobs.ReasonDrillCountsMismatch, reason)
 	assert.Empty(t, f.leftovers(t))
 }
 
@@ -485,7 +486,7 @@ func TestDrill_ReadCountsFailureIsARestoreFailure(t *testing.T) {
 	}
 	_, _, reason, err := f.job.Run(context.Background(), 42)
 	require.Error(t, err)
-	assert.Equal(t, ReasonDrillRestoreFailed, reason,
+	assert.Equal(t, backupjobs.ReasonDrillRestoreFailed, reason,
 		"an unanswerable restored cluster is a restore problem, not a counts mismatch")
 }
 
@@ -494,15 +495,15 @@ func TestDrill_SourceInfraFailureIsNotNoDump(t *testing.T) {
 	f.runs.pickErr = io.ErrClosedPipe
 	_, _, reason, err := f.job.Run(context.Background(), 42)
 	require.Error(t, err)
-	assert.Equal(t, ReasonDrillSourceFailed, reason,
+	assert.Equal(t, backupjobs.ReasonDrillSourceFailed, reason,
 		"a database that cannot answer must not be reported as \"nothing to validate\"")
 
 	f2 := newDrillFixture(t)
-	f2.runs.pickErr = ErrNoDumpToDrill
+	f2.runs.pickErr = backupjobs.ErrNoDumpToDrill
 	f2.runs.src = nil
 	_, _, reason, err = f2.job.Run(context.Background(), 42)
 	require.Error(t, err)
-	assert.Equal(t, ReasonDrillNoDump, reason)
+	assert.Equal(t, backupjobs.ReasonDrillNoDump, reason)
 }
 
 func TestDrill_RefusesAPlaintextKeyWhenTheInstanceEncrypts(t *testing.T) {
@@ -518,7 +519,7 @@ func TestDrill_RefusesAPlaintextKeyWhenTheInstanceEncrypts(t *testing.T) {
 
 	_, _, reason, err := f.job.Run(context.Background(), 42)
 	require.Error(t, err)
-	assert.Equal(t, ReasonDrillDecryptFailed, reason)
+	assert.Equal(t, backupjobs.ReasonDrillDecryptFailed, reason)
 	assert.Empty(t, f.rec.names(), "no ephemeral cluster may even be created for unauthenticated bytes")
 }
 
@@ -530,7 +531,7 @@ func TestDrill_StartTimeoutStillStopsTheCluster(t *testing.T) {
 	f.rec.fail = map[string]string{"pg_ctl": "start: timed out waiting for server"}
 	_, _, reason, err := f.job.Run(context.Background(), 42)
 	require.Error(t, err)
-	assert.Equal(t, ReasonDrillRestoreFailed, reason)
+	assert.Equal(t, backupjobs.ReasonDrillRestoreFailed, reason)
 	// The stop must be attempted even though start FAILED: a start that dies
 	// on its --timeout can leave a postmaster still coming up, and skipping
 	// the stop is exactly the path that RemoveAlls under a live server.

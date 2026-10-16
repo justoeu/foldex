@@ -89,7 +89,7 @@ export function flattenEntries(data: EntriesCache | undefined): Entry[] {
 
 // Empty-open command palette suggestions reuse whatever Home (or a folder
 // view) already fetched. A second GET /api/entries?limit=200 just to paint
-// 12 rows is the N1-NEX-009 defect.
+// 12 rows is needless overfetch.
 export function collectCachedEntries(qc: QueryClient): Entry[] {
   const seen = new Set<string>()
   const out: Entry[] = []
@@ -270,7 +270,7 @@ export function cachedEntryFolderId(qc: QueryClient, kind: Entry['kind'], id: nu
 // entry's PREVIOUS object per query, apply the patch, and hand back a
 // surgical rollback. Restoring only the touched entry — not a whole-cache
 // snapshot — is what keeps a slow failed mutation from wiping a
-// concurrent mutation's already-applied optimistic state (RACE-HER-004).
+// concurrent mutation's already-applied optimistic state.
 // Notes never touch ['links'] (Link caches hold no notes), so the helper
 // keys that family on kind === 'link'.
 export type OptimisticEntryPatch = {

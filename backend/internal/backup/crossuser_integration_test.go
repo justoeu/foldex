@@ -72,7 +72,8 @@ func seedTenant(t *testing.T, pool *pgxpool.Pool, bucket *stubBucket, email, hos
 
 	key := fmt.Sprintf("screenshots/%d.jpg", l.ID)
 	bucket.objs[key] = []byte("bytes-of-" + email)
-	require.NoError(t, lrepo.UpdateOGImage(ctx, uid, l.ID, "/api/files/"+key))
+	_, ogErr := lrepo.ReplaceOGImage(ctx, uid, l.ID, "/api/files/"+key)
+	require.NoError(t, ogErr)
 
 	var clickIDs []int64
 	for i := 0; i < 2; i++ {
@@ -415,7 +416,8 @@ func TestRestore_RealignsImagesPrefixToo(t *testing.T) {
 	require.NoError(t, err)
 	oldKey := fmt.Sprintf("images/%d.jpg", l.ID)
 	bucket.objs[oldKey] = []byte("manual-upload")
-	require.NoError(t, lrepo.UpdateOGImage(ctx, uid, l.ID, "/api/files/"+oldKey))
+	_, ogErr := lrepo.ReplaceOGImage(ctx, uid, l.ID, "/api/files/"+oldKey)
+	require.NoError(t, ogErr)
 
 	zr := exportToReader(t, svc, uid)
 	_, err = svc.Restore(ctx, uid, zr, backup.ModeWipe)
@@ -445,7 +447,8 @@ func TestRestore_PreservesVersionedScreenshotSuffix(t *testing.T) {
 	const suffix = ".550e8400-e29b-41d4-a716-446655440000.jpg"
 	oldKey := fmt.Sprintf("screenshots/%d%s", l.ID, suffix)
 	bucket.objs[oldKey] = []byte("versioned-screenshot")
-	require.NoError(t, lrepo.UpdateOGImage(ctx, uid, l.ID, "/api/files/"+oldKey))
+	_, ogErr := lrepo.ReplaceOGImage(ctx, uid, l.ID, "/api/files/"+oldKey)
+	require.NoError(t, ogErr)
 
 	zr := exportToReader(t, svc, uid)
 	_, err = svc.Restore(ctx, uid, zr, backup.ModeWipe)

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	htmltemplate "html/template"
 	"io/fs"
+	"maps"
 	"path"
 	"slices"
 	"strings"
@@ -419,12 +420,7 @@ func TemplateNames() []string {
 
 // SupportedLocales lists the catalogues that shipped, sorted for stable output.
 func SupportedLocales() []string {
-	out := make([]string, 0, len(std.catalogs))
-	for l := range std.catalogs {
-		out = append(out, l)
-	}
-	slices.Sort(out)
-	return out
+	return slices.Sorted(maps.Keys(std.catalogs))
 }
 
 // NormalizeLocale maps a browser-shaped tag onto a shipped catalogue: `pt-BR`

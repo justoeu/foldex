@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Favicon } from './Favicon'
 import { TagChip } from './TagChip'
 import { Icon, I } from './icons'
+import { FolderLockButton } from './sidebar/FolderRow'
 import { CopyLinkButton, OpenLinkButton } from './OpenLinkButton'
 import { goNoteHref } from '../api/notes'
 import { primaryColor } from '../lib/tagColor'
@@ -208,14 +209,7 @@ function CompactFolderImpl({
         >
           <div className="fx-compact-title" style={{ color: primaryColor(f.color) }}>
             {f.has_password && (
-              <span
-                className="fx-folder-lock-icon"
-                aria-hidden="true"
-                data-tooltip={t('folder_card.locked_tooltip')}
-                data-tooltip-side="top"
-              >
-                <Icon d={I.lock} size={12} />
-              </span>
+              <FolderLockButton />
             )}
             {f.name}
           </div>
