@@ -3,6 +3,7 @@ package importer
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -25,20 +26,13 @@ func (s *Stager) Validate(ctx context.Context, uid authctx.UserID, items []Item)
 	return Validate(ctx, s.pool, uid, items)
 }
 
-// ApplyWithMode runs the staged import inside one transaction and returns the
-// import counts plus the warnings collected before commit; the caller owns
-// post-commit side effects for the returned fresh link ids.
 // maxSlugRaceAttempts bounds the whole-transaction retry when a concurrent
 // create grabs a global slug between the taken-slug preload and the insert.
 const maxSlugRaceAttempts = 3
 
-func isSlugRace(err error) bool {
-	switch pgerr.UniqueConstraint(err) {
-	case "link_slug_unique", "note_slug_unique":
-		return true
-	}
-	return false
-}
+// ApplyWithMode runs the staged import inside one transaction and returns the
+// import counts plus the warnings collected before commit; the caller owns
+// post-commit side effects for the returned fresh link ids.
 
 func (s *Stager) ApplyWithMode(ctx context.Context, uid authctx.UserID, items []Item, mode importMode, seed *jsonSeed) (imported, skipped, wiped int, warnings []string, freshIDs []int64, err error) {
 	if err := validateImportClickBudget(items); err != nil {
@@ -46,8 +40,13 @@ func (s *Stager) ApplyWithMode(ctx context.Context, uid authctx.UserID, items []
 	}
 	for attempt := 1; ; attempt++ {
 		imported, skipped, wiped, warnings, freshIDs, err = s.applyWithModeOnce(ctx, uid, items, mode, seed)
-		if err == nil || !isSlugRace(err) || attempt >= maxSlugRaceAttempts {
+		if err == nil || !pgerr.IsSlugRace(err) || attempt >= maxSlugRaceAttempts {
 			return imported, skipped, wiped, warnings, freshIDs, err
+		}
+		select {
+		case <-ctx.Done():
+			return 0, 0, 0, nil, nil, ctx.Err()
+		case <-time.After(time.Duration(attempt) * 25 * time.Millisecond):
 		}
 	}
 }

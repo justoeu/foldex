@@ -26,3 +26,15 @@ func IsUndefinedTable(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "42P01"
 }
+
+// IsSlugRace reports a unique-violation on one of the GLOBAL slug indexes.
+// Slugs are allocated from a preloaded taken-set, so a concurrent create can
+// win the race between preload and insert; callers retry the whole
+// transaction (bounded) when this matches.
+func IsSlugRace(err error) bool {
+	switch UniqueConstraint(err) {
+	case "link_slug_unique", "note_slug_unique":
+		return true
+	}
+	return false
+}

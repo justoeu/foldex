@@ -42,9 +42,14 @@ func (s *Service) Restore(ctx context.Context, uid authctx.UserID, zr *zip.Reade
 	defer prepared.cleanup()
 
 	result, err := s.applyRestoreTransaction(ctx, uid, mode, preflight, prepared)
-	for attempt := 1; err != nil && isRestoreSlugRace(err) && attempt < 3; attempt++ {
+	for attempt := 1; err != nil && pgerr.IsSlugRace(err) && attempt < maxRestoreSlugAttempts; attempt++ {
 		// A concurrent create grabbed a global slug after the preload;
 		// the transaction rolled back whole, so retrying is safe.
+		select {
+		case <-ctx.Done():
+			return empty, ctx.Err()
+		case <-time.After(time.Duration(attempt) * 25 * time.Millisecond):
+		}
 		result, err = s.applyRestoreTransaction(ctx, uid, mode, preflight, prepared)
 	}
 	if err != nil {
@@ -59,15 +64,8 @@ func (s *Service) Restore(ctx context.Context, uid authctx.UserID, zr *zip.Reade
 	}, result, prepared)
 }
 
-// isRestoreSlugRace reports a global slug unique-violation from a
-// concurrent link/note creation racing the restore's slug preload.
-func isRestoreSlugRace(err error) bool {
-	switch pgerr.UniqueConstraint(err) {
-	case "link_slug_unique", "note_slug_unique":
-		return true
-	}
-	return false
-}
+// maxRestoreSlugAttempts bounds the slug-race retry in Restore.
+const maxRestoreSlugAttempts = 3
 
 func preflightRestore(ctx context.Context, zr *zip.Reader) (backupArchiveInspection, error) {
 	preflight := inspectBackupArchive(ctx, zr)

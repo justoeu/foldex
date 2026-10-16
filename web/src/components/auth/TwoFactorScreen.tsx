@@ -56,6 +56,10 @@ export function TwoFactorScreen({ pending }: Readonly<{ pending: TwoFactorPendin
   useEffect(() => () => {
     goneRef.current = true
   }, [])
+  const leave = useCallback(() => {
+    goneRef.current = true
+    void signOut()
+  }, [signOut])
   const canEmail = pending.methods.includes('email_otp')
 
   useEffect(() => {
@@ -102,12 +106,9 @@ export function TwoFactorScreen({ pending }: Readonly<{ pending: TwoFactorPendin
   // password.
   useEffect(() => {
     if (phase !== 'expiredFinal') return
-    const redirect = setTimeout(() => {
-      goneRef.current = true
-      void signOut()
-    }, REDIRECT_AFTER_MS)
+    const redirect = setTimeout(leave, REDIRECT_AFTER_MS)
     return () => clearTimeout(redirect)
-  }, [phase, signOut])
+  }, [phase, leave])
 
   const submit = useCallback(
     async (raw: string) => {
@@ -211,10 +212,7 @@ export function TwoFactorScreen({ pending }: Readonly<{ pending: TwoFactorPendin
       <AuthShell kicker={t('auth_otp.kicker')} title={t('auth_otp.expired_title')}>
         <p className="fx-auth-sub">{t('auth_otp.expired_final_desc')}</p>
         <div className="fx-auth-alt fx-auth-alt-center">
-          <button type="button" className="fx-btn fx-btn-primary" onClick={() => {
-            goneRef.current = true
-            void signOut()
-          }}>
+          <button type="button" className="fx-btn fx-btn-primary" onClick={leave}>
             {t('auth_otp.back_to_login')}
           </button>
         </div>
@@ -297,10 +295,7 @@ export function TwoFactorScreen({ pending }: Readonly<{ pending: TwoFactorPendin
               {t('auth_otp.send_email')}
             </button>
           )}
-          <button type="button" className="fx-auth-link" onClick={() => {
-          goneRef.current = true
-          void signOut()
-        }}>
+          <button type="button" className="fx-auth-link" onClick={leave}>
             {t('auth_otp.cancel')}
           </button>
         </div>

@@ -152,6 +152,60 @@ func TestAudit_OwnFeedIncludesLinkClicks(t *testing.T) {
 	assert.Equal(t, linkID, *entries[0].EntityID)
 }
 
+// The merged feed pages on its last row's id, and the two sources have
+// separate id sequences: a click id reused as an audit cursor would jump
+// to an arbitrary audit row. Click rows carry negated ids so paging walks
+// the interleaved timeline exactly once.
+func TestAudit_OwnFeedPaginationAcrossMixedIDs(t *testing.T) {
+	repo, pool, _, member := auditFixture(t)
+	ctx := context.Background()
+	base := time.Now().Add(-time.Hour).Truncate(time.Microsecond)
+
+	var linkID int64
+	require.NoError(t, pool.QueryRow(ctx, `
+		INSERT INTO link (user_id, url, title, slug)
+		VALUES ($1, 'https://paged.example', 'Paged bookmark', 'paged-bookmark-test')
+		RETURNING id`, int64(member.ID)).Scan(&linkID))
+
+	for i := 0; i < 3; i++ {
+		at := base.Add(time.Duration(2*i) * time.Minute)
+		_, err := pool.Exec(ctx, `
+			INSERT INTO audit_log (actor_id, action, subject, created_at)
+			VALUES ($1, 'link.created', $2, $3)`,
+			int64(member.ID), fmt.Sprintf("audit-%d", i), at)
+		require.NoError(t, err)
+		_, err = pool.Exec(ctx, `
+			INSERT INTO click_log (user_id, entity_kind, entity_id, clicked_at)
+			VALUES ($1, 'link', $2, $3)`,
+			int64(member.ID), linkID, at.Add(time.Minute))
+		require.NoError(t, err)
+	}
+
+	var got []auth.AuditEntry
+	var cursor int64
+	for page := 0; page < 5; page++ {
+		entries, err := repo.ListOwnActivity(ctx, member.ID, cursor, 2)
+		require.NoError(t, err)
+		if len(entries) == 0 {
+			break
+		}
+		got = append(got, entries...)
+		cursor = entries[len(entries)-1].ID
+	}
+	require.Len(t, got, 6)
+	seen := map[int64]bool{}
+	for i, e := range got {
+		assert.False(t, seen[e.ID], "entry id %d repeated across pages", e.ID)
+		seen[e.ID] = true
+		if e.Action == "link.clicked" {
+			assert.Negative(t, e.ID, "click rows carry negated click_log ids")
+		}
+		if i > 0 {
+			assert.False(t, got[i].CreatedAt.After(got[i-1].CreatedAt), "feed must stay time-descending across pages")
+		}
+	}
+}
+
 // INV-001's explicit-uid rule applied to a table that is otherwise
 // instance-wide. Another account's rows are not "hidden" by the UI — they are
 // not in the result set.

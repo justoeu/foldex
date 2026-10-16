@@ -54,6 +54,9 @@ type listingCall struct {
 // the shared bucket on every poll.
 var statsCacheTTL = time.Minute
 
+// listingTimeout bounds one detached bucket listing.
+const listingTimeout = 5 * time.Minute
+
 // Config holds S3-compatible object-store connection parameters (RustFS).
 type Config struct {
 	Endpoint  string
@@ -328,7 +331,7 @@ func (c *Client) cachedListing(ctx context.Context) ([]listedObject, error) {
 	// shared result for everyone. The leader then waits like any waiter, so
 	// its own cancellation still returns promptly.
 	go func() {
-		listCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
+		listCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), listingTimeout)
 		items, err := c.collectListing(listCtx)
 		cancel()
 

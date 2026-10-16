@@ -923,6 +923,36 @@ describe('LinkDialog', () => {
     await waitFor(() => expect(state.links[0].og_image_url).toContain('/api/files/screenshots/51'))
   })
 
+  // Capture advances updated_at on the server; the dialog must refresh its
+  // optimistic-lock baseline or the following Save 409s on its own capture.
+  it('save after immediate capture sends the post-capture version, not the stale one', async () => {
+    const link = {
+      id: 52, url: 'https://capture-baseline.example', title: 'Baseline',
+      slug: 'baseline', click_count: 0, preview_status: 'failed', pinned: false,
+      created_at: '', updated_at: 'version-1', tags: [], og_image_url: null,
+    } as unknown as Link
+    state.links.push(link)
+    const originalPost = vi.mocked(http.post).getMockImplementation()!
+    vi.mocked(http.post).mockImplementation(((url: string, ...rest: unknown[]) => {
+      if (String(url).includes('/screenshot')) {
+        state.links[0].updated_at = 'version-2'
+      }
+      return (originalPost as (...a: unknown[]) => unknown)(url, ...rest)
+    }) as typeof http.post)
+    const patch = vi.spyOn(http, 'patch')
+
+    renderWithProviders(<LinkDialog open link={link} onClose={vi.fn()} />)
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: /capture page screenshot/i }))
+    await waitFor(() => expect(state.links[0].og_image_url).toContain('/api/files/screenshots/52'))
+
+    await user.click(screen.getByRole('button', { name: /Save changes/i }))
+    await waitFor(() => expect(patch).toHaveBeenCalled())
+    expect(patch.mock.calls.at(-1)?.[1]).toEqual(
+      expect.objectContaining({ if_match_updated_at: 'version-2' }),
+    )
+  })
+
   // Create then image-upload is two requests. If the image fails, the row
   // already exists — Save again must retry the image against that id, not
   // POST a second bookmark (and uniqueness would then lock the dialog).

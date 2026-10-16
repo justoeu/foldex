@@ -220,9 +220,18 @@ func (r *Repository) ListOwnActivity(ctx context.Context, uid authctx.UserID, be
 	}
 	args := []any{int64(uid), auditpkg.OwnActivityActions()}
 	cursor := ""
+	// The cursor is the last feed row's id, and the feed merges two id
+	// spaces: audit rows keep their positive audit_log id, clicks carry
+	// their negated click_log id (see ownClicks). A click cursor therefore
+	// bounds audit rows by that click's timestamp instead of by id —
+	// comparing ids across the two sequences would page to a random spot.
 	if beforeID > 0 {
 		args = append(args, beforeID)
 		cursor = fmt.Sprintf(" AND a.id < $%d", len(args))
+	} else if beforeID < 0 {
+		args = append(args, -beforeID)
+		cursor = fmt.Sprintf(` AND a.created_at < (
+			SELECT clicked_at FROM click_log WHERE id = $%d)`, len(args))
 	}
 	args = append(args, limit)
 	limitArg := len(args)
@@ -275,16 +284,23 @@ func (r *Repository) ListOwnActivity(ctx context.Context, uid authctx.UserID, be
 }
 
 // ownClicks reads the caller's link clicks, mapped onto the AuditEntry shape
-// so the feed is one homogeneous list downstream. The audit cursor
-// (beforeID, an audit_log id) bounds the window by that row's timestamp so
-// later pages do not re-merge the same recent clicks.
+// so the feed is one homogeneous list downstream. Click rows carry their
+// NEGATED click_log id: the merged feed's pagination cursor is the last
+// row's id, and a bare click id would be indistinguishable from an
+// audit_log id (and collide with it as a React key). The cursor bounds the
+// window via the cursor row's own table — tuple compare within click_log,
+// timestamp-only against an audit cursor.
 func (r *Repository) ownClicks(ctx context.Context, uid authctx.UserID, beforeID int64, limit int) ([]AuditEntry, error) {
 	args := []any{int64(uid)}
 	window := ""
 	if beforeID > 0 {
 		args = append(args, beforeID)
+		window = fmt.Sprintf(` AND c.clicked_at < (
+			SELECT created_at FROM audit_log WHERE id = $%d)`, len(args))
+	} else if beforeID < 0 {
+		args = append(args, -beforeID)
 		window = fmt.Sprintf(` AND (c.clicked_at, c.id) < (
-			SELECT created_at, id FROM audit_log WHERE id = $%d)`, len(args))
+			SELECT clicked_at, id FROM click_log WHERE id = $%d)`, len(args))
 	}
 	args = append(args, limit)
 	rows, err := r.pool.Query(ctx, fmt.Sprintf(`
@@ -306,9 +322,11 @@ func (r *Repository) ownClicks(ctx context.Context, uid authctx.UserID, beforeID
 		kind := "link"
 		e.EntityKind = &kind
 		var subject string
-		if err := rows.Scan(&e.ID, &e.EntityID, &subject, &e.CreatedAt); err != nil {
+		var clickID int64
+		if err := rows.Scan(&clickID, &e.EntityID, &subject, &e.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan own clicks: %w", err)
 		}
+		e.ID = -clickID
 		e.Subject = &subject
 		out = append(out, e)
 	}

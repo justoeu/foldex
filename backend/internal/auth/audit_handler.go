@@ -407,8 +407,10 @@ func (h *Handler) ListOwnActivity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	before, err := optionalInt64(r.URL.Query().Get("before"))
-	if err != nil || before < 0 {
-		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_cursor", "before must be an id"))
+	// Negative cursors are valid here: merged click rows carry negated
+	// click_log ids so the mixed feed can page on its last row's id.
+	if err != nil {
+		httperr.Write(w, httperr.New(http.StatusBadRequest, "invalid_cursor", "before must be a feed id"))
 		return
 	}
 	limit, err := optionalInt64(r.URL.Query().Get("limit"))
