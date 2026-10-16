@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { http } from '../api/client'
-import { invalidateLibrary } from '../api/entries'
+import { entityUnlockHeaders, invalidateLibrary } from '../api/entries'
 import { useUpdateLink } from '../api/links'
 import { useUpdateNote } from '../api/notes'
 import { useUpdateFolder } from '../api/folders'
@@ -52,6 +52,9 @@ export function useAppDndController({
       const move = (source: MergeSource) => http.patch(
         source.kind === 'link' ? `/api/links/${source.id}` : `/api/notes/${source.id}`,
         { folder_id: folder.id },
+        // Same contract useUpdateLink/useUpdateNote carry: moving OUT of a
+        // locked folder needs its unlock token.
+        { headers: entityUnlockHeaders(queryClient, source.kind, source.id) },
       )
       const moves = await Promise.allSettled([move(a), move(b)])
       return { folder, partial: moves.some((r) => r.status === 'rejected') }
