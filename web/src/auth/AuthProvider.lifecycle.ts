@@ -9,6 +9,7 @@ import type { QueryClient } from '@tanstack/react-query'
 import { fetchMe, logout as apiLogout, type MeResponse } from '../api/auth'
 import { advanceAuthEpoch, setSessionLostHandler } from '../api/client'
 import { defaultFeatures, type SessionState, type TwoFactorPending } from './types'
+import { clearFolderUnlocks } from '../lib/folderUnlockRegistry'
 
 export const LAST_OWNER_KEY = 'foldex.auth.lastOwnerId'
 
@@ -169,7 +170,17 @@ function getLocalStorage(): Storage | null {
   }
 }
 
-function clearTenantScopedState(storage = getLocalStorage()): void {
+// Exported for the lifecycle test that pins the SW-cache purge.
+export function clearTenantScopedState(storage = getLocalStorage()): void {
+  // The Service Worker's file cache holds private thumbnails and note
+  // media fetched under this tenant's session; it must not outlive the
+  // sign-out or tenant switch that this cleanup exists for. Fire and
+  // forget: a cache that cannot be deleted also cannot be read back by a
+  // session that never re-registers the worker's routes.
+  if (typeof caches !== 'undefined') {
+    void caches.delete('foldex-files-v1').catch(() => undefined)
+  }
+  clearFolderUnlocks()
   if (!storage) return
   let removalFailed = false
   TENANT_SCOPED_KEYS.forEach((key) => {

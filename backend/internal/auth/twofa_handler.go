@@ -727,6 +727,10 @@ func (h *Handler) DisableTOTP(w http.ResponseWriter, r *http.Request) {
 			"administrators must keep two-factor authentication enabled"))
 		return
 	}
+	passwordKey, ok := h.beginStepUpPassword(w, p.UserID)
+	if !ok {
+		return
+	}
 	if !h.withStepUp(w, r, p.UserID, user, in.Code, func(proof SecondFactorProof) error {
 		err = h.repo.DisableTOTP(r.Context(), p.UserID, p.SessionID, user.TokenVersion, in.Password, proof)
 		if err == nil {
@@ -734,31 +738,39 @@ func (h *Handler) DisableTOTP(w http.ResponseWriter, r *http.Request) {
 		}
 		return err
 	}) {
+		// The code proof failed before the password was ever tested.
+		h.stepUpPasswordUser.Release(passwordKey)
 		return
 	}
 	if errors.Is(err, ErrBadCredentials) || errors.Is(err, ErrPasswordMissing) {
+		h.stepUpPasswordUser.CommitFail(passwordKey)
 		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_credentials",
 			msgPasswordIncorrect))
 		return
 	}
 	if errors.Is(err, ErrTOTPReplay) {
+		h.stepUpPasswordUser.CommitSuccess(passwordKey)
 		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_code", msgInvalidCode))
 		return
 	}
 	if errors.Is(err, ErrNoPendingFactor) {
+		h.stepUpPasswordUser.CommitSuccess(passwordKey)
 		httperr.Write(w, httperr.New(http.StatusConflict, "totp_not_enabled",
 			"an authenticator is not enrolled as a second factor"))
 		return
 	}
 	if errors.Is(err, ErrSessionInvalid) {
+		h.stepUpPasswordUser.Release(passwordKey)
 		h.writeSessionInvalid(w)
 		return
 	}
 	if err != nil {
+		h.stepUpPasswordUser.Release(passwordKey)
 		h.logger.Error("disable totp", "err", err)
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
+	h.stepUpPasswordUser.CommitSuccess(passwordKey)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -780,6 +792,10 @@ func (h *Handler) RegenerateRecoveryCodes(w http.ResponseWriter, r *http.Request
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
+	passwordKey, ok := h.beginStepUpPassword(w, p.UserID)
+	if !ok {
+		return
+	}
 	var codes []string
 	if !h.withStepUp(w, r, p.UserID, user, in.Code, func(proof SecondFactorProof) error {
 		var hashes [][]byte
@@ -794,26 +810,32 @@ func (h *Handler) RegenerateRecoveryCodes(w http.ResponseWriter, r *http.Request
 		}
 		return err
 	}) {
+		h.stepUpPasswordUser.Release(passwordKey)
 		return
 	}
 	if errors.Is(err, ErrBadCredentials) || errors.Is(err, ErrPasswordMissing) {
+		h.stepUpPasswordUser.CommitFail(passwordKey)
 		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_credentials",
 			msgPasswordIncorrect))
 		return
 	}
 	if errors.Is(err, ErrTOTPReplay) {
+		h.stepUpPasswordUser.CommitSuccess(passwordKey)
 		httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_code", msgInvalidCode))
 		return
 	}
 	if errors.Is(err, ErrSessionInvalid) {
+		h.stepUpPasswordUser.Release(passwordKey)
 		h.writeSessionInvalid(w)
 		return
 	}
 	if err != nil {
+		h.stepUpPasswordUser.Release(passwordKey)
 		h.logger.Error("regenerate recovery codes", "err", err)
 		httperr.Write(w, httperr.ErrInternal)
 		return
 	}
+	h.stepUpPasswordUser.CommitSuccess(passwordKey)
 	httperr.JSON(w, http.StatusOK, map[string]any{"recovery_codes": codes})
 }
 
@@ -1085,17 +1107,24 @@ func (h *Handler) enrollmentPrincipal(w http.ResponseWriter, r *http.Request) (a
 			httperr.Write(w, err)
 			return 0, 0, 0, false
 		}
+		passwordKey, ok := h.beginStepUpPassword(w, p.UserID)
+		if !ok {
+			return 0, 0, 0, false
+		}
 		tokenVersion, err := h.repo.VerifyUserPasswordEpoch(r.Context(), p.UserID, in.Password)
 		if err != nil {
 			if errors.Is(err, ErrBadCredentials) || errors.Is(err, ErrPasswordMissing) {
+				h.stepUpPasswordUser.CommitFail(passwordKey)
 				httperr.Write(w, httperr.New(http.StatusUnauthorized, "invalid_credentials",
 					msgPasswordIncorrect))
 			} else {
+				h.stepUpPasswordUser.Release(passwordKey)
 				h.logger.Error("verify enrollment password", "err", err)
 				httperr.Write(w, httperr.ErrInternal)
 			}
 			return 0, 0, 0, false
 		}
+		h.stepUpPasswordUser.CommitSuccess(passwordKey)
 		return p.UserID, tokenVersion, p.SessionID, true
 	}
 	ch, ok := h.requireChallenge(w, r, PurposeEnroll2FA)

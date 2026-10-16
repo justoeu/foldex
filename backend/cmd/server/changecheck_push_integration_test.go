@@ -64,7 +64,7 @@ func TestChangeCheckPushGoesOnlyToTheLinkOwner(t *testing.T) {
 	daily := "daily"
 	_, err = linkRepo.Update(ctx, ownerA, linkA.ID, links.UpdateInput{
 		CheckInterval: &daily, CheckIntervalSet: true,
-	})
+	}, nil, "")
 	require.NoError(t, err)
 
 	oldBody := []byte(`<html><body><main>old owner A content</main></body></html>`)

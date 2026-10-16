@@ -24,6 +24,7 @@ type Handler struct {
 	worker     Enqueuer
 	fetcher    MetadataFetcher // optional — disables /url-metadata when nil
 	folderGate folders.ContentGate
+	unlockKey  []byte
 	metaMu     sync.Mutex
 	metaSem    chan struct{}
 	metaUsers  map[authctx.UserID]int
@@ -45,7 +46,21 @@ func (h *Handler) WithMetadataFetcher(f MetadataFetcher) *Handler {
 // WithFolderGate enables unlock-token content-gate on ?folder_id= lists.
 func (h *Handler) WithFolderGate(lookup folders.PasswordHashLookup, unlockKey []byte) *Handler {
 	h.folderGate = folders.NewContentGate(lookup, unlockKey)
+	h.unlockKey = unlockKey
 	return h
+}
+
+// gateEntityRead refuses to reveal a link that sits in a locked folder
+// without the same unlock token the folder-scoped lists demand. Direct
+// reads by id would otherwise bypass the lock the lists honour.
+func (h *Handler) gateEntityRead(r *http.Request, l Link) error {
+	if l.FolderID == nil {
+		return nil
+	}
+	if !h.folderGate.Configured() {
+		return folders.ErrGateUnavailable
+	}
+	return h.folderGate.Check(r.Context(), authctx.MustUser(r.Context()), *l.FolderID, r.Header.Get(folders.UnlockHeader))
 }
 
 func (h *Handler) Mount(r chi.Router) {
@@ -95,6 +110,10 @@ func (h *Handler) getByURL(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, repositoryHTTPError(err))
 		return
 	}
+	if err := h.gateEntityRead(r, link); err != nil {
+		httperr.Write(w, repositoryHTTPError(err))
+		return
+	}
 	httperr.JSON(w, http.StatusOK, link)
 }
 
@@ -131,6 +150,10 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, repositoryHTTPError(err))
 		return
 	}
+	if err := h.gateEntityRead(r, l); err != nil {
+		httperr.Write(w, repositoryHTTPError(err))
+		return
+	}
 	httperr.JSON(w, http.StatusOK, l)
 }
 
@@ -144,7 +167,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	l, err := h.repo.Update(r.Context(), authctx.MustUser(r.Context()), id, in)
+	l, err := h.repo.Update(r.Context(), authctx.MustUser(r.Context()), id, in, h.unlockKey, r.Header.Get(folders.UnlockHeader))
 	if err != nil {
 		httperr.Write(w, repositoryHTTPError(err))
 		return
@@ -169,7 +192,7 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 	if existing, err := h.repo.Get(r.Context(), authctx.MustUser(r.Context()), id); err == nil {
 		title = existing.Title
 	}
-	if err := h.repo.Delete(r.Context(), authctx.MustUser(r.Context()), id); err != nil {
+	if err := h.repo.Delete(r.Context(), authctx.MustUser(r.Context()), id, h.unlockKey, r.Header.Get(folders.UnlockHeader)); err != nil {
 		httperr.Write(w, repositoryHTTPError(err))
 		return
 	}
@@ -183,7 +206,12 @@ func (h *Handler) refreshPreview(w http.ResponseWriter, r *http.Request) {
 		httperr.Write(w, err)
 		return
 	}
-	if _, err := h.repo.Get(r.Context(), authctx.MustUser(r.Context()), id); err != nil {
+	link, err := h.repo.Get(r.Context(), authctx.MustUser(r.Context()), id)
+	if err != nil {
+		httperr.Write(w, repositoryHTTPError(err))
+		return
+	}
+	if err := h.gateEntityRead(r, link); err != nil {
 		httperr.Write(w, repositoryHTTPError(err))
 		return
 	}
@@ -206,6 +234,12 @@ func (h *Handler) seenChange(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		httperr.Write(w, err)
 		return
+	}
+	if link, gerr := h.repo.Get(r.Context(), authctx.MustUser(r.Context()), id); gerr == nil {
+		if err := h.gateEntityRead(r, link); err != nil {
+			httperr.Write(w, repositoryHTTPError(err))
+			return
+		}
 	}
 	if err := h.repo.MarkChangeSeen(r.Context(), authctx.MustUser(r.Context()), id); err != nil {
 		httperr.Write(w, repositoryHTTPError(err))

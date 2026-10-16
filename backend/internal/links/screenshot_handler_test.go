@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"foldex/internal/folders"
 	"foldex/internal/linkimage"
 	"foldex/internal/pkg/authctx"
 	"foldex/internal/ports"
@@ -1224,6 +1225,7 @@ func TestUploadImage_ReplacementCleansExactSupersededObject(t *testing.T) {
 func TestDeleteImage_Success(t *testing.T) {
 	up := newFakeUploader()
 	repo := newFakeRepo()
+	repo.links[8] = Link{ID: 8, URL: "https://x.example"}
 	sh := &ScreenshotHandler{repo: repo, storage: up, logger: newTestLogger()}
 	r := chi.NewRouter()
 	r.Use(authctxtest.Middleware(authctxtest.DefaultUser))
@@ -1233,6 +1235,38 @@ func TestDeleteImage_Success(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
+	assert.Equal(t, http.StatusNoContent, w.Code)
+	assert.Equal(t, []int64{8}, repo.clearedIDs)
+}
+
+type stubFolderHashLookup struct{ hash *string }
+
+func (s stubFolderHashLookup) PasswordHashFor(context.Context, authctx.UserID, int64) (*string, error) {
+	return s.hash, nil
+}
+
+func TestDeleteImage_LockedFolderRequiresUnlock(t *testing.T) {
+	repo := newFakeRepo()
+	folderID := int64(3)
+	repo.links[8] = Link{ID: 8, URL: "https://x.example", FolderID: &folderID}
+	hash := "folder-hash"
+	unlockKey := []byte("01234567890123456789012345678901")
+	sh := (&ScreenshotHandler{repo: repo, storage: newFakeUploader(), logger: newTestLogger()}).
+		WithFolderGate(stubFolderHashLookup{hash: &hash}, unlockKey)
+	r := chi.NewRouter()
+	r.Use(authctxtest.Middleware(authctxtest.DefaultUser))
+	r.Delete("/api/links/{id}/image", sh.DeleteImage)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/links/8/image", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.Empty(t, repo.clearedIDs)
+
+	req = httptest.NewRequest(http.MethodDelete, "/api/links/8/image", nil)
+	req.Header.Set(folders.UnlockHeader, folders.IssueUnlockToken(unlockKey, folderID, hash))
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusNoContent, w.Code)
 	assert.Equal(t, []int64{8}, repo.clearedIDs)
 }

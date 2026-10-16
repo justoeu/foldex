@@ -305,6 +305,61 @@ func TestRepository_DeleteCascadeLocksSubtreeBeforeProtectionCheck(t *testing.T)
 	require.NoError(t, err)
 }
 
+// The subtree must be materialized only after the user's whole folder
+// hierarchy is locked. Materializing first and locking second leaves a
+// window where a concurrent move commits in between: EvalPlanQual
+// re-evaluates the temp-table predicate, never parent_id, so a child moved
+// OUT of the subtree mid-cascade is deleted anyway.
+func TestRepository_DeleteCascadePreservesChildMovedOutMidCascade(t *testing.T) {
+	pool := testdb.Shared(t)
+	ctx := context.Background()
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
+	frepo := folders.NewRepository(pool)
+	root, err := frepo.Create(ctx, uid, folders.CreateInput{Name: "Root", Color: "#abc"})
+	require.NoError(t, err)
+	child, err := frepo.Create(ctx, uid, folders.CreateInput{Name: "Child", Color: "#def", ParentID: &root.ID})
+	require.NoError(t, err)
+
+	// The move, uncommitted: it holds the child's row lock while remaining
+	// invisible to the cascade's snapshots.
+	moveTx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer moveTx.Rollback(ctx)
+	_, err = moveTx.Exec(ctx,
+		`UPDATE folder SET parent_id = NULL WHERE user_id = $1 AND id = $2`,
+		int64(uid), child.ID)
+	require.NoError(t, err)
+
+	result := make(chan error, 1)
+	go func() {
+		result <- frepo.DeleteCascade(context.Background(), uid, root.ID, testUnlockKey, "")
+	}()
+	require.Eventually(t, func() bool {
+		var waiting bool
+		err := pool.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM pg_stat_activity
+				WHERE datname = current_database()
+				  AND pid <> pg_backend_pid()
+				  AND wait_event_type = 'Lock'
+				  AND query ILIKE '%folder%'
+			)`).Scan(&waiting)
+		return err == nil && waiting
+	}, 2*time.Second, 10*time.Millisecond, "cascade should wait on the moving child's row lock")
+	require.NoError(t, moveTx.Commit(ctx))
+
+	select {
+	case err := <-result:
+		require.NoError(t, err, "deleting the root itself is legitimate")
+	case <-time.After(2 * time.Second):
+		t.Fatal("cascade did not finish after the move committed")
+	}
+	_, err = frepo.Get(ctx, uid, root.ID)
+	require.Error(t, err, "the root is gone")
+	_, err = frepo.Get(ctx, uid, child.ID)
+	require.NoError(t, err, "a child moved out before the subtree was locked must survive the cascade")
+}
+
 // TestRepository_UpdateRejectsCycle locks the serializable cycle guard.
 // Trying to set parent_id = a descendant must return ErrParentCycle; without
 // it, A→B→A would orphan the subtree from the root.
@@ -726,7 +781,7 @@ func TestRepository_ResetPasswordByMaster(t *testing.T) {
 	assert.ErrorIs(t, err, folders.ErrMasterNotConfigured)
 
 	srepo := settings.NewRepository(pool)
-	require.NoError(t, srepo.SetMasterPassword(ctx, uid, "master-pass-ok", nil))
+	require.NoError(t, srepo.SetMasterPassword(ctx, uid, "master-pass-ok", nil, nil))
 
 	err = frepo.ResetPasswordByMaster(ctx, uid, f.ID, "wrong-master")
 	assert.ErrorIs(t, err, folders.ErrStaleMasterProof)

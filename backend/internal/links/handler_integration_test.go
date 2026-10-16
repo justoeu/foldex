@@ -274,7 +274,7 @@ func TestHandler_SeenChange(t *testing.T) {
 	l, err := repo.Create(ctx, uid, links.CreateInput{URL: "https://sc.example", Title: "sc"})
 	require.NoError(t, err)
 	di := "daily"
-	_, err = repo.Update(ctx, uid, l.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
+	_, err = repo.Update(ctx, uid, l.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true}, nil, "")
 	require.NoError(t, err)
 	claim := claimChecks(t, ctx, repo, l.ID)[l.ID]
 	recordCheckResult(t, ctx, repo, l.ID, claim.ClaimedAt, links.CheckResult{Fingerprint: "a"})
@@ -296,7 +296,7 @@ func TestHandler_ListRecentChanges(t *testing.T) {
 	l, err := repo.Create(ctx, uid, links.CreateInput{URL: "https://rc.example", Title: "rc"})
 	require.NoError(t, err)
 	di := "daily"
-	_, err = repo.Update(ctx, uid, l.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
+	_, err = repo.Update(ctx, uid, l.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true}, nil, "")
 	require.NoError(t, err)
 	claim := claimChecks(t, ctx, repo, l.ID)[l.ID]
 	recordCheckResult(t, ctx, repo, l.ID, claim.ClaimedAt, links.CheckResult{Fingerprint: "a"})
@@ -413,7 +413,7 @@ func TestRepository_Create_AutoSlugCollision(t *testing.T) {
 
 func TestRepository_Delete_NotFound(t *testing.T) {
 	ctx, uid, lrepo, _ := setup(t)
-	err := lrepo.Delete(ctx, uid, 99999)
+	err := lrepo.Delete(ctx, uid, 99999, nil, "")
 	require.Error(t, err)
 }
 
@@ -516,7 +516,7 @@ func TestRepository_Update_FullFieldCoverage(t *testing.T) {
 		FolderID:    &f.ID,
 		FolderIDSet: true,
 		TagIDs:      &tags,
-	})
+	}, nil, "")
 	require.NoError(t, err)
 	assert.Equal(t, newURL, updated.URL)
 	assert.Equal(t, newTitle, updated.Title)
@@ -533,13 +533,13 @@ func TestRepository_Update_FullFieldCoverage(t *testing.T) {
 		FolderID:    nil,
 		SlugSet:     true,
 		Slug:        nil,
-	})
+	}, nil, "")
 	require.NoError(t, err)
 	assert.Nil(t, cleared.FolderID)
 	assert.NotEmpty(t, cleared.Slug)
 
 	// Empty patch still returns the row.
-	same, err := lrepo.Update(ctx, uid, l.ID, links.UpdateInput{})
+	same, err := lrepo.Update(ctx, uid, l.ID, links.UpdateInput{}, nil, "")
 	require.NoError(t, err)
 	assert.Equal(t, cleared.ID, same.ID)
 }
@@ -552,7 +552,7 @@ func TestRepository_Update_SlugTaken(t *testing.T) {
 	b, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://b1.example", Title: "B"})
 	require.NoError(t, err)
 
-	_, err = lrepo.Update(ctx, uid, b.ID, links.UpdateInput{Slug: &slugA, SlugSet: true})
+	_, err = lrepo.Update(ctx, uid, b.ID, links.UpdateInput{Slug: &slugA, SlugSet: true}, nil, "")
 	require.ErrorIs(t, err, links.ErrSlugTaken)
 }
 

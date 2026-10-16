@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"foldex/internal/pkg/attemptlimit"
+	"foldex/internal/pkg/authctx"
 )
 
 // Per-folder brute-force throttle for the unlock endpoint (ADR-28): after
@@ -37,7 +38,15 @@ func beginUnlockAttempt(limiter *attemptlimit.Limiter, key string) (time.Time, b
 
 // SweepLimiters is the lifecycle hook registered with the process sweeper.
 func (h *Handler) SweepLimiters(olderThan time.Duration) int {
-	return h.limiter.Sweep(olderThan)
+	n := h.limiter.Sweep(olderThan)
+	if h.masterLimiter != nil {
+		n += h.masterLimiter.Sweep(olderThan)
+	}
+	return n
+}
+
+func masterKeyFor(uid authctx.UserID) string {
+	return "master:" + strconv.FormatInt(int64(uid), 10)
 }
 
 // unlockKeyFor is the limiter key for a folder.

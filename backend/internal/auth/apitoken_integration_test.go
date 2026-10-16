@@ -119,6 +119,35 @@ func TestAPIToken_IsRefusedOnTheIdentityAndAdminSurfaces(t *testing.T) {
 	assert.Equal(t, "token_scope", errCode(t, rec))
 }
 
+// The enrollment half of the 2FA surface mounts with Optional (it must also
+// serve a pre-auth challenge), which resolves a Bearer [REDACTED] into a
+// principal. Without RejectAPIToken chained on those five routes, a
+// content-scoped token reaches the credential surface: the QR route can
+// disclose a pending TOTP seed and the confirm route can burn the owner's
+// step-up budget. The disable routes inside the authenticated group already
+// reject tokens; enrollment must answer identically.
+func TestAPIToken_IsRefusedOnTwoFactorEnrollmentRoutes(t *testing.T) {
+	h := newHarness(t)
+	admin := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")
+	token := h.mintToken(t, admin, "extension")
+	hdr := bearerHeader(token)
+
+	for _, tc := range []struct {
+		method, path string
+		body         any
+	}{
+		{http.MethodPost, "/api/auth/2fa/totp/start", map[string]string{"password": "correct horse battery"}},
+		{http.MethodGet, "/api/auth/2fa/totp/qr.png", nil},
+		{http.MethodPost, "/api/auth/2fa/totp/confirm", map[string]string{"code": "123456"}},
+		{http.MethodPost, "/api/auth/2fa/email/start", map[string]string{"password": "correct horse battery"}},
+		{http.MethodPost, "/api/auth/2fa/email/confirm", map[string]string{"code": "123456"}},
+	} {
+		rec := h.client(t).doRaw(tc.method, tc.path, tc.body, hdr)
+		assert.Equal(t, http.StatusForbidden, rec.Code, "%s %s: %s", tc.method, tc.path, rec.Body.String())
+		assert.Equal(t, "token_scope", errCode(t, rec), "%s %s", tc.method, tc.path)
+	}
+}
+
 func TestAPIToken_RevokedTokenStopsWorkingImmediately(t *testing.T) {
 	h := newHarness(t)
 	admin := h.bootstrapAdmin(t, "admin@example.com", "correct horse battery")

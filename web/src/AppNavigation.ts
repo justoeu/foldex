@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { isBoolean, usePersistedMap } from './hooks/usePersistedState'
 import { usePasswordPrompt, type FolderUnlock } from './components/PasswordPromptDialog'
+import { syncFolderUnlocks } from './lib/folderUnlockRegistry'
 import type { Folder } from './api/types'
 import type { ViewMode } from './lib/viewPrefs'
 
@@ -99,6 +100,9 @@ export function useAppNavigationController(allFolders: Folder[] | undefined) {
 
   useEffect(() => {
     unlockedFoldersRef.current = unlockedFolders
+    // Mirror into the API-layer registry so direct entity reads/mutations
+    // can attach the unlock header without prop-drilling the map.
+    syncFolderUnlocks(unlockedFolders)
   }, [unlockedFolders])
 
   useEffect(() => {

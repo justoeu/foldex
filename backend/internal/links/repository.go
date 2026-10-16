@@ -243,12 +243,16 @@ func (r *Repository) List(ctx context.Context, uid authctx.UserID, q ListQuery) 
 	return links, nil
 }
 
-func (r *Repository) Update(ctx context.Context, uid authctx.UserID, id int64, in UpdateInput) (Link, error) {
+func (r *Repository) Update(ctx context.Context, uid authctx.UserID, id int64, in UpdateInput, unlockKey []byte, unlockToken string) (Link, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return Link{}, err
 	}
 	defer tx.Rollback(ctx)
+
+	if err := folders.CheckEntityFolderTx(ctx, tx, "link", uid, id, unlockKey, unlockToken); err != nil {
+		return Link{}, err
+	}
 
 	b := &crudupdate.SetBuilder{}
 	resetCheckConditions, err := applyLinkColumns(ctx, tx, uid, id, b, in)
@@ -356,17 +360,19 @@ func applyLinkColumns(ctx context.Context, tx pgx.Tx, uid authctx.UserID, id int
 // migration 000014 FK CASCADE (link_tag/click_log → link) was dropped when
 // those tables were polymorphized for notes, so the cascade is now app-level:
 // both child tables are cleared inside the same tx as the link row delete.
-func (r *Repository) Delete(ctx context.Context, uid authctx.UserID, id int64) error {
+func (r *Repository) Delete(ctx context.Context, uid authctx.UserID, id int64, unlockKey []byte, unlockToken string) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin delete tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
-	// Ownership is proven first: link_tag and click_log carry no user_id, so
-	// their DELETEs cannot be scoped and would otherwise purge another tenant's
-	// rows for a colliding entity_id before the link DELETE reported 404.
-	if err := crudupdate.AssertOwned(ctx, tx, "link", uid, id); err != nil {
+	// The folder gate doubles as the ownership proof (it locks the row
+	// owner-scoped and returns ErrNotFound otherwise) — link_tag and
+	// click_log carry no user_id, so their DELETEs cannot be scoped and
+	// would otherwise purge another tenant's rows for a colliding entity_id
+	// before the link DELETE reported 404.
+	if err := folders.CheckEntityFolderTx(ctx, tx, "link", uid, id, unlockKey, unlockToken); err != nil {
 		return err
 	}
 	if err := entityrefs.PurgeOne(ctx, tx, "link", id); err != nil {

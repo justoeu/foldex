@@ -41,6 +41,18 @@ import (
 // is no longer generic.
 const MaxMembersPerKey = 128
 
+// DefaultMaxKeys bounds how many distinct keys one limiter tracks.
+//
+// Keys on the pre-auth surfaces are attacker-minted strings (a tried e-mail
+// address, a source IP), so an unbounded map turns the throttle itself into
+// the memory-exhaustion vector between sweeps. The ceiling mirrors
+// internal/pkg/quota's: orders of magnitude above any real key population,
+// low enough that a hostile key function cannot grow the process without
+// limit. Eviction prefers the stalest UNLOCKED entry — a live lockout is
+// only dropped when nothing unlocked remains, because memory must stay
+// bounded even when every tracked key is serving a penalty.
+const DefaultMaxKeys = 10_000
+
 // Limiter caps failures per key, counting either ATTEMPTS or DISTINCT MEMBERS.
 //
 // The reserve-then-commit API (Begin → CommitFail / CommitSuccess / Release)
@@ -67,6 +79,7 @@ type Limiter struct {
 	mu      sync.Mutex
 	entries map[string]*attempt
 	max     int
+	maxKeys int
 	lockout time.Duration
 	now     func() time.Time
 }
@@ -124,9 +137,22 @@ func New(max int, lockout time.Duration) *Limiter {
 	return &Limiter{
 		entries: make(map[string]*attempt),
 		max:     max,
+		maxKeys: DefaultMaxKeys,
 		lockout: lockout,
 		now:     time.Now,
 	}
+}
+
+// WithMaxKeys overrides the tracked-key ceiling. Tests use it to reach the
+// ceiling without minting ten thousand keys; production keeps the default.
+func (l *Limiter) WithMaxKeys(n int) *Limiter {
+	if n < 1 {
+		n = 1
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.maxKeys = n
+	return l
 }
 
 // WithClock overrides the time source. Tests use it to advance past a lockout
@@ -389,10 +415,62 @@ func (l *Limiter) Len() int {
 func (l *Limiter) entryLocked(key string) *attempt {
 	e := l.entries[key]
 	if e == nil {
+		l.makeRoomLocked()
 		e = &attempt{}
 		l.entries[key] = e
 	}
 	return e
+}
+
+// makeRoomLocked evicts entries until a new key fits under the ceiling.
+// In-flight reservations are never evicted: dropping one would corrupt the
+// reserve-then-commit accounting of a request still checking a credential.
+// Unlocked entries go first (stalest failure wins); a live lockout is only
+// evicted when nothing unlocked remains, soonest expiry first, because the
+// memory bound must hold even when every tracked key is serving a penalty.
+func (l *Limiter) makeRoomLocked() {
+	if l.maxKeys < 1 {
+		l.maxKeys = DefaultMaxKeys
+	}
+	for len(l.entries) >= l.maxKeys {
+		if !l.evictOneLocked() {
+			return // everything is in-flight; the map may exceed by concurrency
+		}
+	}
+}
+
+func (l *Limiter) evictOneLocked() bool {
+	now := l.now()
+	if key, ok := l.stalestLocked(now, false); ok {
+		delete(l.entries, key)
+		return true
+	}
+	key, ok := l.stalestLocked(now, true)
+	if ok {
+		delete(l.entries, key)
+	}
+	return ok
+}
+
+// stalestLocked finds the best eviction candidate among entries whose
+// locked state equals wantLocked: unlocked entries rank by last failure,
+// locked ones by soonest lockout expiry.
+func (l *Limiter) stalestLocked(now time.Time, wantLocked bool) (string, bool) {
+	bestKey := ""
+	var bestRank time.Time
+	for key, e := range l.entries {
+		if e.inFlight > 0 || e.lockedUntil.After(now) != wantLocked {
+			continue
+		}
+		rank := e.lastFail
+		if wantLocked {
+			rank = e.lockedUntil
+		}
+		if bestKey == "" || rank.Before(bestRank) {
+			bestKey, bestRank = key, rank
+		}
+	}
+	return bestKey, bestKey != ""
 }
 
 func (l *Limiter) clearExpiredLocked(e *attempt, now time.Time) {

@@ -23,6 +23,7 @@ import (
 	"foldex/internal/metrics"
 	"foldex/internal/notemedia"
 	"foldex/internal/oauthgoogle"
+	"foldex/internal/pkg/attemptlimit"
 	"foldex/internal/pkg/keyfile"
 	"foldex/internal/pkg/secrets"
 	"foldex/internal/policy"
@@ -332,14 +333,16 @@ func assembleDeps(h *handles) (*runtime, error) {
 	})
 	adminHandler := auth.NewAdminHandler(authRepo, h.mail.sender, h.logger, h.cfg.AuthPublicURL, policyRepo, h.grants)
 	policyHandler := policy.NewHandler(policyRepo, h.logger, adminHandler.AuditPolicyChange, h.grants)
+	masterLimiter := attemptlimit.New(5, time.Hour)
 	folderHandler := folders.NewHandler(
 		folders.NewRepository(h.pool), h.folderUnlock, settings.NewRepository(h.pool), h.grants,
-	)
+	).WithMasterLimiter(masterLimiter)
+	settingsHandler := settings.NewHandler(settings.NewRepository(h.pool)).WithMasterLimiter(masterLimiter)
 
 	sweeper := auth.NewSweeper(authRepo, h.logger,
 		time.Duration(h.cfg.AuthSweepIntervalMin)*time.Minute,
 		time.Duration(h.cfg.AuthSweepRetainDays)*24*time.Hour).
-		WithInMemory(authHandler.SweepLimiters, folderHandler.SweepLimiters, authMW.SweepTouch)
+		WithInMemory(authHandler.SweepLimiters, folderHandler.SweepLimiters, settingsHandler.SweepLimiters, authMW.SweepTouch)
 	sweeper.Start(h.ctx)
 
 	appMetrics := metrics.New(h.pool)
@@ -383,6 +386,7 @@ func assembleDeps(h *handles) (*runtime, error) {
 		PolicyHandler:   policyHandler,
 		AuthMiddleware:  authMW,
 		FolderHandler:   folderHandler,
+		SettingsHandler: settingsHandler,
 		AbusePolicy:     h.abuse,
 	}
 	if h.storage != nil {

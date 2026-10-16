@@ -5,6 +5,7 @@ package auth_test
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -301,4 +302,35 @@ func TestLogin_AnAccountLockoutIsLabelledAsSuch(t *testing.T) {
 	require.NotNil(t, detail)
 	assert.Equal(t, "account", *detail,
 		"a lockout earned by hammering ONE account must not be filed as a sweep of many")
+}
+
+// Both login buckets must key on the SAME canonical identifier.
+//
+// The origin bucket truncates its member to the 320-byte e-mail ceiling; the
+// per-account bucket used to key on the untruncated submission. One origin
+// sending identifiers that share a 320-byte prefix with distinct suffixes
+// therefore held ONE breadth member while minting a fresh depth bucket per
+// request — neither lockout could ever trip, and each attempt still paid for
+// SQL, a dummy bcrypt and an audit row. Canonicalizing once, before either
+// bucket (and before the bucket-key query) makes the variants one account
+// key, so the depth ceiling trips and leaves its audit row.
+func TestLogin_LongIdentifierPrefixDoesNotBypassIPBucket(t *testing.T) {
+	h := newHarness(t)
+	c := h.client(t)
+
+	prefix := strings.Repeat("a", 320)
+	for i := range abusepolicy.Default().LoginFailuresPerAccount {
+		rec := c.do(http.MethodPost, "/api/auth/login", map[string]string{
+			"email":    fmt.Sprintf("%s-variant-%d@example.com", prefix, i),
+			"password": "wrong",
+		})
+		require.Equal(t, http.StatusUnauthorized, rec.Code,
+			"variant %d stays byte-identical to any other miss (INV-041)", i+1)
+	}
+
+	var rows int
+	require.NoError(t, h.pool.QueryRow(t.Context(),
+		`SELECT count(*) FROM audit_log WHERE action = 'auth.rate_limited' AND detail = 'account'`).Scan(&rows))
+	assert.Equal(t, 1, rows,
+		"suffix variants past byte 320 must share one per-account bucket, so the depth lockout trips exactly once")
 }

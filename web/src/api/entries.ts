@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData, type QueryClient, type QueryKey } from '@tanstack/react-query'
 import { http } from './client'
 import { FOLDER_UNLOCK_HEADER } from './folders'
+import { folderUnlockTokenFor } from '../lib/folderUnlockRegistry'
 import type { Entry, Link } from './types'
 
 export type EntryListParams = {
@@ -237,6 +238,19 @@ export function removeCachedEntry(qc: QueryClient, kind: Entry['kind'], id: numb
     })
     return changed ? { ...old, pages } : old
   })
+}
+
+// entityUnlockHeaders resolves the unlock header for a direct entity
+// request from the entry's cached folder plus the session unlock registry.
+// Unknown folder (entry not cached) sends nothing — the backend then
+// answers folder_locked only when the folder really is protected.
+export function entityUnlockHeaders(
+  qc: QueryClient,
+  kind: Entry['kind'],
+  id: number,
+): Record<string, string> | undefined {
+  const token = folderUnlockTokenFor(cachedEntryFolderId(qc, kind, id))
+  return token ? { [FOLDER_UNLOCK_HEADER]: token } : undefined
 }
 
 export function cachedEntryFolderId(qc: QueryClient, kind: Entry['kind'], id: number): number | null | undefined {

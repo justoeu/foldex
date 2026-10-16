@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,6 +16,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"foldex/internal/folders"
 	"foldex/internal/imageopt"
 	"foldex/internal/linkimage"
 	"foldex/internal/pkg/authctx"
@@ -87,6 +89,7 @@ type ScreenshotHandler struct {
 	storage       Uploader
 	urlPolicy     URLPolicy
 	logger        *slog.Logger
+	folderGate    folders.ContentGate
 	captureSem    chan struct{}
 	captureMu     sync.Mutex
 	captureUsers  map[authctx.UserID]int
@@ -100,6 +103,26 @@ type ScreenshotHandler struct {
 func (h *ScreenshotHandler) WithEnqueuer(e ports.Enqueuer) *ScreenshotHandler {
 	h.enqueuer = e
 	return h
+}
+
+// WithFolderGate enables the folder-lock check on the MUTATING image
+// routes (capture, upload, delete). File READs stay ownership-scoped
+// capability URLs: keys carry an unguessable UUID segment, are only
+// disclosed inside gated payloads, and <img> tags cannot send the unlock
+// header a stricter proxy would demand.
+func (h *ScreenshotHandler) WithFolderGate(lookup folders.PasswordHashLookup, unlockKey []byte) *ScreenshotHandler {
+	h.folderGate = folders.NewContentGate(lookup, unlockKey)
+	return h
+}
+
+func (h *ScreenshotHandler) gateFolder(r *http.Request, l Link) error {
+	if l.FolderID == nil {
+		return nil
+	}
+	if !h.folderGate.Configured() {
+		return folders.ErrGateUnavailable
+	}
+	return h.folderGate.Check(r.Context(), authctx.MustUser(r.Context()), *l.FolderID, r.Header.Get(folders.UnlockHeader))
 }
 
 // NewScreenshotHandler creates a ScreenshotHandler. urlPolicy gates
@@ -146,6 +169,11 @@ func (h *ScreenshotHandler) admitCapture(w http.ResponseWriter, r *http.Request)
 	}
 	link, err := h.repo.Get(r.Context(), uid, id)
 	if err != nil {
+		h.releaseCapture(uid)
+		httperr.Write(w, repositoryHTTPError(err))
+		return 0, 0, Link{}, false
+	}
+	if err := h.gateFolder(r, link); err != nil {
 		h.releaseCapture(uid)
 		httperr.Write(w, repositoryHTTPError(err))
 		return 0, 0, Link{}, false
@@ -401,7 +429,11 @@ func (h *ScreenshotHandler) authorizeKey(ctx context.Context, key string) error 
 
 // linkKeyID extracts the link id from an id-derived object key
 // (`screenshots/12.version.jpg` → 12). Reports false for anything that is not
-// `{prefix}/{digits}.{suffix}`.
+// `{prefix}/{digits}.{suffix}`, with the suffix held to the same grammar the
+// backup restore enforces (dot-prefixed alphanumeric/hyphen segments): a
+// nested path like `screenshots/12.png/extra` must not parse as link 12.
+var linkKeySuffixRE = regexp.MustCompile(`^(\.[A-Za-z0-9-]{1,64})+$`)
+
 func linkKeyID(key string) (int64, bool) {
 	slash := strings.IndexByte(key, '/')
 	if slash < 0 {
@@ -410,6 +442,9 @@ func linkKeyID(key string) (int64, bool) {
 	rest := key[slash+1:]
 	dot := strings.IndexByte(rest, '.')
 	if dot <= 0 {
+		return 0, false
+	}
+	if !linkKeySuffixRE.MatchString(rest[dot:]) {
 		return 0, false
 	}
 	id, err := strconv.ParseInt(rest[:dot], 10, 64)
@@ -491,8 +526,12 @@ func (h *ScreenshotHandler) UploadImage(w http.ResponseWriter, r *http.Request) 
 	// user's link id could overwrite their image before the scoped update
 	// reports not-found.
 	uid := authctx.MustUser(r.Context())
-	_, err = h.repo.Get(r.Context(), uid, id)
+	link, err := h.repo.Get(r.Context(), uid, id)
 	if err != nil {
+		httperr.Write(w, repositoryHTTPError(err))
+		return
+	}
+	if err := h.gateFolder(r, link); err != nil {
 		httperr.Write(w, repositoryHTTPError(err))
 		return
 	}
@@ -592,6 +631,15 @@ func (h *ScreenshotHandler) DeleteImage(w http.ResponseWriter, r *http.Request) 
 	id, err := httperr.ParseID(chi.URLParam(r, "id"))
 	if err != nil {
 		httperr.Write(w, httperr.ErrBadRequest)
+		return
+	}
+	link, err := h.repo.Get(r.Context(), authctx.MustUser(r.Context()), id)
+	if err != nil {
+		httperr.Write(w, repositoryHTTPError(err))
+		return
+	}
+	if err := h.gateFolder(r, link); err != nil {
+		httperr.Write(w, repositoryHTTPError(err))
 		return
 	}
 	if err := h.repo.ClearOGImage(r.Context(), authctx.MustUser(r.Context()), id); err != nil {

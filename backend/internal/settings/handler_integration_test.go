@@ -108,6 +108,50 @@ func TestHandler_MasterPassword_SetChangeClear(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rr.Code)
 }
 
+// The master password is the recovery root for every protected folder, so
+// guessing it through the settings surface needs the same kind of budget
+// the folder unlock has: five wrong current passwords, then refusals.
+func TestHandler_MasterPassword_RateLimitsWrongCurrent(t *testing.T) {
+	h := newSettingsRouter(t)
+
+	rr := do(t, h, http.MethodPut, "/settings/master-password", map[string]any{"password": "first-master-pw"})
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	for i := range 4 {
+		rr = do(t, h, http.MethodPut, "/settings/master-password", map[string]any{
+			"password": "second-master-pw", "current_password": "nope",
+		})
+		require.Equal(t, http.StatusUnauthorized, rr.Code, "wrong attempt %d", i+1)
+	}
+
+	// The fifth failure crosses the ceiling and is itself the 429, matching
+	// the folder unlock's shape.
+	rr = do(t, h, http.MethodPut, "/settings/master-password", map[string]any{
+		"password": "second-master-pw", "current_password": "nope",
+	})
+	assert.Equal(t, http.StatusTooManyRequests, rr.Code,
+		"the fifth wrong current master password must be refused: %s", rr.Body.String())
+	assert.NotEmpty(t, rr.Header().Get("Retry-After"))
+}
+
+func TestHandler_ClearMasterPassword_RateLimitsWrongCurrent(t *testing.T) {
+	h := newSettingsRouter(t)
+
+	rr := do(t, h, http.MethodPut, "/settings/master-password", map[string]any{"password": "first-master-pw"})
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	for i := range 4 {
+		rr = do(t, h, http.MethodDelete, "/settings/master-password", map[string]any{
+			"current_password": "nope",
+		})
+		require.Equal(t, http.StatusUnauthorized, rr.Code, "wrong attempt %d", i+1)
+	}
+	rr = do(t, h, http.MethodDelete, "/settings/master-password", map[string]any{
+		"current_password": "nope",
+	})
+	assert.Equal(t, http.StatusTooManyRequests, rr.Code, rr.Body.String())
+}
+
 func TestHandler_MasterPassword_HintRoundTrip(t *testing.T) {
 	h := newSettingsRouter(t)
 
@@ -245,7 +289,7 @@ func TestHandler_ClosedPool_SurfacesErrors(t *testing.T) {
 	r.Use(authctxtest.Middleware(uid))
 	r.Route("/settings", settings.NewHandler(repo).Mount)
 	// Seed then close so subsequent handler calls hit repo errors.
-	require.NoError(t, repo.SetMasterPassword(context.Background(), uid, "seeded-master-pw", nil))
+	require.NoError(t, repo.SetMasterPassword(context.Background(), uid, "seeded-master-pw", nil, nil))
 	pool.Close()
 
 	rr := do(t, r, http.MethodGet, "/settings/master-password", nil)

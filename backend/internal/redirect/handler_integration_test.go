@@ -83,7 +83,7 @@ func TestRedirect_OptedInLinkRedirectsForAnonymous(t *testing.T) {
 		URL: "https://news.ycombinator.com", Title: "Hacker News",
 	})
 	require.NoError(t, err)
-	_, err = lrepo.Update(ctx, uid, created.ID, links.UpdateInput{IsPublic: boolPtr(true)})
+	_, err = lrepo.Update(ctx, uid, created.ID, links.UpdateInput{IsPublic: boolPtr(true)}, nil, "")
 	require.NoError(t, err)
 
 	r := chi.NewRouter()

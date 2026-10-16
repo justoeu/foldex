@@ -81,7 +81,7 @@ export function useLinkDialogImage(open: boolean, link: Link | null) {
     setUploadError(null)
     setCaptureWarning(null)
     try {
-      const { url } = await captureLinkScreenshot(link.id)
+      const { url } = await captureLinkScreenshot(link.id, link.folder_id)
       setRemoved(false)
       setPreviewBroken(false)
       setCaptureWarning(null)

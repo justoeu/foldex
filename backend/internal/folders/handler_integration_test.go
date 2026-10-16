@@ -85,7 +85,7 @@ func newHandlerRouterLiveMaster(t *testing.T, password string) (http.Handler, *f
 	pool := testdb.Shared(t)
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	settingsRepo := settings.NewRepository(pool)
-	require.NoError(t, settingsRepo.SetMasterPassword(context.Background(), uid, password, nil))
+	require.NoError(t, settingsRepo.SetMasterPassword(context.Background(), uid, password, nil, nil))
 	repo := folders.NewRepository(pool)
 	r := chi.NewRouter()
 	r.Use(authctxtest.Middleware(uid))
@@ -266,6 +266,80 @@ func TestHandler_ResetPassword_Master(t *testing.T) {
 	got := getFolder(t, h, f.ID)
 	assert.False(t, got.HasPassword)
 	assert.Nil(t, got.PasswordHint)
+}
+
+// Unlocking a folder is throttled per folder; resetting its password by
+// guessing the MASTER must be throttled per user, or the recovery route is
+// an unthrottled oracle for the one secret that opens every folder.
+func TestResetPasswordByMaster_RateLimitsFailedAttempts(t *testing.T) {
+	h, repo, uid := newHandlerRouterLiveMaster(t, "the-master-pass")
+	ctx := context.Background()
+
+	pw := "folder-pass"
+	f, err := repo.Create(ctx, uid, folders.CreateInput{Name: "Secret", Color: "#abc", Password: &pw})
+	require.NoError(t, err)
+
+	for i := range 4 {
+		rr := doJSON(t, h, http.MethodPost, "/folders/"+strconv.FormatInt(f.ID, 10)+"/reset-password",
+			map[string]any{"master_password": "nope"})
+		require.Equal(t, http.StatusUnauthorized, rr.Code, "wrong attempt %d", i+1)
+	}
+
+	rr := doJSON(t, h, http.MethodPost, "/folders/"+strconv.FormatInt(f.ID, 10)+"/reset-password",
+		map[string]any{"master_password": "nope"})
+	assert.Equal(t, http.StatusTooManyRequests, rr.Code,
+		"the fifth wrong master password must be refused: %s", rr.Body.String())
+	assert.NotEmpty(t, rr.Header().Get("Retry-After"))
+	assert.True(t, getFolder(t, h, f.ID).HasPassword, "the folder stays protected throughout")
+}
+
+// Folder CRUD is content and stays token-reachable, but the password fields
+// inside a PATCH (or a password on create) are credential operations: an
+// unattended extension token must not set, rotate or strip a folder
+// password — the same line unlock/reset-password/delete already draw with
+// RejectAPIToken at the route level. A name-only PATCH stays allowed.
+func TestHandler_APITokenCannotMutateFolderPassword(t *testing.T) {
+	pool := testdb.Shared(t)
+	ctx := context.Background()
+	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
+	repo := folders.NewRepository(pool)
+	f, err := repo.Create(ctx, uid, folders.CreateInput{Name: "Plain", Color: "#abc"})
+	require.NoError(t, err)
+
+	r := chi.NewRouter()
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			next.ServeHTTP(w, req.WithContext(authctx.WithPrincipal(req.Context(), authctx.Principal{
+				UserID: uid, Role: authctx.RoleEditor, Via: authctx.ViaAPIToken,
+			})))
+		})
+	})
+	r.Route("/folders", folders.NewHandler(repo, testUnlockKey, fakeMaster{}, nil).Mount)
+
+	for name, body := range map[string]map[string]any{
+		"set password":    {"password": "new-secret-pw"},
+		"remove password": {"password": nil},
+		"set hint":        {"password_hint": "a clue"},
+		"current only":    {"name": "Renamed", "current_password": "whatever"},
+	} {
+		rr := doJSON(t, r, http.MethodPatch, "/folders/"+strconv.FormatInt(f.ID, 10), body)
+		assert.Equal(t, http.StatusForbidden, rr.Code, "%s: %s", name, rr.Body.String())
+		assert.Contains(t, rr.Body.String(), "token_scope", name)
+	}
+
+	rr := doJSON(t, r, http.MethodPost, "/folders", map[string]any{
+		"name": "Token-made", "color": "#abc", "password": "new-secret-pw",
+	})
+	assert.Equal(t, http.StatusForbidden, rr.Code, rr.Body.String())
+	assert.Contains(t, rr.Body.String(), "token_scope")
+
+	rr = doJSON(t, r, http.MethodPatch, "/folders/"+strconv.FormatInt(f.ID, 10),
+		map[string]any{"name": "Renamed by token"})
+	assert.Equal(t, http.StatusOK, rr.Code, "content-only PATCH stays token-reachable: %s", rr.Body.String())
+
+	got, err := repo.Get(ctx, uid, f.ID)
+	require.NoError(t, err)
+	assert.False(t, got.HasPassword, "no rejected request may have installed a password")
 }
 
 func TestHandler_ResetPassword_MasterNotConfigured(t *testing.T) {
@@ -690,7 +764,7 @@ func TestFolderResetCannotResumeAcrossMasterRotation(t *testing.T) {
 	uid := testdb.SeedUser(t, pool, "owner@test.local", "admin")
 	ctx := context.Background()
 	settingsRepo := settings.NewRepository(pool)
-	require.NoError(t, settingsRepo.SetMasterPassword(ctx, uid, "master-one-pass", nil))
+	require.NoError(t, settingsRepo.SetMasterPassword(ctx, uid, "master-one-pass", nil, nil))
 
 	folderRepo := folders.NewRepository(pool)
 	pw := "folder-pass"
@@ -721,7 +795,8 @@ func TestFolderResetCannotResumeAcrossMasterRotation(t *testing.T) {
 		t.Fatal("reset never paused after bcrypt against H1")
 	}
 
-	require.NoError(t, settingsRepo.SetMasterPassword(ctx, uid, "master-two-pass", nil))
+	masterOne := "master-one-pass"
+	require.NoError(t, settingsRepo.SetMasterPassword(ctx, uid, "master-two-pass", &masterOne, nil))
 	close(resume)
 
 	var rr *httptest.ResponseRecorder

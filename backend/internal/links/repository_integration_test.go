@@ -167,7 +167,7 @@ func TestRepository_UpdateReplacesTagSet(t *testing.T) {
 	updated, err := lrepo.Update(ctx, uid, link.ID, links.UpdateInput{
 		Title:  &newTitle,
 		TagIDs: &newTags,
-	})
+	}, nil, "")
 	require.NoError(t, err)
 	assert.Equal(t, "renamed", updated.Title)
 	require.Len(t, updated.Tags, 1)
@@ -418,7 +418,7 @@ func TestRepository_DeleteCascadesLinkTag(t *testing.T) {
 	tag, _ := trepo.Create(ctx, uid, tags.CreateInput{Name: "t", Color: "#fff"})
 	link, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://x", Title: "x", TagIDs: []int64{tag.ID}})
 
-	require.NoError(t, lrepo.Delete(ctx, uid, link.ID))
+	require.NoError(t, lrepo.Delete(ctx, uid, link.ID, nil, ""))
 	_, err := lrepo.Get(ctx, uid, link.ID)
 	assert.ErrorIs(t, err, domainerr.ErrNotFound)
 }
@@ -516,7 +516,7 @@ func TestRepository_PinnedAlwaysComesFirst(t *testing.T) {
 	older, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://older", Title: "Older"})
 	require.NoError(t, err)
 	pinTrue := true
-	_, err = lrepo.Update(ctx, uid, older.ID, links.UpdateInput{Pinned: &pinTrue})
+	_, err = lrepo.Update(ctx, uid, older.ID, links.UpdateInput{Pinned: &pinTrue}, nil, "")
 	require.NoError(t, err)
 
 	for _, sort := range []string{"", "recent", "clicks", "alpha", "alpha_desc"} {
@@ -542,7 +542,7 @@ func TestRepository_UpdateDuplicateURLReturns409(t *testing.T) {
 	require.NoError(t, err)
 
 	bURL := "https://b.example"
-	_, err = lrepo.Update(ctx, uid, a.ID, links.UpdateInput{URL: &bURL})
+	_, err = lrepo.Update(ctx, uid, a.ID, links.UpdateInput{URL: &bURL}, nil, "")
 	require.ErrorIs(t, err, links.ErrURLTaken)
 }
 
@@ -693,7 +693,7 @@ func TestRepository_CheckInterval_TriStateOnUpdate(t *testing.T) {
 	interval := "daily"
 	updated, err := lrepo.Update(ctx, uid, l.ID, links.UpdateInput{
 		CheckInterval: &interval, CheckIntervalSet: true,
-	})
+	}, nil, "")
 	require.NoError(t, err)
 	require.NotNil(t, updated.CheckInterval)
 	assert.Equal(t, "daily", *updated.CheckInterval)
@@ -712,7 +712,7 @@ func TestRepository_CheckInterval_TriStateOnUpdate(t *testing.T) {
 	// Opt out → ALL change-check state must clear (CLAUDE.md §4 invariant).
 	cleared, err := lrepo.Update(ctx, uid, l.ID, links.UpdateInput{
 		CheckInterval: nil, CheckIntervalSet: true,
-	})
+	}, nil, "")
 	require.NoError(t, err)
 	assert.Nil(t, cleared.CheckInterval)
 	assert.Nil(t, cleared.LastCheckedAt, "opt-out must wipe last_checked_at")
@@ -734,7 +734,7 @@ func TestRepository_Update_CombinationWithIfMatch(t *testing.T) {
 
 	// Seed change-check state so the reset-CASE fan-out has something to clear.
 	daily := "daily"
-	l, err = lrepo.Update(ctx, uid, l.ID, links.UpdateInput{CheckInterval: &daily, CheckIntervalSet: true})
+	l, err = lrepo.Update(ctx, uid, l.ID, links.UpdateInput{CheckInterval: &daily, CheckIntervalSet: true}, nil, "")
 	require.NoError(t, err)
 	claim := claimChecks(t, ctx, lrepo, l.ID)[l.ID]
 	recordCheckResult(t, ctx, lrepo, l.ID, claim.ClaimedAt, links.CheckResult{Fingerprint: "content:abc", Changed: true})
@@ -754,7 +754,7 @@ func TestRepository_Update_CombinationWithIfMatch(t *testing.T) {
 		CheckInterval:    &hourly,
 		CheckIntervalSet: true,
 		IfMatchUpdatedAt: &l.UpdatedAt,
-	})
+	}, nil, "")
 	require.NoError(t, err)
 	assert.Equal(t, newURL, updated.URL)
 	assert.Equal(t, newTitle, updated.Title)
@@ -769,7 +769,7 @@ func TestRepository_Update_CombinationWithIfMatch(t *testing.T) {
 	_, err = lrepo.Update(ctx, uid, l.ID, links.UpdateInput{
 		URL:              &newURL,
 		IfMatchUpdatedAt: &l.UpdatedAt,
-	})
+	}, nil, "")
 	require.ErrorIs(t, err, links.ErrStaleWrite)
 }
 
@@ -779,7 +779,7 @@ func TestRepository_Update_NotFoundViaIfMatch(t *testing.T) {
 	_, err := lrepo.Update(ctx, uid, 999999, links.UpdateInput{
 		URL:              ptrURL("https://x.test/none"),
 		IfMatchUpdatedAt: &stale,
-	})
+	}, nil, "")
 	require.ErrorIs(t, err, domainerr.ErrNotFound)
 }
 
@@ -805,7 +805,7 @@ func TestSystemClaimDueForCheck_SecondCallReturnsEmpty(t *testing.T) {
 	daily := "daily"
 	created, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://x.test/claim-once", Title: "claim"})
 	require.NoError(t, err)
-	_, err = lrepo.Update(ctx, uid, created.ID, links.UpdateInput{CheckInterval: &daily, CheckIntervalSet: true})
+	_, err = lrepo.Update(ctx, uid, created.ID, links.UpdateInput{CheckInterval: &daily, CheckIntervalSet: true}, nil, "")
 	require.NoError(t, err)
 
 	first, err := lrepo.SystemClaimDueForCheck(ctx, 100)
@@ -832,7 +832,7 @@ func TestRepository_FindDueForCheck_OnlyOptedIn(t *testing.T) {
 	// Opted-in (daily): due immediately because last_checked_at IS NULL.
 	a, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://x.test/a", Title: "a"})
 	di := "daily"
-	_, err := lrepo.Update(ctx, uid, a.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
+	_, err := lrepo.Update(ctx, uid, a.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true}, nil, "")
 	require.NoError(t, err)
 
 	// Opted-OUT link must NOT appear.
@@ -883,7 +883,7 @@ func TestRepository_ChangeCheckExcludesLockedLinksAndRejectsFolderMoveRace(t *te
 		}
 	}
 	require.NotZero(t, openClaim.ClaimedAt)
-	_, err = repo.Update(ctx, uid, open.ID, links.UpdateInput{FolderID: &protected.ID, FolderIDSet: true})
+	_, err = repo.Update(ctx, uid, open.ID, links.UpdateInput{FolderID: &protected.ID, FolderIDSet: true}, nil, "")
 	require.NoError(t, err)
 
 	applied, err := repo.SystemRecordCheckResult(ctx, open.ID, openClaim.ClaimedAt, links.CheckResult{
@@ -898,7 +898,7 @@ func TestRepository_RecordCheckResultRejectsStaleConfiguration(t *testing.T) {
 	link, err := repo.Create(ctx, uid, links.CreateInput{URL: "https://x.test/old", Title: "x"})
 	require.NoError(t, err)
 	daily := "daily"
-	_, err = repo.Update(ctx, uid, link.ID, links.UpdateInput{CheckInterval: &daily, CheckIntervalSet: true})
+	_, err = repo.Update(ctx, uid, link.ID, links.UpdateInput{CheckInterval: &daily, CheckIntervalSet: true}, nil, "")
 	require.NoError(t, err)
 	due, err := repo.SystemClaimDueForCheck(ctx, 1)
 	require.NoError(t, err)
@@ -910,7 +910,7 @@ func TestRepository_RecordCheckResultRejectsStaleConfiguration(t *testing.T) {
 	require.NoError(t, repo.MarkChangeSeen(ctx, uid, link.ID))
 
 	newURL := "https://x.test/new"
-	reconfigured, err := repo.Update(ctx, uid, link.ID, links.UpdateInput{URL: &newURL})
+	reconfigured, err := repo.Update(ctx, uid, link.ID, links.UpdateInput{URL: &newURL}, nil, "")
 	require.NoError(t, err)
 	assert.Nil(t, reconfigured.LastCheckedAt)
 	assert.Nil(t, reconfigured.LastFingerprint)
@@ -936,7 +936,7 @@ func TestRepository_UnchangedMonitoringFieldsPreserveState(t *testing.T) {
 	link, err := repo.Create(ctx, uid, links.CreateInput{URL: "https://x.test/same", Title: "old title"})
 	require.NoError(t, err)
 	daily := "daily"
-	_, err = repo.Update(ctx, uid, link.ID, links.UpdateInput{CheckInterval: &daily, CheckIntervalSet: true})
+	_, err = repo.Update(ctx, uid, link.ID, links.UpdateInput{CheckInterval: &daily, CheckIntervalSet: true}, nil, "")
 	require.NoError(t, err)
 	claim := claimChecks(t, ctx, repo, link.ID)[link.ID]
 	recordCheckResult(t, ctx, repo, link.ID, claim.ClaimedAt, links.CheckResult{Fingerprint: "content:baseline"})
@@ -951,7 +951,7 @@ func TestRepository_UnchangedMonitoringFieldsPreserveState(t *testing.T) {
 		Title:            &title,
 		CheckInterval:    &daily,
 		CheckIntervalSet: true,
-	})
+	}, nil, "")
 	require.NoError(t, err)
 	assert.Equal(t, claim.ClaimedAt, *updated.LastCheckedAt)
 	require.NotNil(t, updated.LastFingerprint)
@@ -974,7 +974,7 @@ func TestRepository_FindDueForCheck_RespectsInterval(t *testing.T) {
 	// Hourly link checked 30 minutes ago → NOT due.
 	l, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://x.test/h", Title: "h"})
 	hi := "hourly"
-	_, err := lrepo.Update(ctx, uid, l.ID, links.UpdateInput{CheckInterval: &hi, CheckIntervalSet: true})
+	_, err := lrepo.Update(ctx, uid, l.ID, links.UpdateInput{CheckInterval: &hi, CheckIntervalSet: true}, nil, "")
 	require.NoError(t, err)
 	_, err = pool.Exec(ctx, `UPDATE link SET last_checked_at = now() - interval '30 minutes' WHERE id = $1`, l.ID)
 	require.NoError(t, err)
@@ -996,7 +996,7 @@ func TestRepository_RecordCheckResult_FirstObservationDoesNotMarkChange(t *testi
 	ctx, uid, lrepo, _ := setup(t)
 	l, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://x.test/f", Title: "f"})
 	di := "daily"
-	_, err := lrepo.Update(ctx, uid, l.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
+	_, err := lrepo.Update(ctx, uid, l.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true}, nil, "")
 	require.NoError(t, err)
 	claim := claimChecks(t, ctx, lrepo, l.ID)[l.ID]
 
@@ -1018,7 +1018,7 @@ func TestRepository_RecordCheckResult_BumpsDetectionAndNullsSeen(t *testing.T) {
 	ctx, uid, lrepo, _ := setup(t)
 	l, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://x.test/c", Title: "c"})
 	di := "daily"
-	_, err := lrepo.Update(ctx, uid, l.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
+	_, err := lrepo.Update(ctx, uid, l.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true}, nil, "")
 	require.NoError(t, err)
 	claim := claimChecks(t, ctx, lrepo, l.ID)[l.ID]
 
@@ -1055,7 +1055,7 @@ func TestRepository_RecordCheckResult_StoresErrorInLastCheckErrorNotPreviewError
 	ctx, uid, lrepo, _ := setup(t)
 	l, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://x.test/e", Title: "e"})
 	di := "daily"
-	_, err := lrepo.Update(ctx, uid, l.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
+	_, err := lrepo.Update(ctx, uid, l.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true}, nil, "")
 	require.NoError(t, err)
 	claim := claimChecks(t, ctx, lrepo, l.ID)[l.ID]
 
@@ -1101,9 +1101,9 @@ func TestRepository_ListRecentChanges_FiltersAndSorts(t *testing.T) {
 	skipped, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://x.test/skip", Title: "no change"})
 
 	di := "daily"
-	_, err := lrepo.Update(ctx, uid, older.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
+	_, err := lrepo.Update(ctx, uid, older.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true}, nil, "")
 	require.NoError(t, err)
-	_, err = lrepo.Update(ctx, uid, newer.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
+	_, err = lrepo.Update(ctx, uid, newer.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true}, nil, "")
 	require.NoError(t, err)
 	claims := claimChecks(t, ctx, lrepo, older.ID, newer.ID)
 
@@ -1131,7 +1131,7 @@ func TestRepository_ListRecentChanges_WindowFiltersOut(t *testing.T) {
 
 	l, _ := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://x.test/w", Title: "w"})
 	di := "daily"
-	_, err := lrepo.Update(ctx, uid, l.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
+	_, err := lrepo.Update(ctx, uid, l.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true}, nil, "")
 	require.NoError(t, err)
 	claim := claimChecks(t, ctx, lrepo, l.ID)[l.ID]
 	recordCheckResult(t, ctx, lrepo, l.ID, claim.ClaimedAt, links.CheckResult{Fingerprint: "content:1"})
@@ -1200,11 +1200,11 @@ func TestRepository_FindDueForCheck_SkipsDisabledOwners(t *testing.T) {
 
 	mine, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://x.test/mine", Title: "mine"})
 	require.NoError(t, err)
-	_, err = lrepo.Update(ctx, uid, mine.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
+	_, err = lrepo.Update(ctx, uid, mine.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true}, nil, "")
 	require.NoError(t, err)
 	theirs, err := lrepo.Create(ctx, other, links.CreateInput{URL: "https://x.test/theirs", Title: "theirs"})
 	require.NoError(t, err)
-	_, err = lrepo.Update(ctx, other, theirs.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
+	_, err = lrepo.Update(ctx, other, theirs.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true}, nil, "")
 	require.NoError(t, err)
 
 	due, err := lrepo.SystemClaimDueForCheck(ctx, 100)
@@ -1282,7 +1282,7 @@ func TestRepository_FindDueForCheck_DoesNotLockTheOwnerRow(t *testing.T) {
 
 	l, err := lrepo.Create(ctx, uid, links.CreateInput{URL: "https://x.test/busy", Title: "busy"})
 	require.NoError(t, err)
-	_, err = lrepo.Update(ctx, uid, l.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true})
+	_, err = lrepo.Update(ctx, uid, l.ID, links.UpdateInput{CheckInterval: &di, CheckIntervalSet: true}, nil, "")
 	require.NoError(t, err)
 
 	// Exactly what an in-flight login holds while it works.
