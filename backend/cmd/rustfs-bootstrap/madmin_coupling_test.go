@@ -39,7 +39,7 @@ func TestMadminGoBootstrapCoupling(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(stack), string(ver[1]),
 		"docs/STACK.md must pair the madmin-go version with the rustfs digest")
-	require.Contains(t, string(stack), "sha256:1803faef57627e2d9c2e7d89d655d712ddded5389040054987163043fecb6a3c",
+	require.Contains(t, string(stack), "sha256:9ca9559533b537d10482fe923288b676ad08f92a7069d9a17327fbae3cab688b",
 		"docs/STACK.md must name the rustfs digest this madmin-go pin was verified against")
 }
 
