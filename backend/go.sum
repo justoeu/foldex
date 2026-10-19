@@ -170,8 +170,8 @@ github.com/prometheus/prom2json v1.5.0 h1:WIcAOjLE1x476W3dUlmTL6E/e98CgVGuwwYusl
 github.com/prometheus/prom2json v1.5.0/go.mod h1:xPp6KDhCA30btxmqEfg/K3DAwgTIkp7TJKi4+7jaYd8=
 github.com/prometheus/prometheus v0.315.0 h1:sFGZWmC2Hk9N1NBJGCnXYZb5hyLCq8yuAMoEjLAg6ac=
 github.com/prometheus/prometheus v0.315.0/go.mod h1:B+80h4JO0zXpoFCiWStHtpsAWrEOwY24B9/CLgzUIuc=
-github.com/rabbitmq/amqp091-go v1.15.0 h1:LEQL4/yp48/Wigt6A6XOu18RQRo8ZHtB5I/KZJn+gkw=
-github.com/rabbitmq/amqp091-go v1.15.0/go.mod h1:Hy4jKW5kQART1u+JkDTF9YYOQUHXqMuhrgxOEeS7G4o=
+github.com/rabbitmq/amqp091-go v1.16.0 h1:1O8oQqnj9hLACoo6CVMgn57z2pLWXvgemhh4GsquV+Y=
+github.com/rabbitmq/amqp091-go v1.16.0/go.mod h1:Hy4jKW5kQART1u+JkDTF9YYOQUHXqMuhrgxOEeS7G4o=
 github.com/rs/xid v1.6.0 h1:fV591PaemRlL6JfRxGDEPl69wICngIQ3shQtzfy2gxU=
 github.com/rs/xid v1.6.0/go.mod h1:7XoLgs4eV+QndskICGsho+ADou8ySMSjJKDIan90Nz0=
 github.com/safchain/ethtool v0.7.0 h1:rlJzfDetsVvT61uz8x1YIcFn12akMfuPulHtZjtb7Is=
