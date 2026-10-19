@@ -4,13 +4,22 @@ import { ReactNode } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
   applyPreviewStatusResults,
+  cachedEntryFolderId,
+  collectCachedEntries,
+  entityUnlockHeaders,
+  fetchEntryCounts,
   useEntries,
   flattenEntries,
+  invalidateEntryCounts,
+  invalidateLibrary,
+  mapCachedEntries,
   mapCachedLinkEntries,
   optimisticEntryPatch,
   pendingPreviewIDs,
   removeCachedEntry,
 } from './entries'
+import { FOLDER_UNLOCK_HEADER } from './folders'
+import { clearFolderUnlocks, syncFolderUnlocks } from '../lib/folderUnlockRegistry'
 import entriesSrc from './entries.ts?raw'
 import { http } from './client'
 import { freshState, installAxiosMock, type MockState } from '../test/server'
@@ -460,5 +469,231 @@ describe('optimisticEntryPatch', () => {
 
   it('does not assert the patched union with as Entry', () => {
     expect(entriesSrc).not.toMatch(/as Entry/)
+  })
+
+  it('reports patched=false on an empty cache and rolls back surgically', async () => {
+    const client = makeQueryClient()
+    const empty = await optimisticEntryPatch(client, 'link', 77, { pinned: true })
+    expect(empty.patched).toBe(false)
+    expect(() => empty.rollback()).not.toThrow()
+
+    const link = {
+      kind: 'link' as const, id: 5, url: 'https://a.example', title: 'A', slug: 'a',
+      click_count: 0, preview_status: 'ok' as const, pinned: false,
+      created_at: '', updated_at: '', tags: [],
+    }
+    const { kind: _k, ...linkOnly } = link
+    client.setQueryData(['links', 'x'], { pages: [[linkOnly]], pageParams: [0] })
+    client.setQueryData(['entries', 'x'], { pages: [[link]], pageParams: [0] })
+    const patch = await optimisticEntryPatch(client, 'link', 5, { pinned: true })
+    expect(patch.patched).toBe(true)
+    expect(client.getQueryData<{ pages: any[][] }>(['entries', 'x'])!.pages[0][0].pinned).toBe(true)
+    expect(client.getQueryData<{ pages: any[][] }>(['links', 'x'])!.pages[0][0].pinned).toBe(true)
+    patch.rollback()
+    // Structural sharing may clone on write, so assert the restored VALUES.
+    expect(client.getQueryData<{ pages: any[][] }>(['entries', 'x'])!.pages[0][0]).toEqual(link)
+    expect(client.getQueryData<{ pages: any[][] }>(['links', 'x'])!.pages[0][0]).toEqual(linkOnly)
+  })
+
+  it('leaves a note untouched when the patch carries no pinned flag', async () => {
+    const client = makeQueryClient()
+    const note = {
+      kind: 'note' as const, id: 3, title: 'N', slug: 'n', pinned: false,
+      tags: [], created_at: '', updated_at: '', click_count: 0,
+    }
+    client.setQueryData(['entries', 'n'], { pages: [[note]], pageParams: [0] })
+    const patch = await optimisticEntryPatch(client, 'note', 3, { preview_status: 'pending' })
+    expect(patch.patched).toBe(true)
+    expect(client.getQueryData<{ pages: any[][] }>(['entries', 'n'])!.pages[0][0]).toBe(note)
+    // Rollback against a cache a concurrent writer replaced with a
+    // non-paged shape must be a no-op, not a crash.
+    client.setQueryData(['entries', 'n'], { unexpected: true } as never)
+    expect(() => patch.rollback()).not.toThrow()
+  })
+})
+
+describe('cache helpers', () => {
+  const linkEntry = (id: number, extra: Record<string, unknown> = {}) => ({
+    kind: 'link', id, url: `https://${id}.example`, title: String(id), slug: String(id),
+    click_count: 0, preview_status: 'pending', pinned: false, folder_id: null,
+    created_at: '', updated_at: '2026-01-01T00:00:00Z', tags: [], ...extra,
+  }) as never
+
+  it('invalidateLibrary touches exactly the flagged families', () => {
+    const client = makeQueryClient()
+    const spy = vi.spyOn(client, 'invalidateQueries')
+    invalidateLibrary(client, {})
+    expect(spy).not.toHaveBeenCalled()
+    invalidateLibrary(client, { links: true, notes: true, entries: true, tags: true, folders: true, counts: true })
+    expect(spy.mock.calls.map(([arg]) => (arg as { queryKey: unknown }).queryKey)).toEqual([
+      ['links'], ['notes'], ['entries'], ['tags'], ['folders'], ['entry-counts'],
+    ])
+  })
+
+  it('fetchEntryCounts reads the counts endpoint and invalidateEntryCounts targets its key', async () => {
+    vi.mocked(http.get).mockResolvedValueOnce({ data: { links: 7, notes: 3 } } as never)
+    await expect(fetchEntryCounts()).resolves.toEqual({ links: 7, notes: 3 })
+    expect(http.get).toHaveBeenCalledWith('/api/entries/counts')
+    const client = makeQueryClient()
+    const spy = vi.spyOn(client, 'invalidateQueries')
+    invalidateEntryCounts(client)
+    expect(spy).toHaveBeenCalledWith({ queryKey: ['entry-counts'] })
+  })
+
+  it('flatten/pending tolerate missing data and dedupe pending link ids', () => {
+    expect(flattenEntries(undefined)).toEqual([])
+    expect(pendingPreviewIDs(undefined)).toEqual([])
+    const note = { kind: 'note', id: 9, title: 'n' } as never
+    const ready = linkEntry(2, { preview_status: 'ok' })
+    const data = { pages: [[linkEntry(1), note], [linkEntry(1), ready]], pageParams: [0, 1] }
+    expect(flattenEntries(data as never)).toHaveLength(4)
+    expect(pendingPreviewIDs(data as never)).toEqual([1])
+  })
+
+  it('collectCachedEntries dedupes by kind:id across every entries query', () => {
+    const client = makeQueryClient()
+    client.setQueryData(['entries', 'a'], { pages: [[linkEntry(1)]], pageParams: [0] })
+    client.setQueryData(['entries', 'b'], {
+      pages: [[linkEntry(1), { kind: 'note', id: 1, title: 'same id, other kind' }]],
+      pageParams: [0],
+    } as never)
+    client.setQueryData(['entries', 'empty'], undefined as never)
+    const out = collectCachedEntries(client)
+    expect(out.map((e) => `${e.kind}:${e.id}`)).toEqual(['link:1', 'note:1'])
+  })
+
+  it('applyPreviewStatusResults keeps notes, unknown ids and incomplete payloads untouched', () => {
+    const client = makeQueryClient()
+    const key = ['entries', 'keep']
+    const note = { kind: 'note', id: 4, title: 'n' } as never
+    const link = linkEntry(1, {
+      preview_status: 'ok', description: null, favicon_url: null,
+      og_image_url: null, preview_error: null,
+    })
+    client.setQueryData(key, { pages: [[note, link]], pageParams: [0] })
+    const before = client.getQueryData(key)
+    // No result for the link at all.
+    applyPreviewStatusResults(client, key, [])
+    // Result without preview_status, then without updated_at.
+    applyPreviewStatusResults(client, key, [{ id: 1, found: true, updated_at: '2026-02-01T00:00:00Z' }])
+    applyPreviewStatusResults(client, key, [{ id: 1, found: true, preview_status: 'failed' }])
+    // Byte-identical payload: nothing to replace.
+    applyPreviewStatusResults(client, key, [{
+      id: 1, found: true, preview_status: 'ok', updated_at: '2026-01-01T00:00:00Z',
+    }])
+    expect(client.getQueryData(key)).toBe(before)
+    // A key with no cached data is a no-op.
+    applyPreviewStatusResults(client, ['entries', 'missing'], [{ id: 1, found: false }])
+    expect(client.getQueryData(['entries', 'missing'])).toBeUndefined()
+  })
+
+  it('mapCachedEntries tolerates null pages and preserves identity when nothing changes', () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0, staleTime: 0, structuralSharing: false } },
+    })
+    const key = ['entries', 'nullpage']
+    client.setQueryData(key, { pages: [null, [linkEntry(1)]], pageParams: [0, 1] } as never)
+    const before = client.getQueryData(key)
+    mapCachedEntries(client, (e) => e)
+    expect(client.getQueryData(key)).toBe(before)
+    mapCachedEntries(client, (e) => ({ ...e, pinned: true } as never))
+    const after = client.getQueryData<{ pages: any[] }>(key)!
+    expect(after.pages[0]).toBeNull()
+    expect(after.pages[1][0].pinned).toBe(true)
+    // removeCachedEntry with no match keeps the same cache object,
+    // and tolerates the null page on the way through.
+    const snapshot = client.getQueryData(key)
+    removeCachedEntry(client, 'link', 999)
+    expect(client.getQueryData(key)).toBe(snapshot)
+    removeCachedEntry(client, 'link', 1)
+    expect(client.getQueryData<{ pages: any[] }>(key)!.pages[1]).toEqual([])
+  })
+
+  it('resolves cached folder ids and unlock headers, expiring tokens included', () => {
+    const client = makeQueryClient()
+    client.setQueryData(['entries', 'f'], {
+      pages: [[linkEntry(1, { folder_id: 9 }), linkEntry(2)]],
+      pageParams: [0],
+    })
+    expect(cachedEntryFolderId(client, 'link', 1)).toBe(9)
+    expect(cachedEntryFolderId(client, 'link', 2)).toBeNull()
+    expect(cachedEntryFolderId(client, 'note', 1)).toBeUndefined()
+    expect(entityUnlockHeaders(client, 'link', 1)).toBeUndefined()
+    syncFolderUnlocks({ 9: { token: 'tok-9', expiresAt: Date.now() + 60_000 } })
+    expect(entityUnlockHeaders(client, 'link', 1)).toEqual({ [FOLDER_UNLOCK_HEADER]: 'tok-9' })
+    syncFolderUnlocks({ 9: { token: 'stale', expiresAt: Date.now() - 1 } })
+    expect(entityUnlockHeaders(client, 'link', 1)).toBeUndefined()
+    clearFolderUnlocks()
+  })
+})
+
+describe('useEntries request shaping', () => {
+  function entriesCall() {
+    return vi.mocked(http.get).mock.calls.find(([url]) => String(url).startsWith('/api/entries?'))!
+  }
+
+  it('serialises tags, sort, ungrouped and a clamped page size', async () => {
+    const { result } = renderHook(
+      () => useEntries({ tagIds: [3, 1], sort: 'alpha', ungrouped: true, limit: 9999, q: 'x' }, { qSettled: true }),
+      { wrapper },
+    )
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    const url = String(entriesCall()[0])
+    expect(url).toContain('q=x')
+    expect(url).toContain('tag=3')
+    expect(url).toContain('tag=1')
+    expect(url).toContain('sort=alpha')
+    expect(url).toContain('ungrouped=1')
+    expect(url).toContain('limit=500')
+    expect(url).toContain('offset=0')
+  })
+
+  it('falls back to the default page size for a non-positive limit and stays idle when disabled', async () => {
+    const { result } = renderHook(() => useEntries({ limit: 0 }), { wrapper })
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(String(entriesCall()[0])).toContain('limit=100')
+
+    vi.mocked(http.get).mockClear()
+    const { result: off } = renderHook(() => useEntries({}, { enabled: false }), { wrapper })
+    expect(off.current.fetchStatus).toBe('idle')
+    expect(vi.mocked(http.get).mock.calls.some(([url]) => String(url).startsWith('/api/entries?'))).toBe(false)
+  })
+
+  it('pages with offset = previous offset + page length while pages come back full', async () => {
+    for (let i = 1; i <= 3; i++) {
+      state.links.push({
+        id: i, url: `https://${i}.example`, title: `L${i}`, slug: `l${i}`, click_count: 0,
+        preview_status: 'ok', pinned: false, created_at: '', updated_at: '', tags: [],
+      } as any)
+    }
+    const { result } = renderHook(() => useEntries({ limit: 2 }), { wrapper })
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(flattenEntries(result.current.data)).toHaveLength(2)
+    expect(result.current.hasNextPage).toBe(true)
+    await act(async () => { await result.current.fetchNextPage() })
+    await waitFor(() => expect(flattenEntries(result.current.data)).toHaveLength(3))
+    expect(result.current.hasNextPage).toBe(false)
+    const offsets = vi.mocked(http.get).mock.calls
+      .map(([url]) => String(url))
+      .filter((url) => url.startsWith('/api/entries?'))
+      .map((url) => new URLSearchParams(url.split('?')[1]).get('offset'))
+    expect(offsets).toEqual(['0', '2'])
+  })
+
+  it('sends folder_id and the unlock header on preview-status polls inside a folder', async () => {
+    state.links.push({
+      id: 8, url: 'https://p.example', title: 'P', slug: 'p', click_count: 0,
+      preview_status: 'pending', pinned: false, folder_id: 9, created_at: '', updated_at: 'before', tags: [],
+    } as any)
+    const { result } = renderHook(() => useEntries({ folderId: 9, unlockToken: 'tok-9' }), { wrapper })
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    await waitFor(() => {
+      const poll = vi.mocked(http.get).mock.calls.find(([url]) => String(url).includes('preview-status'))
+      expect(poll).toBeDefined()
+      expect(String(poll![0])).toContain('folder_id=9')
+      expect(String(poll![0])).toContain('id=8')
+      expect((poll![1] as { headers?: Record<string, string> }).headers)
+        .toEqual({ [FOLDER_UNLOCK_HEADER]: 'tok-9' })
+    })
   })
 })

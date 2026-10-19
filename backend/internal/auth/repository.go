@@ -303,12 +303,17 @@ func (r *Repository) loginBucketKey(ctx context.Context, identifier string) (str
 	// No rows is the ORDINARY case and keeps the submitted key. Anything else is
 	// the database failing, and swallowing it here would silently hand back the
 	// double budget this function exists to close — during exactly the window an
-	// attacker would notice and nobody else would.
-	if errors.Is(err, pgx.ErrNoRows) || canonical == "" {
+	// attacker would notice and nobody else would. The error check must come
+	// before the empty-canonical fallback: a failed Scan leaves canonical ""
+	// too, so testing emptiness first would swallow every database error.
+	if errors.Is(err, pgx.ErrNoRows) {
 		return norm, nil
 	}
 	if err != nil {
 		return "", fmt.Errorf("login bucket key: %w", err)
+	}
+	if canonical == "" {
+		return norm, nil
 	}
 	return canonical, nil
 }
