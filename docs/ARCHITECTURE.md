@@ -72,7 +72,7 @@ credenciais mesmo se alguém fizer push de uma tag antiga.
 | Server state | **TanStack Query 5**                                                  | Cache + invalidação por mutation + optimistic updates. |
 | i18n         | **react-i18next 17** + i18next 26 (en/pt/es)                          | Locale picker no topbar persiste em `localStorage["foldex.locale"]`. Plurais via `_one`/`_other`. |
 | PWA          | **vite-plugin-pwa 1.3** com `strategies: 'injectManifest'`            | SW hand-rolled em `web/src/sw.ts` (Cache API + push/notificationclick listeners). Workbox só injeta `__WB_MANIFEST` no build. |
-| Testes web   | **Vitest 5** + `@testing-library/react 16` + jsdom 30                 | Mesmo gate ≥85% (`vitest.config.ts`). `undici` 8.10.2 is pinned (direct + override). |
+| Testes web   | **Vitest 5** + `@testing-library/react 16` + jsdom 30                 | Mesmo gate ≥85% (`vitest.config.ts`). `undici` 8.12.3 is pinned (direct + override). |
 | Extension    | Vanilla MV3 (sem bundler)                                            | Popup tem ~80 LoC. Sem build = "load unpacked" direto. |
 | Node runtime | **bun 1.4** (oven/bun:1.4-alpine)                                    | Bate com Vite 8 / Vitest 5 e resolve melhor packages platform-specific que npm em mirror privado. |
 
