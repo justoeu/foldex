@@ -81,7 +81,7 @@ func TestStatsCache_InvalidationForcesRewalk(t *testing.T) {
 // fail the shared listing for a waiter that is still interested.
 func TestStats_LeaderCancellationDoesNotFailWaiters(t *testing.T) {
 	objects := []listedObject{{Key: "screenshots/1.jpg", Size: 10}}
-	started := make(chan struct{})
+	started := make(chan struct{}, 1)
 	block := make(chan struct{})
 	var yields atomic.Int64
 	c := &Client{listFn: countingList(&yields, objects, &listGate{started: started, block: block})}
@@ -134,7 +134,7 @@ func TestStorageStats_DoesNotRescanWholeBucketOnEveryGet(t *testing.T) {
 	})
 
 	t.Run("cancelled ctx stops the iterator", func(t *testing.T) {
-		started := make(chan struct{})
+		started := make(chan struct{}, 1)
 		block := make(chan struct{})
 		var yields atomic.Int64
 		c := &Client{listFn: countingList(&yields, objects, &listGate{started: started, block: block})}
@@ -162,7 +162,7 @@ func TestStorageStats_DoesNotRescanWholeBucketOnEveryGet(t *testing.T) {
 	})
 
 	t.Run("concurrent gets share one in-flight listing", func(t *testing.T) {
-		started := make(chan struct{})
+		started := make(chan struct{}, 1)
 		block := make(chan struct{})
 		var yields atomic.Int64
 		c := &Client{listFn: countingList(&yields, objects, &listGate{started: started, block: block})}
@@ -218,6 +218,13 @@ func countingList(yields *atomic.Int64, objects []listedObject, gate *listGate) 
 		go func() {
 			defer close(ch)
 			if gate != nil {
+				// Non-blocking send: the started signal must survive
+				// the producer winning the race against the test's
+				// receive — every gate.started channel is created
+				// with buffer 1 for exactly this. Unbuffered, the
+				// token is dropped and the producer parks on
+				// <-gate.block before the test ever sees "started",
+				// which no receive deadline can recover.
 				select {
 				case gate.started <- struct{}{}:
 				default:
