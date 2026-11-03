@@ -1,0 +1,198 @@
+{
+  "score": 10,
+  "max": 10,
+  "coverage": {
+    "pct": 95.48,
+    "floor": 90,
+    "floor_min": 90,
+    "requested": 90,
+    "tool": "vitest v8",
+    "ok": true,
+    "detail": "95.48% >= 90%"
+  },
+  "pack_closable": true,
+  "closable": true,
+  "historical": false,
+  "evidence": {
+    "run_id": "77d8b98a-7832-4b33-8f4c-70d3c83376d3",
+    "head": "f7ee4cec4a1f7bc9678ef6cedb90bd09205eee00",
+    "source_hash": "9f75ae4344e4f1760b2d4b1a4459998044671659490afb8f7e83b1e8ac1e386b",
+    "input_hash": "763c0b6e470a57956af26728ac26bf35f9f4dfd5788a5eb3685380bc7423bd48",
+    "at": "2026-11-03T22:52:56.767Z"
+  },
+  "evidence_checks": [
+    {
+      "file": "tests.json",
+      "ok": true
+    },
+    {
+      "file": "coverage.json",
+      "ok": true
+    },
+    {
+      "file": "immutability.json",
+      "ok": true
+    },
+    {
+      "file": "reviews/standards.json",
+      "ok": true
+    },
+    {
+      "file": "reviews/spec.json",
+      "ok": true
+    },
+    {
+      "file": "reviews/correctness.json",
+      "ok": true
+    },
+    {
+      "file": "hooks/ui-scope.json",
+      "ok": true
+    },
+    {
+      "file": "hooks/arch-alignment.json",
+      "ok": true
+    },
+    {
+      "file": "hooks/reinvention.json",
+      "ok": true
+    },
+    {
+      "file": "hooks/security.json",
+      "ok": true
+    },
+    {
+      "file": "hooks/performance.json",
+      "ok": true
+    },
+    {
+      "file": "hooks/overengineering.json",
+      "ok": true
+    },
+    {
+      "file": "hooks/deps-freshness.json",
+      "ok": true
+    },
+    {
+      "file": "hooks/ui-acceptance.json",
+      "ok": true
+    }
+  ],
+  "tests_ok": true,
+  "hooks": {
+    "verdict": "PASS",
+    "hooks": [
+      {
+        "hook": "arch-alignment",
+        "verdict": "APPROVE",
+        "open": 0,
+        "worst": null,
+        "blocking": false,
+        "missing": false
+      },
+      {
+        "hook": "reinvention",
+        "verdict": "APPROVE",
+        "open": 1,
+        "worst": null,
+        "blocking": false,
+        "missing": false
+      },
+      {
+        "hook": "security",
+        "verdict": "APPROVE",
+        "open": 1,
+        "worst": null,
+        "blocking": false,
+        "missing": false
+      },
+      {
+        "hook": "performance",
+        "verdict": "APPROVE",
+        "open": 2,
+        "worst": null,
+        "blocking": false,
+        "missing": false
+      },
+      {
+        "hook": "overengineering",
+        "verdict": "APPROVE",
+        "open": 1,
+        "worst": null,
+        "blocking": false,
+        "missing": false
+      },
+      {
+        "hook": "deps-freshness",
+        "verdict": "APPROVE",
+        "open": 0,
+        "worst": null,
+        "blocking": false,
+        "missing": false
+      },
+      {
+        "hook": "ui-acceptance",
+        "verdict": "APPROVE",
+        "open": 1,
+        "worst": null,
+        "blocking": false,
+        "missing": false
+      }
+    ],
+    "waivers": 0,
+    "at": "2026-11-03T22:52:56.768Z"
+  },
+  "project_complete": true,
+  "tracking_complete": true,
+  "blockers": [],
+  "gates": [
+    {
+      "id": "tasks",
+      "ok": true,
+      "detail": "4 DONE"
+    },
+    {
+      "id": "red-green",
+      "ok": true,
+      "detail": "each DONE has evidence appropriate to its validation kind"
+    },
+    {
+      "id": "immutability",
+      "ok": true,
+      "detail": "4 contract test(s) green",
+      "items": [
+        "segmented tabs render/switch/persist/garbage-fallback",
+        "rail follows active tab (tags/folders)",
+        "folders tree: grouping, protected subtree (child+grandchild), orphan, active, click, action, empty",
+        "locale parity en/pt/es (locales.test.ts)"
+      ]
+    },
+    {
+      "id": "review",
+      "ok": true,
+      "detail": "standards=APPROVE spec=APPROVE correctness=APPROVE"
+    },
+    {
+      "id": "worktrees",
+      "ok": true,
+      "detail": "1/1 merged+removed"
+    }
+  ],
+  "redacted_files": [
+    "TASKS.json",
+    "payloads.json",
+    "progress/T-001.json",
+    "progress/T-002.json",
+    "progress/T-003.json",
+    "progress/T-004.json",
+    "run-meta.json",
+    "ui/drive/sidebar-navegar.spec.json",
+    "ui/journeys/sidebar-navegar.json",
+    "ui/runs/2d16996c-93bf-4660-b08c-a9a0ca6b0a3f.json",
+    "ui/runs/7e9538ea-aca6-4858-a8e8-809fee5cc681.json",
+    "ui/runs/a1751280-65bb-432c-821e-d4dce2fcc044.json",
+    "ui/runs/df373cba-122b-4a7b-ab4d-952c3b8686f2.json",
+    "ui/runs/fbfd14f3-5269-483e-854d-c48987fcbee3.json",
+    "worktrees.json"
+  ]
+}

@@ -4,10 +4,17 @@
     "kind": "ui-state",
     "request": "clique no segmented control: painel visível troca entre Pastas e Tags",
     "responses": [
-      { "status": "localStorage[foldex.sidebar.tab] = 'folders' | 'tags'", "body": "recarregar restaura a última aba; default 'tags'" }
+      {
+        "status": "localStorage[foldex.sidebar.tab] = 'folders' | 'tags'",
+        "body": "recarregar restaura a última aba; default 'tags'"
+      }
     ],
-    "notes": ["'Todos os links' e 'Atualizações recentes' ficam fora das abas, sempre visíveis"],
-    "tasks": ["T-001"],
+    "notes": [
+      "'Todos os links' e 'Atualizações recentes' ficam fora das abas, sempre visíveis"
+    ],
+    "tasks": [
+      "T-001"
+    ],
     "spec_ref": "§Requisitos 1"
   },
   {
@@ -15,10 +22,17 @@
     "kind": "ui-state",
     "request": "clique numa linha do painel Pastas (pasta sem senha)",
     "responses": [
-      { "status": "onOpenFolder(id) → requestOpenFolder (gate ADR-28)", "body": "openFolder passa a ser o id; HomeView lista ?parent_id=id; breadcrumb atualiza; linha fica fx-side-row-active" }
+      {
+        "status": "onOpenFolder(id) → requestOpenFolder (gate ADR-28)",
+        "body": "openFolder passa a ser o id; HomeView lista ?parent_id=id; breadcrumb atualiza; linha fica fx-side-row-active"
+      }
     ],
-    "notes": ["pastas has_password=true e sua subárvore não são renderizadas — o clique nunca as alcança"],
-    "tasks": ["T-002"],
+    "notes": [
+      "pastas has_password=true e sua subárvore não são renderizadas — o clique nunca as alcança"
+    ],
+    "tasks": [
+      "T-002"
+    ],
     "spec_ref": "§Requisitos 2"
   },
   {
@@ -26,10 +40,18 @@
     "kind": "ui-state",
     "request": "aba Tags: Nova tag / Gerenciar · aba Pastas: Nova pasta / Gerenciar pastas",
     "responses": [
-      { "status": "callbacks via props (dialogs controller existente)", "body": "nenhum diálogo novo; FolderDialog/TagDialog atuais" }
+      {
+        "status": "callbacks via props (dialogs controller existente)",
+        "body": "nenhum diálogo novo; FolderDialog/TagDialog atuais"
+      }
     ],
-    "notes": ["sem requisição HTTP nova no painel de pastas (lista já carregada)"],
-    "tasks": ["T-002", "T-003"],
+    "notes": [
+      "sem requisição HTTP nova no painel de pastas (lista já carregada)"
+    ],
+    "tasks": [
+      "T-002",
+      "T-003"
+    ],
     "spec_ref": "§Requisitos 2,3,4"
   }
 ]

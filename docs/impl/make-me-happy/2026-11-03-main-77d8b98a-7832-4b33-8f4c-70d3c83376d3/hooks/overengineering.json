@@ -1,0 +1,31 @@
+{
+  "hook": "overengineering",
+  "verdict": "APPROVE",
+  "round": 1,
+  "summary": "componente mínimo (~100 linhas com comentários why); extração de TagsPanel sugerida pelo code-quality foi avaliada e protelada (ripplaria useTags/dialog states/rail) — re-indent resolve o problema real",
+  "findings": [
+    {
+      "id": "OVER-1",
+      "severity": "info",
+      "title": "TagsPanel inline de 75 linhas",
+      "description": "extração é a versão 'melhor' mas move useTags/estados persistidos e o rail depende de tags.length — follow-up deliberado, não omissão.",
+      "status": "wontfix",
+      "round": 1
+    }
+  ],
+  "rounds": [
+    {
+      "round": 1,
+      "verdict": "APPROVE",
+      "findings": []
+    }
+  ],
+  "evidence": {
+    "run_id": "77d8b98a-7832-4b33-8f4c-70d3c83376d3",
+    "head": "f7ee4cec4a1f7bc9678ef6cedb90bd09205eee00",
+    "source_hash": "9f75ae4344e4f1760b2d4b1a4459998044671659490afb8f7e83b1e8ac1e386b",
+    "input_hash": "763c0b6e470a57956af26728ac26bf35f9f4dfd5788a5eb3685380bc7423bd48",
+    "at": "2026-11-03T22:52:50.698Z",
+    "result_hash": "642f6efa7675a7d684576eb559cfc51fb697d5779e597d82b8b339ba86e87d7c"
+  }
+}

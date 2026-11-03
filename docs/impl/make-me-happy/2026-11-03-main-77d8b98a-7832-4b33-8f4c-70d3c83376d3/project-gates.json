@@ -1,0 +1,57 @@
+{
+  "gates": [
+    {
+      "name": "web typecheck",
+      "status": "DONE",
+      "evidence": "tsc --noEmit exit 0 (round 2, f7ee4ce)"
+    },
+    {
+      "name": "web vitest + coverage",
+      "status": "DONE",
+      "evidence": "2042 testes · 160 arquivos · 95.48% stmts / 91.25% branches (gates 85/80); tocados: FoldersPanel 100/100, TagSidebar 100/97.26, AppShell 97.59/88.88"
+    },
+    {
+      "name": "guard css-orphan-classes",
+      "status": "DONE",
+      "evidence": "1122 regras · blind spot multi-linha registrado como follow-up"
+    },
+    {
+      "name": "guard permission-parity",
+      "status": "DONE",
+      "evidence": "19 permissões · Go/TS/3 locales"
+    },
+    {
+      "name": "backend go suite",
+      "status": "N/A",
+      "evidence": "diff 100% web/src — diff-facts: 14 arquivos, 0 rotas, 0 migrações, 0 deps, nenhum arquivo Go"
+    },
+    {
+      "name": "actionlint/workflows",
+      "status": "N/A",
+      "evidence": "nenhum workflow tocado no diff"
+    },
+    {
+      "name": "AGENTS.md §9 sweep 5 agentes",
+      "status": "DONE",
+      "evidence": "5 relatórios + re-review dos blockers: ambos RESOLVIDOS, sem regressões (reviews/* e hooks/* do pack)"
+    },
+    {
+      "name": "graphify update",
+      "status": "DONE",
+      "evidence": "graphify update . executado pós-implementação (AGENTS.md §6)"
+    },
+    {
+      "name": "atlas-docs delta",
+      "status": "N/A",
+      "evidence": "nenhum entrypoint/rota nova; scan incremental fica para o próximo delta no merge em main — fluxos estruturalmente inalterados"
+    }
+  ],
+  "evidence": {
+    "run_id": "77d8b98a-7832-4b33-8f4c-70d3c83376d3",
+    "head": "f7ee4cec4a1f7bc9678ef6cedb90bd09205eee00",
+    "source_hash": "9f75ae4344e4f1760b2d4b1a4459998044671659490afb8f7e83b1e8ac1e386b",
+    "input_hash": "763c0b6e470a57956af26728ac26bf35f9f4dfd5788a5eb3685380bc7423bd48",
+    "at": "2026-11-03T22:52:50.903Z",
+    "result_hash": "01e0976af51f249cb883466983e2ff7b1d52c958675220efa547da650d2df4e1"
+  }
+}

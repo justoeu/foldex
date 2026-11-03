@@ -14,7 +14,10 @@
       "output_excerpt": "Test Files 2 passed (2) · Tests 26 passed (26); tsc ok; ok: every fx-* class in the markup has a rule (1122 declared)"
     },
     "commits": [
-      { "sha": "3b653b3", "message": "feat(web): painel de pastas na sidebar — árvore sem pastas com senha, clique entra (T-002)" }
+      {
+        "sha": "3b653b3",
+        "message": "feat(web): painel de pastas na sidebar — árvore sem pastas com senha, clique entra (T-002)"
+      }
     ],
     "files": [
       "web/src/components/sidebar/FoldersPanel.tsx",
@@ -26,6 +29,9 @@
       "web/src/i18n/locales/pt.json",
       "web/src/i18n/locales/es.json"
     ],
-    "reversal": { "done": false, "note": "componente novo puro — reversão = remover arquivo e integração; suíte base verde" }
+    "reversal": {
+      "done": false,
+      "note": "componente novo puro — reversão = remover arquivo e integração; suíte base verde"
+    }
   }
 }

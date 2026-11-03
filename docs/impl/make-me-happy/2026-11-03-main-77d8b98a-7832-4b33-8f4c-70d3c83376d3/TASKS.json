@@ -198,7 +198,8 @@
         }
       ],
       "commits": [],
-      "files": []
+      "files": [],
+      "kind": "docs"
     }
   ]
 }

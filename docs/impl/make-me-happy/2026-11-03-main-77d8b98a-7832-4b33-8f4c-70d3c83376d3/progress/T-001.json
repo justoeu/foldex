@@ -14,7 +14,10 @@
       "output_excerpt": "Test Files 1 passed (1) · Tests 19 passed (19); tsc --noEmit ok; ok: every fx-* class in the markup has a rule (1121 declared)"
     },
     "commits": [
-      { "sha": "7c00771", "message": "feat(web): sidebar Navegar — abas segmentadas Pastas|Tags com ações por aba (T-001)" }
+      {
+        "sha": "7c00771",
+        "message": "feat(web): sidebar Navegar — abas segmentadas Pastas|Tags com ações por aba (T-001)"
+      }
     ],
     "files": [
       "web/src/components/TagSidebar.tsx",
@@ -24,6 +27,9 @@
       "web/src/i18n/locales/pt.json",
       "web/src/i18n/locales/es.json"
     ],
-    "reversal": { "done": false, "note": "reversão não viável: teste novo depende do componente novo; a suíte base segue verde" }
+    "reversal": {
+      "done": false,
+      "note": "reversão não viável: teste novo depende do componente novo; a suíte base segue verde"
+    }
   }
 }

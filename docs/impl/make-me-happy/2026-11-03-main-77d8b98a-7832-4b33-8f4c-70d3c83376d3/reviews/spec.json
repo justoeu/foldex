@@ -1,0 +1,57 @@
+{
+  "axis": "spec",
+  "verdict": "APPROVE",
+  "round": 2,
+  "summary": "SDD cumprido com duas emendas documentadas (badge de contagem e Gerenciar pastas), ambas decididas pelo owner; requisitos 6/7 apoiam-se em mecânica pré-existente testada (breadcrumb/jumpToFolder em App.test.tsx)",
+  "findings": [
+    {
+      "id": "P-1",
+      "severity": "medium",
+      "title": "Requisito 2 assumia contagem sem mudança de backend",
+      "description": "a projeção slim zera counts; owner decidiu remover o badge (client-only) — SDD amendado em 03/11 com a decisão registrada.",
+      "file": "docs/SDD-SIDEBAR-FOLDERS.md",
+      "status": "fixed",
+      "round": 1,
+      "fixed_in_round": 2
+    },
+    {
+      "id": "P-2",
+      "severity": "info",
+      "title": "'Gerenciar pastas' da aba Pastas",
+      "description": "não existe superfície de gerenciamento no app (edição nos FolderCards); TASKS/SDD amendados — só 'Nova pasta' embarca.",
+      "status": "fixed",
+      "round": 1,
+      "fixed_in_round": 2
+    },
+    {
+      "id": "P-3",
+      "severity": "info",
+      "title": "Drawer mobile + abas sem teste",
+      "description": "comportamento herdado intacto (branch mobileOpen pula o rail); gap de teste registrado como follow-up pelo test-reviewer.",
+      "status": "wontfix",
+      "round": 1
+    }
+  ],
+  "rounds": [
+    {
+      "round": 1,
+      "verdict": "REJECT",
+      "findings": [
+        "P-1"
+      ]
+    },
+    {
+      "round": 2,
+      "verdict": "APPROVE",
+      "findings": []
+    }
+  ],
+  "evidence": {
+    "run_id": "77d8b98a-7832-4b33-8f4c-70d3c83376d3",
+    "head": "f7ee4cec4a1f7bc9678ef6cedb90bd09205eee00",
+    "source_hash": "9f75ae4344e4f1760b2d4b1a4459998044671659490afb8f7e83b1e8ac1e386b",
+    "input_hash": "763c0b6e470a57956af26728ac26bf35f9f4dfd5788a5eb3685380bc7423bd48",
+    "at": "2026-11-03T22:52:50.069Z",
+    "result_hash": "41f1fe713250fdcc5983259df22d152790fa8a273b9a433f12f70984438d968f"
+  }
+}

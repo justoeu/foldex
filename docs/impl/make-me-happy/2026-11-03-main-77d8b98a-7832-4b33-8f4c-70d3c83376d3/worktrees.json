@@ -6,14 +6,14 @@
   "base": "feature/sidebar-pastas-tags",
   "head": "9db8f8bffbf45532256ba728db55914569d5bebe",
   "gitignore_appended": false,
-  "gitignore_path": "/Users/justoeu/Developer/Workspace/foldex/.gitignore",
+  "gitignore_path": ".gitignore",
   "gitignore_content_hash": "0265af69ae3e5f1eb9f740e1e95557d75780dcab9a4c9bb90e509c30e0ca713e",
   "baseline_green": true,
   "slices": [
     {
       "index": 1,
       "branch": "mmh-77d8b98a/slice-1",
-      "dir": "/Users/justoeu/Developer/Workspace/foldex/.worktrees/mmh-77d8b98a-1",
+      "dir": ".worktrees/mmh-77d8b98a-1",
       "base": "feature/sidebar-pastas-tags",
       "head": "9db8f8bffbf45532256ba728db55914569d5bebe",
       "created": true,

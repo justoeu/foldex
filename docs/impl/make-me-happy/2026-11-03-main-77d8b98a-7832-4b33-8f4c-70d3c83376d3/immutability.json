@@ -1,31 +1,45 @@
 {
-  "mode": "characterization-compatible",
-  "reason": "feature UI puramente aditiva no client; nenhum contrato de produtor/consumidor mudou — sem endpoint novo, sem payload novo, sem migração",
-  "contracts_unchanged": [
-    "GET /api/folders (scope null, fields minimal) — apenas consumidor novo (sidebar), producer intocado",
-    "AppNavigation.requestOpenFolder/jumpToFolder — reuso, assinatura inalterada",
-    "FolderDialog/TagDialog — abertos pelos controllers existentes"
+  "green": true,
+  "command": "cd web && bun run test src/components/TagSidebar.test.tsx src/components/sidebar/FoldersPanel.test.tsx && node scripts/test-css-orphan-classes.mjs",
+  "tests": [
+    {
+      "name": "segmented tabs render/switch/persist/garbage-fallback",
+      "task": "T-001",
+      "file": "web/src/components/TagSidebar.test.tsx",
+      "green": true
+    },
+    {
+      "name": "rail follows active tab (tags/folders)",
+      "task": "T-003",
+      "file": "web/src/components/TagSidebar.test.tsx",
+      "green": true
+    },
+    {
+      "name": "folders tree: grouping, protected subtree (child+grandchild), orphan, active, click, action, empty",
+      "task": "T-002",
+      "file": "web/src/components/sidebar/FoldersPanel.test.tsx",
+      "green": true
+    },
+    {
+      "name": "locale parity en/pt/es (locales.test.ts)",
+      "task": "T-004",
+      "file": "web/src/i18n/locales.test.ts",
+      "green": true
+    }
   ],
-  "localStorage": {
-    "new_keys": [
-      "foldex.sidebar.tab (valores 'folders'|'tags', default 'tags', validador rejeita lixo e remove)"
-    ],
-    "unchanged_keys": [
-      "foldex.sidebar.freqOpen",
-      "foldex.sidebar.otherOpen",
-      "foldex.sidebar.recentOpen",
-      "foldex.locale"
-    ]
-  },
-  "i18n": "chaves novas somente no bloco sidebar (navigate, folders, empty_folders, new_folder, new_folder_tooltip) — paridade en/pt/es validada pelo locales.test.ts existente",
-  "css": "classes novas (fx-segmented, fx-seg-tab, fx-seg-tab-active, fx-side-empty, fx-folder-children, fx-folder-child-row) com regras — guard orphan-green 1122",
-  "migrations": "nenhuma (fora de escopo por SDD)",
+  "tasks_covered": [
+    "T-001",
+    "T-002",
+    "T-003",
+    "T-004"
+  ],
+  "measured_at": "2026-11-03T11:21:28.418192+00:00",
   "evidence": {
     "run_id": "77d8b98a-7832-4b33-8f4c-70d3c83376d3",
-    "head": "956b3e3fe5b16efa5b5dbb0a74874add1c6b5cdc",
-    "source_hash": "2f0024c0e7bd287a87a1cec9920698cb285feb307a4d9671d68e331632a46b16",
-    "input_hash": "4aff52919962f36fa1aae4a9681818d1666d0eb7df6e498eada46d48a4bdda24",
-    "at": "2026-11-03T03:53:35.333Z",
-    "result_hash": "519c6022799fba32010b6bc3e66f02b4c0a90bcf729972f379e90f9f57c68071"
+    "head": "f7ee4cec4a1f7bc9678ef6cedb90bd09205eee00",
+    "source_hash": "9f75ae4344e4f1760b2d4b1a4459998044671659490afb8f7e83b1e8ac1e386b",
+    "input_hash": "763c0b6e470a57956af26728ac26bf35f9f4dfd5788a5eb3685380bc7423bd48",
+    "at": "2026-11-03T22:52:49.858Z",
+    "result_hash": "df9c67c565a40747eafc9c4f1130289061c676c6bdfc2bcc5f864195692e0613"
   }
 }

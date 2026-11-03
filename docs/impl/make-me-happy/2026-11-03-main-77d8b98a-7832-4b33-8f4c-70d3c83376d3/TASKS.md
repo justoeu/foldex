@@ -43,7 +43,7 @@
   Referências: SDD-SIDEBAR-FOLDERS §Requisitos 4
 
   Dependências: T-002
-- [x] **T-004** i18n en/pt/es e verificação de cobertura da slice  | tests: 0 | validation: check (pending) | immutability: no | wt: 1 | DONE
+- [x] **T-004** i18n en/pt/es e verificação de cobertura da slice  | tests: 0 | validation: check (verified) | immutability: no | wt: 1 | DONE
 
   Escopo: Fechar as chaves de tradução e apurar cobertura sobre o código tocado.
 

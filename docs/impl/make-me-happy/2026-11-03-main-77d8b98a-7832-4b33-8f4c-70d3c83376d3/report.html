@@ -148,16 +148,16 @@ footer.foot{color:var(--muted);font-size:.8rem;margin-top:28px;border-top:1px so
       <span class="badge"><span class="k">branch</span> <code>main</code> <span aria-hidden="true">→</span> <code>feature/sidebar-pastas-tags</code></span>
       <span class="badge"><span class="k">kind</span> feature</span>
       <span class="badge"><span class="k">loop</span> full</span>
-      <span class="badge warn"><span class="k">status</span> in_progress</span>
-      <span class="badge bad"><span class="k">score</span> <strong>2</strong>/10</span>
-      <span class="badge neutral"><span class="k">cobertura</span> <strong>n/a</strong> <span class="muted">piso 90%</span></span>
+      <span class="badge ok"><span class="k">status</span> closed</span>
+      <span class="badge ok"><span class="k">score</span> <strong>10</strong>/10</span>
+      <span class="badge ok"><span class="k">cobertura</span> <strong>95.48%</strong> <span class="muted">piso 90%</span></span>
       <span class="badge"><span class="k">head</span> <code>388b511fab</code></span>
     </div>
-    <dl class="facts"><div><dt>Início</dt><dd>2026-11-03 03:19 UTC</dd></div><div><dt>Gerado</dt><dd>2026-11-03 03:49 UTC</dd></div></dl>
+    <dl class="facts"><div><dt>Início</dt><dd>2026-11-03 03:19 UTC</dd></div><div><dt>Fim</dt><dd>2026-11-03 22:52 UTC</dd></div><div><dt>Duração</dt><dd>19 h 33 min</dd></div><div><dt>Gerado</dt><dd>2026-11-03 22:52 UTC</dd></div></dl>
   </header>
-<div class="card" id="report-refresh" data-generated-at="2026-11-03T03:49:14.116Z" data-interval-ms="600000"
+<div class="card" id="report-refresh" data-generated-at="2026-11-03T22:52:56.843Z" data-interval-ms="600000"
     data-auto-refresh="false" data-storage-key="mmh-report:77d8b98a-7832-4b33-8f4c-70d3c83376d3">
-    <span id="report-age">Captura gerada em 2026-11-03 03:49 UTC.</span>
+    <span id="report-age">Captura gerada em 2026-11-03 22:52 UTC.</span>
     <span class="muted">Captura estática; atualização periódica inativa nesta captura.</span>
     
     <button type="button" id="report-reload">Atualizar agora</button>
@@ -167,10 +167,10 @@ footer.foot{color:var(--muted);font-size:.8rem;margin-top:28px;border-top:1px so
 <section class="panel" role="tabpanel" id="panel-overview" aria-labelledby="tab-overview" tabindex="0" data-panel="overview"><div class="kpis">
     <div class="kpi ok"><div class="kpi-label">Tasks</div><div class="kpi-value">4<span class="of">/4</span></div><div class="kpi-sub"><div class="stack" role="img" aria-label="Tasks por status: DONE 4, em andamento 0, abertas 0"><span class="stack-seg ok" style="width:100.00%" title="DONE: 4"></span></div></div></div>
     <div class="kpi neutral"><div class="kpi-label">Testes adicionados</div><div class="kpi-value">12</div><div class="kpi-sub">3 task(s) com red→green</div></div>
-    <div class="kpi neutral"><div class="kpi-label">Cobertura</div><div class="kpi-value">n/a</div><div class="kpi-sub">piso 90%</div></div>
-    <div class="kpi neutral"><div class="kpi-label">Review</div><div class="kpi-value">0<span class="of">/3</span></div><div class="kpi-sub"><span class="vchips"><span class="vchip warn" title="Standards">S<span class="sr">Standards: sem voto</span></span><span class="vchip warn" title="Spec">S<span class="sr">Spec: sem voto</span></span><span class="vchip warn" title="Correctness">C<span class="sr">Correctness: sem voto</span></span></span></div></div>
-    <div class="kpi warn"><div class="kpi-label">Worktrees</div><div class="kpi-value">0<span class="of">/1</span></div><div class="kpi-sub">mergeadas · 0 removidas</div></div>
-    <div class="kpi neutral"><div class="kpi-label">Imutabilidade</div><div class="kpi-value">—</div><div class="kpi-sub">immutability.json ausente</div></div>
+    <div class="kpi ok"><div class="kpi-label">Cobertura</div><div class="kpi-value">95.48%</div><div class="kpi-sub">piso 90% · vitest v8</div></div>
+    <div class="kpi ok"><div class="kpi-label">Review</div><div class="kpi-value">3<span class="of">/3</span></div><div class="kpi-sub"><span class="vchips"><span class="vchip ok" title="Standards">S<span class="sr">Standards: APPROVE</span></span><span class="vchip ok" title="Spec">S<span class="sr">Spec: APPROVE</span></span><span class="vchip ok" title="Correctness">C<span class="sr">Correctness: APPROVE</span></span></span></div></div>
+    <div class="kpi ok"><div class="kpi-label">Worktrees</div><div class="kpi-value">1<span class="of">/1</span></div><div class="kpi-sub">mergeadas · 1 removidas</div></div>
+    <div class="kpi ok"><div class="kpi-label">Imutabilidade</div><div class="kpi-value">4</div><div class="kpi-sub">testes de contrato verdes</div></div>
   </div>
     <div class="grid-2">
       <div class="card"><h2>Linha do tempo</h2><ol class="timeline" aria-label="Passos do pack"><li class="step ok">
@@ -205,61 +205,60 @@ footer.foot{color:var(--muted);font-size:.8rem;margin-top:28px;border-top:1px so
         
         
       </div>
-    </li><li class="step bad">
+    </li><li class="step ok">
       <span class="dot" aria-hidden="true"></span>
       <div class="step-body">
         <div class="step-name">Imutabilidade</div>
-        <div class="step-meta">failed <span class="muted" title="Sem timestamp em run-meta.steps; inferido pelos arquivos do pack">· inferido</span></div>
+        <div class="step-meta">done <span class="muted" title="Sem timestamp em run-meta.steps; inferido pelos arquivos do pack">· inferido</span></div>
         
         
       </div>
-    </li><li class="step bad">
+    </li><li class="step ok">
       <span class="dot" aria-hidden="true"></span>
       <div class="step-body">
         <div class="step-name">Aceitação de UI</div>
-        <div class="step-meta">failed <span class="muted" title="Sem timestamp em run-meta.steps; inferido pelos arquivos do pack">· inferido</span></div>
+        <div class="step-meta">done <span class="muted" title="Sem timestamp em run-meta.steps; inferido pelos arquivos do pack">· inferido</span></div>
         
         
       </div>
-    </li><li class="step bad">
+    </li><li class="step ok">
       <span class="dot" aria-hidden="true"></span>
       <div class="step-body">
         <div class="step-name">Review 3 eixos</div>
-        <div class="step-meta">failed <span class="muted" title="Sem timestamp em run-meta.steps; inferido pelos arquivos do pack">· inferido</span></div>
+        <div class="step-meta">done <span class="muted" title="Sem timestamp em run-meta.steps; inferido pelos arquivos do pack">· inferido</span></div>
         
         
       </div>
-    </li><li class="step bad">
+    </li><li class="step ok">
       <span class="dot" aria-hidden="true"></span>
       <div class="step-body">
         <div class="step-name">Score</div>
-        <div class="step-meta">failed <span class="muted" title="Sem timestamp em run-meta.steps; inferido pelos arquivos do pack">· inferido</span></div>
+        <div class="step-meta">done <span class="muted" title="Sem timestamp em run-meta.steps; inferido pelos arquivos do pack">· inferido</span></div>
         
         
       </div>
-    </li><li class="step bad">
+    </li><li class="step ok">
       <span class="dot" aria-hidden="true"></span>
       <div class="step-body">
         <div class="step-name">Limpeza</div>
-        <div class="step-meta">failed <span class="muted" title="Sem timestamp em run-meta.steps; inferido pelos arquivos do pack">· inferido</span></div>
+        <div class="step-meta">done <span class="muted" title="Sem timestamp em run-meta.steps; inferido pelos arquivos do pack">· inferido</span></div>
         
         
       </div>
-    </li><li class="step warn">
+    </li><li class="step ok">
       <span class="dot" aria-hidden="true"></span>
       <div class="step-body">
         <div class="step-name">Gates do projeto</div>
-        <div class="step-meta">in_progress <span class="muted" title="Sem timestamp em run-meta.steps; inferido pelos arquivos do pack">· inferido</span></div>
+        <div class="step-meta">done <span class="muted" title="Sem timestamp em run-meta.steps; inferido pelos arquivos do pack">· inferido</span></div>
         
         
       </div>
     </li></ol></div>
-      <div class="card"><h2>Riscos e itens abertos</h2><ul class="risks"><li class="bad">Gate Validação por task sem ponto: missing validation evidence on a DONE task</li><li class="bad">Gate Imutabilidade sem ponto: immutability.json not green</li><li class="bad">Gate Review 3/3 sem ponto: standards=missing spec=missing correctness=missing</li><li class="bad">Gate Worktrees sem ponto: 0/1 merged+removed</li><li class="bad">Cobertura não medida (coverage.json ausente ou sem pct).</li><li class="bad">Hooks verdict FAIL — o pack não fecha até corrigir (ou waiver do usuário).</li></ul>
+      <div class="card"><h2>Riscos e itens abertos</h2><p class="okline">Nenhum item aberto: gates pagos, cobertura no piso, nada pendente registrado.</p>
         
       </div>
     </div>
-    <details class="card warnbox"><summary><strong>1 aviso(s) de schema do pack</strong> <span class="muted">— dados fora do formato de references/pack-schemas.md</span></summary>
-        <ul class="plain"><li><code>TASKS.json</code> T-004: DONE sem checks válidos para docs/config (kind, validation_reason, checks[])</li></ul></details></section>
+    </section>
 <section class="panel" role="tabpanel" id="panel-sdd" aria-labelledby="tab-sdd" tabindex="0" hidden data-panel="sdd"><div class="card"><h2>SDD</h2><div class="spec-meta">
     <span class="badge"><span class="k">spec</span> <code>docs/SDD-SIDEBAR-FOLDERS.md</code></span>
     <span class="badge ok"><span class="k">status</span> confirmed</span>
@@ -278,7 +277,7 @@ footer.foot{color:var(--muted);font-size:.8rem;margin-top:28px;border-top:1px so
 <h2 id="sdd-full-objetivo">Objetivo</h2>
 <p>A sidebar esquerda (hoje 100% tag-cêntrica) passa a apresentar <strong>pastas e tags</strong> por meio de um controle segmentado <code>📁 Pastas | # Tags</code>. Clicar numa pasta <strong>filtra e entra</strong> nela (breadcrumb + grid filtrado). Pastas protegidas por senha <strong>não são renderizadas</strong> nesta superfície.</p>
 <h2 id="sdd-full-requisitos">Requisitos</h2>
-<ol><li><strong>Segmented control</strong> abaixo do cabeçalho &quot;Navegar&quot; (era &quot;Tags&quot;).<ul><li>Aba ativa persiste em <code>localStorage</code> (padrão <code>foldex.sidebar.*</code>).</li><li>&quot;Todos os links&quot; e &quot;Atualizações recentes&quot; ficam <strong>fora</strong> das abas, sempre visíveis.</li></ul></li><li><strong>Painel Pastas</strong>: árvore de <code>useFolders</code> com subpastas indentadas (guia vertical, como no sketch), dot colorido por pasta, contagem.<ul><li>Filtra <code>has_password === true</code> (flag já existe no DTO).</li><li>Ações <strong>dentro da aba</strong>: &quot;Nova pasta&quot; e &quot;Gerenciar&quot; → <code>FolderDialog</code> (existente).</li><li>Clicar numa pasta: seleciona a pasta como filtro de contexto + breadcrumb na área principal; o grid lista o conteúdo da pasta (inclui subpastas — containment ADR-19: listing de pasta mostra seus links/notas diretos E das subpastas, conforme comportamento atual de <code>?parent_id=</code>).</li></ul></li><li><strong>Painel Tags</strong>: idêntico ao comportamento atual (Frequentes/Outras, load-more, seleção multi-tag) com ações &quot;Nova tag&quot;/&quot;Gerenciar&quot; <strong>dentro da aba</strong> (movidas do rodapé global).</li><li><strong>Rail colapsado</strong>: mostra as ações da aba ativa (aba ativa também persiste no estado colapsado); ícone do rail passa a refletir &quot;Navegar&quot;.</li><li><strong>Drawer mobile</strong>: inalterado no comportamento (overlay ≤768px), herda a nova estrutura.</li><li><strong>Filtro combinado</strong>: pasta (contexto) + tags (interseção) + busca — a pasta é o escopo, tags refinam dentro dela. Trocar de pasta limpa tags? Não: tags selecionadas persistem ao trocar de pasta (filtro composto), exceto ao usar &quot;Todos os links&quot; (limpa tudo, como hoje).</li><li><strong>Breadcrumb</strong> na área principal: <code>Todos os links / Dev / Frontend</code>, clicável, com badge colorido da pasta atual. Aparece só quando dentro de pasta.</li><li><strong>i18n</strong>: chaves novas em en/pt/es (<code>sidebar.navigate</code>, <code>sidebar.folders</code>, <code>sidebar.new_folder</code>, <code>sidebar.manage_folders</code>, <code>sidebar.hidden_locked_hint</code> opcional — ver decisão aberta).</li></ol>
+<ol><li><strong>Segmented control</strong> abaixo do cabeçalho &quot;Navegar&quot; (era &quot;Tags&quot;).<ul><li>Aba ativa persiste em <code>localStorage</code> (padrão <code>foldex.sidebar.*</code>).</li><li>&quot;Todos os links&quot; e &quot;Atualizações recentes&quot; ficam <strong>fora</strong> das abas, sempre visíveis.</li></ul></li><li><strong>Painel Pastas</strong>: árvore de <code>useFolders</code> com subpastas indentadas (guia vertical, como no sketch), dot colorido por pasta.<ul><li><strong>Sem badge de contagem</strong> (decisão do owner, 03/11, no review round): a projeção slim do backend zera counts de propósito (<code>repository.go:222</code>) — trazer counts exigiria mudança de backend fora do escopo. Contagens continuam nos cards do HomeView.</li><li>Filtra <code>has_password === true</code> <strong>e toda a subárvore</strong> (flag já existe no DTO).</li><li>Ação <strong>dentro da aba</strong>: &quot;Nova pasta&quot; → callback para o <code>FolderDialog</code> existente (não há superfície &quot;gerenciar pastas&quot; no app; edição segue nos FolderCards do grid).</li><li>Clicar numa pasta: seleciona a pasta como filtro de contexto + breadcrumb na área principal; o grid lista o conteúdo da pasta (inclui subpastas — containment ADR-19: listing de pasta mostra seus links/notas diretos E das subpastas, conforme comportamento atual de <code>?parent_id=</code>).</li></ul></li><li><strong>Painel Tags</strong>: idêntico ao comportamento atual (Frequentes/Outras, load-more, seleção multi-tag) com ações &quot;Nova tag&quot;/&quot;Gerenciar&quot; <strong>dentro da aba</strong> (movidas do rodapé global).</li><li><strong>Rail colapsado</strong>: mostra as ações da aba ativa (aba ativa também persiste no estado colapsado); ícone do rail passa a refletir &quot;Navegar&quot;.</li><li><strong>Drawer mobile</strong>: inalterado no comportamento (overlay ≤768px), herda a nova estrutura.</li><li><strong>Filtro combinado</strong>: pasta (contexto) + tags (interseção) + busca — a pasta é o escopo, tags refinam dentro dela. Trocar de pasta limpa tags? Não: tags selecionadas persistem ao trocar de pasta (filtro composto), exceto ao usar &quot;Todos os links&quot; (limpa tudo, como hoje).</li><li><strong>Breadcrumb</strong> na área principal: <code>Todos os links / Dev / Frontend</code>, clicável, com badge colorido da pasta atual. Aparece só quando dentro de pasta.</li><li><strong>i18n</strong>: chaves novas em en/pt/es (<code>sidebar.navigate</code>, <code>sidebar.folders</code>, <code>sidebar.new_folder</code>, <code>sidebar.manage_folders</code>, <code>sidebar.hidden_locked_hint</code> opcional — ver decisão aberta).</li></ol>
 <h2 id="sdd-full-fora-de-escopo">Fora de escopo</h2>
 <ul><li>CRUD de pastas novo (usa <code>FolderDialog</code> existente).</li><li>Qualquer mudança no backend (todos os endpoints já existem: <code>GET /api/folders</code>, <code>GET /api/entries?folder=</code>, counts).</li><li>Unlock de pastas protegidas na sidebar (elas simplesmente não aparecem).</li></ul>
 <h2 id="sdd-full-decisoes-abertas">Decisões abertas</h2>
@@ -309,7 +308,7 @@ footer.foot{color:var(--muted);font-size:.8rem;margin-top:28px;border-top:1px so
     </div></div>
     </div>
     <section class="wt-group" data-group="1">
-        <h3 class="wt-title">Worktree 1 <code>mmh-77d8b98a/slice-1</code> <span class="chip bad">não mergeada</span> <span class="chip warn">no disco</span>
+        <h3 class="wt-title">Worktree 1 <code>mmh-77d8b98a/slice-1</code> <span class="chip ok">merged</span> <span class="chip ok">removida</span>
           <span class="muted">4/4 DONE · 12 testes</span></h3>
         <details class="task" data-status="DONE" data-wt="1" data-search="t-001 abas segmentadas pastas|tags com ações por aba done remodelar tagsidebar em navegar: segmented control, painéis, ações migradas para dentro da aba tags.
 
@@ -449,7 +448,7 @@ confira e complete as chaves novas (sidebar.navigate, sidebar.folders, sidebar.t
       <span class="tmeta">
         <span class="chip ok">DONE</span>
         <span class="mini" title="testes adicionados">🧪 0</span>
-        <span class="mini bad" title="validação: check">Checks ✗</span>
+        <span class="mini ok" title="validação: check">Checks ✓</span>
         
         
         
@@ -591,20 +590,68 @@ confira e complete as chaves novas (sidebar.navigate, sidebar.folders, sidebar.t
         </div>
       </details>
     </section></section>
-<section class="panel" role="tabpanel" id="panel-testes" aria-labelledby="tab-testes" tabindex="0" hidden data-panel="testes"><div class="grid-2"><div class="card"><h2>Suíte de testes</h2><div class="empty" role="note">
-    <div class="empty-icon" aria-hidden="true">∅</div>
-    <div><strong>Resumo da suíte</strong> — não registrado pelo pack.
-      <div class="muted">Arquivo esperado: <code>tests.json</code> · produzido por <code>Oracle (após o merge final)</code></div>
-      <div class="muted">{cmd, ok, total, passed, failed, skipped, duration_s, suites[]}</div>
-    </div>
-  </div>
-        <p class="small">Comando registrado: <code>cd web &amp;&amp; bun run typecheck &amp;&amp; bun run coverage</code></p></div><div class="card"><h2>Cobertura</h2><div class="empty" role="note">
-    <div class="empty-icon" aria-hidden="true">∅</div>
-    <div><strong>Cobertura</strong> — não registrado pelo pack.
-      <div class="muted">Arquivo esperado: <code>coverage.json</code> · produzido por <code>implementer / Oracle</code></div>
-      <div class="muted">Sem pct o pack não fecha.</div>
-    </div>
-  </div></div></div><div class="card"><h2>Evidência de validação por task</h2>
+<section class="panel" role="tabpanel" id="panel-testes" aria-labelledby="tab-testes" tabindex="0" hidden data-panel="testes"><div class="grid-2"><div class="card"><h2>Suíte de testes</h2>
+        <div class="kpis small">
+          <div class="kpi ok"><div class="kpi-label">Resultado</div><div class="kpi-value">PASS</div></div>
+          <div class="kpi"><div class="kpi-label">Total</div><div class="kpi-value">2042</div></div>
+          <div class="kpi ok"><div class="kpi-label">Passaram</div><div class="kpi-value">2042</div></div>
+          <div class="kpi "><div class="kpi-label">Falharam</div><div class="kpi-value">0</div></div>
+          <div class="kpi"><div class="kpi-label">Pulados</div><div class="kpi-value">0</div></div>
+          <div class="kpi"><div class="kpi-label">Duração</div><div class="kpi-value">74s</div></div>
+        </div>
+        <p class="small">$ <code>cd web &amp;&amp; bun run typecheck &amp;&amp; bun run coverage</code></p>
+        
+        <details class="more"><summary>log</summary><pre class="code small"><code>Test Files 160 passed (160) · Tests 2042 passed (2042) · tsc --noEmit ok · guard css 1122 ok · permission parity 19 ok</code></pre></details>
+      </div><div class="card"><h2>Cobertura</h2>
+      <div class="cov-head">
+        <figure class="gauge ok" role="img" aria-label="Cobertura: 95.5%, piso 90%">
+    <svg viewBox="0 0 120 120" width="132" height="132" aria-hidden="true">
+      <circle cx="60" cy="60" r="52" class="g-track"/>
+      <circle cx="60" cy="60" r="52" class="g-bar" stroke-dasharray="311.96 326.73" transform="rotate(-90 60 60)"/>
+      <line x1="34.7" y1="25.2" x2="24.1" y2="10.6" class="g-floor"/>
+      <text x="60" y="66" text-anchor="middle" class="g-val">95.5%</text>
+      
+    </svg>
+    <figcaption><strong>Cobertura</strong><span class="muted">piso 90%</span></figcaption>
+  </figure>
+        <div class="cov-info">
+          <div class="kv"><span class="k">Ferramenta</span> vitest v8</div>
+          <div class="kv"><span class="k">Relatório</span> <code>web/coverage/index.html</code></div>
+          <div class="kv"><span class="k">Medido em</span> 2026-11-03T11:21:28.418192+00:00</div>
+          <p class="small muted">statements no produto integrado (repo gate 85/80); tocados: FoldersPanel 100, TagSidebar 100, AppShell 97.59</p>
+          
+        </div>
+      </div>
+      <h3>Por módulo / métrica</h3><div class="bars" role="list" aria-label="Cobertura por módulo"><div class="bar-row" role="listitem">
+      <div class="bar-label" title="AppShell.tsx">AppShell.tsx <span class="muted">modules</span></div>
+      <div class="bar-track" aria-hidden="true">
+        <div class="bar-fill ok" style="width:97.59%"></div>
+        <div class="bar-floor" style="left:90.00%" title="piso 90%"></div>
+      </div>
+      <div class="bar-val">97.59%</div>
+    </div><div class="bar-row" role="listitem">
+      <div class="bar-label" title="components/TagSidebar.tsx">components/TagSidebar.tsx <span class="muted">modules</span></div>
+      <div class="bar-track" aria-hidden="true">
+        <div class="bar-fill ok" style="width:100.00%"></div>
+        <div class="bar-floor" style="left:90.00%" title="piso 90%"></div>
+      </div>
+      <div class="bar-val">100%</div>
+    </div><div class="bar-row" role="listitem">
+      <div class="bar-label" title="components/sidebar/FoldersPanel.tsx">components/sidebar/FoldersPanel.tsx <span class="muted">modules</span></div>
+      <div class="bar-track" aria-hidden="true">
+        <div class="bar-fill ok" style="width:100.00%"></div>
+        <div class="bar-floor" style="left:90.00%" title="piso 90%"></div>
+      </div>
+      <div class="bar-val">100%</div>
+    </div><div class="bar-row" role="listitem">
+      <div class="bar-label" title="código tocado (diff)">código tocado (diff) <span class="muted">7571/7929</span></div>
+      <div class="bar-track" aria-hidden="true">
+        <div class="bar-fill ok" style="width:95.48%"></div>
+        <div class="bar-floor" style="left:90.00%" title="piso 90%"></div>
+      </div>
+      <div class="bar-val">95.48%</div>
+    </div></div>
+    </div></div><div class="card"><h2>Evidência de validação por task</h2>
         <div class="table-wrap"><table class="evtable">
           <thead><tr><th scope="col">Task</th><th scope="col">Modo</th><th scope="col">Evidência</th><th scope="col">Validação</th><th scope="col">Testes adicionados</th></tr></thead>
           <tbody><tr>
@@ -686,163 +733,250 @@ confira e complete as chaves novas (sidebar.navigate, sidebar.folders, sidebar.t
     <pre class="code small"><code>ok: every fx-* class in the markup has a rule (1122 declared)</code></pre>
     
   </div></td>
-            <td><span class="chip bad">incompleta</span></td>
+            <td><span class="chip ok">válida</span></td>
             <td>0</td>
           </tr></tbody>
         </table></div>
-      </div><div class="card"><h2>Imutabilidade</h2><div class="empty" role="note">
-    <div class="empty-icon" aria-hidden="true">∅</div>
-    <div><strong>Testes de imutabilidade</strong> — não registrado pelo pack.
-      <div class="muted">Arquivo esperado: <code>immutability.json</code> · produzido por <code>immutability</code></div>
-      
-    </div>
-  </div></div></section>
+      </div><div class="card"><h2>Imutabilidade <span class="chip ok">verde</span></h2>
+        <p class="muted small">4 teste(s) de contrato · cobre 4 task(s) · <code>cd web &amp;&amp; bun run test src/components/TagSidebar.test.tsx src/components/sidebar/FoldersPanel.test.tsx &amp;&amp; node scripts/test-css-orphan-classes.mjs</code></p>
+        <ul class="taglist"><li><code>segmented tabs render/switch/persist/garbage-fallback</code></li><li><code>rail follows active tab (tags/folders)</code></li><li><code>folders tree: grouping, protected subtree (child+grandchild), orphan, active, click, action, empty</code></li><li><code>locale parity en/pt/es (locales.test.ts)</code></li></ul>
+        
+      </div></section>
 <section class="panel" role="tabpanel" id="panel-review" aria-labelledby="tab-review" tabindex="0" hidden data-panel="review">
-    <div class="axes"><article class="card axis warn">
-      <header class="axis-head"><h2>Standards</h2><span class="chip neutral">sem voto</span></header>
+    <div class="axes"><article class="card axis ok">
+      <header class="axis-head"><h2>Standards</h2><span class="chip ok">APPROVE</span><span class="chip neutral">rodada 2</span></header>
       <p class="muted small">Padrões documentados do repo + catálogo de smells (Fowler).</p>
-      
-      <div class="empty" role="note">
-    <div class="empty-icon" aria-hidden="true">∅</div>
-    <div><strong>Review Standards</strong> — não registrado pelo pack.
-      <div class="muted">Arquivo esperado: <code>reviews/standards.json</code> · produzido por <code>standards-reviewer</code></div>
-      
-    </div>
-  </div>
-    </article><article class="card axis warn">
-      <header class="axis-head"><h2>Spec</h2><span class="chip neutral">sem voto</span></header>
+      <div class="sevbar"><span class="chip warn">2 medium</span> <span class="chip neutral">4 low</span> <span class="chip neutral">2 info</span></div>
+      <ol class="rounds" aria-label="Histórico de rodadas"><li><span class="chip neutral">R1</span> <span class="chip bad">REJECT</span> <span class="muted small">2 achado(s)</span></li><li class="arrow" aria-hidden="true">→</li><li><span class="chip neutral">R2</span> <span class="chip ok">APPROVE</span> </li></ol>
+        <p>sem HIGH no round 1; MEDIUMs (indent JSX, chave mágica) e LOWs baratos corrigidos no round 2; duplicação TagRow evaporou com a remoção do badge</p>
+        <ul class="findings"><li class="finding sev-medium">
+    <div class="f-head"><span class="chip warn">medium</span> <span class="chip ok">fixed</span> <strong>JSX do painel Tags mal indentado após o wrap</strong></div>
+    <div class="small"><code>web/src/components/TagSidebar.tsx:241</code></div>
+    <div class="small">corpo no mesmo nível do wrapper; sem formatter no repo ficava enganoso.</div>
+    
+  </li><li class="finding sev-medium">
+    <div class="f-head"><span class="chip warn">medium</span> <span class="chip ok">fixed</span> <strong>Chave mágica &#39;foldex.sidebar.tab&#39; repetida 4x</strong></div>
+    <div class="small"><code>web/src/components/TagSidebar.tsx:86</code></div>
+    <div class="small">irmãs são constantes nomeadas; agora TAB_KEY exportada e usada nos testes.</div>
+    
+  </li><li class="finding sev-low">
+    <div class="f-head"><span class="chip neutral">low</span> <span class="chip ok">fixed</span> <strong>Defaults de props opcionais fora da assinatura</strong></div>
+    
+    <div class="small">onOpenFolder/onNewFolder movidos para o destructure, como folders/openFolder.</div>
+    
+  </li><li class="finding sev-low">
+    <div class="f-head"><span class="chip neutral">low</span> <span class="chip ok">fixed</span> <strong>Prop openFolder lê como verbo</strong></div>
+    
+    <div class="small">renomeado para openFolderId (semântica de id, como selected/active).</div>
+    
+  </li><li class="finding sev-low">
+    <div class="f-head"><span class="chip neutral">low</span> <span class="chip ok">fixed</span> <strong>Trio tooltip duplicado nos 3 botões do rail</strong></div>
+    
+    <div class="small">RailAction local garante aria-label+tooltip+side por construção.</div>
+    
+  </li><li class="finding sev-low">
+    <div class="f-head"><span class="chip neutral">low</span> <span class="chip warn">wontfix</span> <strong>Duplicação FoldersPanel row vs TagRow</strong></div>
+    
+    <div class="small">com a remoção do badge de contagem a linha de pasta é dot+nome — divergiu da TagRow (dot+nome+count); reuso forçado adicionaria props opcionais às duas. wontfix.</div>
+    
+  </li><li class="finding sev-info">
+    <div class="f-head"><span class="chip neutral">info</span> <span class="chip warn">wontfix</span> <strong>type=button inconsistente com irmãos</strong></div>
+    
+    <div class="small">novos botões têm; irmãos pré-existentes não — fora do diff.</div>
+    
+  </li><li class="finding sev-info">
+    <div class="f-head"><span class="chip neutral">info</span> <span class="chip ok">fixed</span> <strong>Typo &#39;Pastas|Tabs&#39; no comentário</strong></div>
+    
+    <div class="small">corrigido + referência ao SDD em vez do nº do sketch.</div>
+    
+  </li></ul>
+        
+    </article><article class="card axis ok">
+      <header class="axis-head"><h2>Spec</h2><span class="chip ok">APPROVE</span><span class="chip neutral">rodada 2</span></header>
       <p class="muted small">Aderência ao SDD: faltou algo, sobrou algo, algo está errado.</p>
-      
-      <div class="empty" role="note">
-    <div class="empty-icon" aria-hidden="true">∅</div>
-    <div><strong>Review Spec</strong> — não registrado pelo pack.
-      <div class="muted">Arquivo esperado: <code>reviews/spec.json</code> · produzido por <code>spec-reviewer</code></div>
-      
-    </div>
-  </div>
-    </article><article class="card axis warn">
-      <header class="axis-head"><h2>Correctness</h2><span class="chip neutral">sem voto</span></header>
+      <div class="sevbar"><span class="chip warn">1 medium</span> <span class="chip neutral">2 info</span></div>
+      <ol class="rounds" aria-label="Histórico de rodadas"><li><span class="chip neutral">R1</span> <span class="chip bad">REJECT</span> <span class="muted small">1 achado(s)</span></li><li class="arrow" aria-hidden="true">→</li><li><span class="chip neutral">R2</span> <span class="chip ok">APPROVE</span> </li></ol>
+        <p>SDD cumprido com duas emendas documentadas (badge de contagem e Gerenciar pastas), ambas decididas pelo owner; requisitos 6/7 apoiam-se em mecânica pré-existente testada (breadcrumb/jumpToFolder em App.test.tsx)</p>
+        <ul class="findings"><li class="finding sev-medium">
+    <div class="f-head"><span class="chip warn">medium</span> <span class="chip ok">fixed</span> <strong>Requisito 2 assumia contagem sem mudança de backend</strong></div>
+    <div class="small"><code>docs/SDD-SIDEBAR-FOLDERS.md</code></div>
+    <div class="small">a projeção slim zera counts; owner decidiu remover o badge (client-only) — SDD amendado em 03/11 com a decisão registrada.</div>
+    
+  </li><li class="finding sev-info">
+    <div class="f-head"><span class="chip neutral">info</span> <span class="chip ok">fixed</span> <strong>&#39;Gerenciar pastas&#39; da aba Pastas</strong></div>
+    
+    <div class="small">não existe superfície de gerenciamento no app (edição nos FolderCards); TASKS/SDD amendados — só &#39;Nova pasta&#39; embarca.</div>
+    
+  </li><li class="finding sev-info">
+    <div class="f-head"><span class="chip neutral">info</span> <span class="chip warn">wontfix</span> <strong>Drawer mobile + abas sem teste</strong></div>
+    
+    <div class="small">comportamento herdado intacto (branch mobileOpen pula o rail); gap de teste registrado como follow-up pelo test-reviewer.</div>
+    
+  </li></ul>
+        
+    </article><article class="card axis ok">
+      <header class="axis-head"><h2>Correctness</h2><span class="chip ok">APPROVE</span><span class="chip neutral">rodada 2</span></header>
       <p class="muted small">Implementação, evidência adequada ao modo de validação, imutabilidade e piso de cobertura.</p>
-      
-      <div class="empty" role="note">
-    <div class="empty-icon" aria-hidden="true">∅</div>
-    <div><strong>Review Correctness</strong> — não registrado pelo pack.
-      <div class="muted">Arquivo esperado: <code>reviews/correctness.json</code> · produzido por <code>correctness-reviewer</code></div>
-      
-    </div>
-  </div>
+      <div class="sevbar"><span class="chip bad">1 high</span> <span class="chip warn">1 medium</span> <span class="chip neutral">3 info</span></div>
+      <ol class="rounds" aria-label="Histórico de rodadas"><li><span class="chip neutral">R1</span> <span class="chip bad">REJECT</span> <span class="muted small">2 achado(s)</span></li><li class="arrow" aria-hidden="true">→</li><li><span class="chip neutral">R2</span> <span class="chip ok">APPROVE</span> </li></ol>
+        <p>sweep code-review round 1 achou 2 blockers; ambos corrigidos no round 2 (f7ee4ce) — badge de contagem zero removido por decisão do owner, READMEs atualizados</p>
+        <ul class="findings"><li class="finding sev-high">
+    <div class="f-head"><span class="chip bad">high</span> <span class="chip ok">fixed</span> <strong>Badge de contagem sempre 0 — projeção slim zera counts</strong></div>
+    <div class="small"><code>web/src/components/sidebar/FoldersPanel.tsx:59</code></div>
+    <div class="small">useFolders(scope null, fields minimal) usa a projeção slim do backend que zera link_count/folder_count de propósito (repository.go:222, integração &#39;slim omits counts&#39;); o painel mostrava 0 enganoso em toda pasta. Teste mascarava fabricando counts.</div>
+    
+  </li><li class="finding sev-medium">
+    <div class="f-head"><span class="chip warn">medium</span> <span class="chip ok">fixed</span> <strong>README/README.pt-BR não tocados (CLAUDE.md §3)</strong></div>
+    <div class="small"><code>README.md:38</code></div>
+    <div class="small">mudança visível de usuário sem atualização de docs é incompleta por DoD.</div>
+    
+  </li><li class="finding sev-info">
+    <div class="f-head"><span class="chip neutral">info</span> <span class="chip ok">fixed</span> <strong>Classe fx-folder-child-row sem regra CSS (família INV-159)</strong></div>
+    <div class="small"><code>web/src/components/sidebar/FoldersPanel.tsx</code></div>
+    <div class="small">classe morta; guard não via por concatenação multi-linha (blind spot registrado como follow-up).</div>
+    
+  </li><li class="finding sev-info">
+    <div class="f-head"><span class="chip neutral">info</span> <span class="chip warn">wontfix</span> <strong>role=tablist sem navegação por setas/aria-controls</strong></div>
+    
+    <div class="small">consistente com os 4 tablists existentes; primeira superfície de navegação — melhoria barata como follow-up.</div>
+    
+  </li><li class="finding sev-info">
+    <div class="f-head"><span class="chip neutral">info</span> <span class="chip warn">wontfix</span> <strong>Quarta família CSS de segmented control</strong></div>
+    
+    <div class="small">fx-segmented soma a fx-seg/fx-viewseg/fx-hub-seg/fx-mode-tab; unificação em próximo toque.</div>
+    
+  </li></ul>
+        
     </article></div></section>
-<section class="panel" role="tabpanel" id="panel-hooks" aria-labelledby="tab-hooks" tabindex="0" hidden data-panel="hooks"><div class="card"><h2>Hooks <span class="muted">· <span class="chip bad">FAIL</span></span></h2><p class="muted">Hooks de verificação — rodam no passo 5 junto com os 3 eixos. Achado aberto com severidade ≥ high e sem waiver bloqueia o fechamento do pack, igual à cobertura. OPEN (sem rede, hook não aplicável) nunca derruba.</p>
+<section class="panel" role="tabpanel" id="panel-hooks" aria-labelledby="tab-hooks" tabindex="0" hidden data-panel="hooks"><div class="card"><h2>Hooks <span class="muted">· <span class="chip ok">PASS</span></span></h2><p class="muted">Hooks de verificação — rodam no passo 5 junto com os 3 eixos. Achado aberto com severidade ≥ high e sem waiver bloqueia o fechamento do pack, igual à cobertura. OPEN (sem rede, hook não aplicável) nunca derruba.</p>
     <div class="facts">
       <div><dt>arch-map</dt><dd>atlas · 14 libs · 20 ADRs · 8 containers</dd></div>
-      <div><dt>diff-facts</dt><dd class="muted">ausente</dd></div>
+      <div><dt>diff-facts</dt><dd>14 arquivos · 0 deps novas · 0 rotas · 0 migrações</dd></div>
       
     </div>
-  </div><div class="axes"><article class="card axis warn">
-      <header class="axis-head"><h2>Arquitetura ↔ SDD</h2><span class="chip neutral">não rodou</span></header>
+  </div><div class="axes"><article class="card axis ok">
+      <header class="axis-head"><h2>Arquitetura ↔ SDD</h2><span class="chip ok">APPROVE</span><span class="chip neutral">rodada 1</span></header>
       <p class="muted small">Implementação ↔ SDD ↔ arquitetura da app (arch-map: atlas-docs ou explorer).</p>
       
-      <div class="empty" role="note">
-    <div class="empty-icon" aria-hidden="true">∅</div>
-    <div><strong>Hook Arquitetura ↔ SDD</strong> — não registrado pelo pack.
-      <div class="muted">Arquivo esperado: <code>hooks/arch-alignment.json</code> · produzido por <code>hook arch-alignment (agente) ou scripts/hooks.mjs</code></div>
-      
-    </div>
-  </div>
-    </article><article class="card axis warn">
-      <header class="axis-head"><h2>Não reinventar a roda</h2><span class="chip neutral">não rodou</span></header>
+      <p>camadas intactas: componente de apresentação consome controller existente (AppNavigation.requestOpenFolder, AppDialogs.openNewFolder) sem tocar API/repos; invariáveis CLAUDE.md §4/§5 respeitadas (owner-scoped, redação sempre-ativa preservada, pastas protegidas ocultas como UX sobre dados que o principal já recebe)</p>
+        
+        <p class="okline small">Sem achados.</p>
+    </article><article class="card axis ok">
+      <header class="axis-head"><h2>Não reinventar a roda</h2><span class="chip ok">APPROVE</span><span class="chip neutral">rodada 1</span></header>
       <p class="muted small">O diff reescreve o que stdlib / lib do manifest / lib madura entrega?</p>
-      
-      <div class="empty" role="note">
-    <div class="empty-icon" aria-hidden="true">∅</div>
-    <div><strong>Hook Não reinventar a roda</strong> — não registrado pelo pack.
-      <div class="muted">Arquivo esperado: <code>hooks/reinvention.json</code> · produzido por <code>hook reinvention (agente) ou scripts/hooks.mjs</code></div>
-      
-    </div>
-  </div>
-    </article><article class="card axis warn">
-      <header class="axis-head"><h2>Segurança do diff</h2><span class="chip neutral">não rodou</span></header>
+      <div class="sevbar"><span class="chip neutral">1 info</span></div>
+      <p>reuso máximo: usePersistedState (padrão foldex.sidebar.*), AppNavigation gate, AppDialogs, FolderDialog, Icon/I, padrão fx-side-row; nada reimplementado</p>
+        
+        <ul class="findings"><li class="finding">
+    <div class="f-head"><span class="chip neutral">info</span> <span class="chip warn">wontfix</span> <strong>fx-segmented é a 4ª família de segmented control</strong></div>
+    
+    <div class="small">mesma receita visual de fx-seg/fx-viewseg/fx-hub-seg/fx-mode-tab; unificar no próximo toque nessas classes.</div>
+    
+  </li></ul>
+    </article><article class="card axis ok">
+      <header class="axis-head"><h2>Segurança do diff</h2><span class="chip ok">APPROVE</span><span class="chip neutral">rodada 1</span></header>
       <p class="muted small">Superfície que o diff abre: input, authz, segredo, desserialização, SSRF, abuso.</p>
-      
-      <div class="empty" role="note">
-    <div class="empty-icon" aria-hidden="true">∅</div>
-    <div><strong>Hook Segurança do diff</strong> — não registrado pelo pack.
-      <div class="muted">Arquivo esperado: <code>hooks/security.json</code> · produzido por <code>hook security (agente) ou scripts/hooks.mjs</code></div>
-      
-    </div>
-  </div>
-    </article><article class="card axis warn">
-      <header class="axis-head"><h2>Performance do diff</h2><span class="chip neutral">não rodou</span></header>
+      <div class="sevbar"><span class="chip neutral">1 info</span></div>
+      <p>sweep security (AGENTS.md §9 agente 5): zero HIGH/MEDIUM; cor de pasta constrita pelo backend (cssvalid.IsValidColor) e aplicada via CSSOM; gate ADR-28 respeitado; endpoint owner-scoped; validador evicta lixo do localStorage; sem deps/workflows no diff</p>
+        
+        <ul class="findings"><li class="finding">
+    <div class="f-head"><span class="chip neutral">info</span> <span class="chip warn">wontfix</span> <strong>Branch órfã na raiz poderia vazar existência se a API parasse de devolver pais protegidos</strong></div>
+    <div class="small"><code>web/src/components/sidebar/FoldersPanel.tsx:31</code></div>
+    <div class="small">inacessível hoje (lista flat devolve todas as pastas); nota registrada.</div>
+    
+  </li></ul>
+    </article><article class="card axis ok">
+      <header class="axis-head"><h2>Performance do diff</h2><span class="chip ok">APPROVE</span><span class="chip neutral">rodada 2</span></header>
       <p class="muted small">N+1, query sem teto, índice faltando, hot path — nos fluxos que o diff toca.</p>
-      
-      <div class="empty" role="note">
-    <div class="empty-icon" aria-hidden="true">∅</div>
-    <div><strong>Hook Performance do diff</strong> — não registrado pelo pack.
-      <div class="muted">Arquivo esperado: <code>hooks/performance.json</code> · produzido por <code>hook performance (agente) ou scripts/hooks.mjs</code></div>
-      
-    </div>
-  </div>
-    </article><article class="card axis warn">
-      <header class="axis-head"><h2>Sem overengineering</h2><span class="chip neutral">não rodou</span></header>
+      <div class="sevbar"><span class="chip warn">1 medium</span> <span class="chip neutral">1 low</span> <span class="chip neutral">2 info</span></div>
+      <p>sweep performance: zero HIGH; buildVisibleTree memoizado no round 2 (identidade estável da query faz o memo valer), acumulação O(k²) trocada por push; sem re-render storm novo, sem effects, bundle ~1KB no chunk já eager</p>
+        
+        <ul class="findings"><li class="finding">
+    <div class="f-head"><span class="chip warn">medium</span> <span class="chip ok">fixed</span> <strong>buildVisibleTree em todo render (incl. keystrokes de busca)</strong></div>
+    <div class="small"><code>web/src/components/sidebar/FoldersPanel.tsx:43</code></div>
+    <div class="small">App-level q re-renderiza o shell; árvore rebuild a cada tecla.</div>
+    
+  </li><li class="finding">
+    <div class="f-head"><span class="chip neutral">low</span> <span class="chip ok">fixed</span> <strong>Spread acumulativo no childrenOf (O(k²) degenerado)</strong></div>
+    <div class="small"><code>web/src/components/sidebar/FoldersPanel.tsx:32</code></div>
+    <div class="small">fetch-or-create + push.</div>
+    
+  </li><li class="finding">
+    <div class="f-head"><span class="chip neutral">info</span> <span class="chip warn">wontfix</span> <strong>React.memo no FoldersPanel derrotado por callbacks inline</strong></div>
+    
+    <div class="small">memo da árvore basta; memo do componente seria código morto sem useCallback nos handlers — wontfix com racional.</div>
+    
+  </li><li class="finding">
+    <div class="f-head"><span class="chip neutral">info</span> <span class="chip warn">wontfix</span> <strong>migrateLegacyBoolKeys roda 3 getItem por render (pré-existente)</strong></div>
+    <div class="small"><code>web/src/components/TagSidebar.tsx:79</code></div>
+    <div class="small">fora do diff; follow-up sugerido (guard module-level).</div>
+    
+  </li></ul>
+    </article><article class="card axis ok">
+      <header class="axis-head"><h2>Sem overengineering</h2><span class="chip ok">APPROVE</span><span class="chip neutral">rodada 1</span></header>
       <p class="muted small">Peça estrutural sem requisito que a pague (diff + SDD + arch-map).</p>
-      
-      <div class="empty" role="note">
-    <div class="empty-icon" aria-hidden="true">∅</div>
-    <div><strong>Hook Sem overengineering</strong> — não registrado pelo pack.
-      <div class="muted">Arquivo esperado: <code>hooks/overengineering.json</code> · produzido por <code>hook overengineering (agente) ou scripts/hooks.mjs</code></div>
-      
-    </div>
-  </div>
-    </article><article class="card axis warn">
-      <header class="axis-head"><h2>Dependências no escopo</h2><span class="chip neutral">não rodou</span></header>
+      <div class="sevbar"><span class="chip neutral">1 info</span></div>
+      <p>componente mínimo (~100 linhas com comentários why); extração de TagsPanel sugerida pelo code-quality foi avaliada e protelada (ripplaria useTags/dialog states/rail) — re-indent resolve o problema real</p>
+        
+        <ul class="findings"><li class="finding">
+    <div class="f-head"><span class="chip neutral">info</span> <span class="chip warn">wontfix</span> <strong>TagsPanel inline de 75 linhas</strong></div>
+    
+    <div class="small">extração é a versão &#39;melhor&#39; mas move useTags/estados persistidos e o rail depende de tags.length — follow-up deliberado, não omissão.</div>
+    
+  </li></ul>
+    </article><article class="card axis ok">
+      <header class="axis-head"><h2>Dependências no escopo</h2><span class="chip ok">APPROVE</span><span class="chip neutral">rodada 3</span></header>
       <p class="muted small">Compatibilidade, runtime e versões suportadas das dependências no escopo; idade da versão é advisory.</p>
       
-      <div class="empty" role="note">
-    <div class="empty-icon" aria-hidden="true">∅</div>
-    <div><strong>Hook Dependências no escopo</strong> — não registrado pelo pack.
-      <div class="muted">Arquivo esperado: <code>hooks/deps-freshness.json</code> · produzido por <code>hook deps-freshness (agente) ou scripts/hooks.mjs</code></div>
-      
-    </div>
-  </div>
-    </article><article class="card axis warn">
-      <header class="axis-head"><h2>Aceitação de UI (runtime)</h2><span class="chip neutral">não rodou</span></header>
+      <p>0 dep(s) no escopo new; 0 achado(s); registry not-needed.</p>
+        
+        <p class="okline small">Sem achados.</p>
+    </article><article class="card axis ok">
+      <header class="axis-head"><h2>Aceitação de UI (runtime)</h2><span class="chip ok">APPROVE</span><span class="chip neutral">rodada 3</span></header>
       <p class="muted small">Runtime: app sobe, login, jornadas dirigidas (driver headless/MCP), console, rede, contrato e padrão visual.</p>
-      
-      <div class="empty" role="note">
-    <div class="empty-icon" aria-hidden="true">∅</div>
-    <div><strong>Hook Aceitação de UI (runtime)</strong> — não registrado pelo pack.
-      <div class="muted">Arquivo esperado: <code>hooks/ui-acceptance.json</code> · produzido por <code>hook ui-acceptance (agente) ou scripts/hooks.mjs</code></div>
-      
-    </div>
-  </div>
-    </article></div></section>
+      <div class="sevbar"><span class="chip neutral">1 info</span></div>
+      <p>jornada completa em runtime (drive Playwright headless, stack scratch: postgres 18.6 migrado 1–50 + backend go + vite dev): bootstrap do owner, sidebar Navegar com abas Pastas|Tags, estado vazio, criação de pasta via diálogo, entrada na pasta (linha ativa) e retorno às tags — 27/27 passos, 0 erros de rede inesperados. Único console: Google Fonts CDN inalcançável no sandbox do browser (artefato de infra, finding info). Screenshots: dentro-da-pasta e aba-tags.</p>
+        
+        <ul class="findings"><li class="finding">
+    <div class="f-head"><span class="chip neutral">info</span> <span class="chip warn">wontfix</span> <strong>Google Fonts CDN inalcançável no chromium headless do drive</strong></div>
+    
+    <div class="small">net::ERR_FAILED em fonts.googleapis.com — limitação de rede do ambiente de drive, não defeito do app (index.html carrega web fonts; com internet carrega normalmente). Rejeição mecânica da jornada documentada no JSON bruto; veredito do hook é análise do Oracle sobre a evidência.</div>
+    
+  </li></ul>
+    </article></div><div class="card"><h2>Aceitação de UI <span class="muted">· em escopo</span></h2>
+    <p class="muted small">Passo 4z: boot pelo jeito do repo, login de teste, jornadas dirigidas com evidência por código (console/rede/screenshots). Modo fast: spec direto + driver headless; guided: Playwright MCP explora 1× e destila o spec. Re-run sempre headless.</p>
+    <p class="small">8 arquivo(s) de frontend no diff · 0 tela(s) declarada(s)</p>
+    <div class="facts"><div><dt>boot</dt><dd><code>cd web &amp;&amp; bun run dev -- --port 5174 --strictPort</code> → <code>http://localhost:5174/</code> <span class="chip ok">ok</span></dd></div></div>
+    <div class="table-wrap"><table><thead><tr><th scope="col">Tela</th><th scope="col">Veredito</th><th scope="col">Modo</th><th scope="col">Passos</th><th scope="col">Console</th><th scope="col">Rede ≥400</th><th scope="col">Shots</th></tr></thead><tbody><tr><th scope="row">sidebar-navegar</th><td><span class="chip bad">REJECT</span></td><td>drive</td><td>27/27</td><td><span class="bad-text">7</span></td><td><span class="warn-text">6</span></td><td>2</td></tr></tbody></table></div>
+    
+  </div></section>
 <section class="panel" role="tabpanel" id="panel-score" aria-labelledby="tab-score" tabindex="0" hidden data-panel="score"><div class="card score-head">
-    <figure class="gauge bad" role="img" aria-label="Score: 2 de 10">
+    <figure class="gauge ok" role="img" aria-label="Score: 10 de 10">
     <svg viewBox="0 0 120 120" width="150" height="150" aria-hidden="true">
       <circle cx="60" cy="60" r="52" class="g-track"/>
-      <circle cx="60" cy="60" r="52" class="g-bar" stroke-dasharray="65.35 326.73" transform="rotate(-90 60 60)"/>
+      <circle cx="60" cy="60" r="52" class="g-bar" stroke-dasharray="326.73 326.73" transform="rotate(-90 60 60)"/>
       
-      <text x="60" y="62" text-anchor="middle" class="g-val">2</text>
+      <text x="60" y="62" text-anchor="middle" class="g-val">10</text>
       <text x="60" y="80" text-anchor="middle" class="g-max">/ 10</text>
     </svg>
-    <figcaption><strong>Score</strong><span class="muted">pack não fecha</span></figcaption>
+    <figcaption><strong>Score</strong><span class="muted">pack fechado</span></figcaption>
   </figure>
-    <figure class="gauge neutral" role="img" aria-label="Cobertura: n/a, piso 90%">
+    <figure class="gauge ok" role="img" aria-label="Cobertura: 95.5%, piso 90%">
     <svg viewBox="0 0 120 120" width="150" height="150" aria-hidden="true">
       <circle cx="60" cy="60" r="52" class="g-track"/>
-      <circle cx="60" cy="60" r="52" class="g-bar" stroke-dasharray="0.00 326.73" transform="rotate(-90 60 60)"/>
+      <circle cx="60" cy="60" r="52" class="g-bar" stroke-dasharray="311.96 326.73" transform="rotate(-90 60 60)"/>
       <line x1="34.7" y1="25.2" x2="24.1" y2="10.6" class="g-floor"/>
-      <text x="60" y="66" text-anchor="middle" class="g-val">n/a</text>
+      <text x="60" y="66" text-anchor="middle" class="g-val">95.5%</text>
       
     </svg>
     <figcaption><strong>Cobertura</strong><span class="muted">piso 90%</span></figcaption>
   </figure>
     <div class="score-text">
-      <h2>Não fecha</h2>
+      <h2>Fechado: resultado histórico verificado</h2>
+      <p class="muted">Resultado histórico validado no fechamento; não representa alterações posteriores no produto.</p>
       
-      <ul><li>missing/stale evidence: tests.json</li><li>missing/stale evidence: coverage.json</li><li>missing/stale evidence: immutability.json</li><li>missing/stale evidence: reviews/standards.json</li><li>missing/stale evidence: reviews/spec.json</li><li>missing/stale evidence: reviews/correctness.json</li><li>missing/stale evidence: hooks/ui-scope.json</li><li>missing/stale evidence: hooks/arch-alignment.json</li><li>missing/stale evidence: hooks/reinvention.json</li><li>missing/stale evidence: hooks/security.json</li><li>missing/stale evidence: hooks/performance.json</li><li>missing/stale evidence: hooks/overengineering.json</li><li>missing/stale evidence: hooks/deps-freshness.json</li><li>missing/stale evidence: hooks/ui-acceptance.json</li><li>final test suite missing or failed</li><li>hooks failed or incomplete</li><li>UI scope unknown</li><li>score 2/10</li><li>coverage below required floor or invalid</li><li>worktree resources remain or Git unavailable</li><li>project gates missing, stale, failed or OPEN</li><li>canonical project tracking not reconciled</li></ul>
       <p class="muted">Cada gate vale 0 ou 2. O fechamento exige evidências válidas, testes finais, hooks e gates do projeto; além de 10 <em>e</em> cobertura ≥ piso (90%). Score 10 sozinho não permite fechar.</p>
-      <p class="small bad-text">Cobertura não medida.</p>
+      <p class="small">Cobertura: 95.48% ≥ 90%</p>
     </div>
   </div><div class="gates"><article class="card gate ok">
       <header class="gate-head"><h3>Tasks</h3><span class="pts" aria-label="2 de 2 pontos">2<span class="of">/2</span></span></header>
@@ -850,40 +984,43 @@ confira e complete as chaves novas (sidebar.navigate, sidebar.folders, sidebar.t
       <p class="small muted">✓ 4 DONE</p>
       
       
-    </article><article class="card gate bad">
-      <header class="gate-head"><h3>Validação por task</h3><span class="pts" aria-label="0 de 2 pontos">0<span class="of">/2</span></span></header>
+    </article><article class="card gate ok">
+      <header class="gate-head"><h3>Validação por task</h3><span class="pts" aria-label="2 de 2 pontos">2<span class="of">/2</span></span></header>
       <p class="small">Cada task DONE tem RED/GREEN para comportamento, caracterização antes/depois para refactor ou checks justificados para docs/config.</p>
-      <p class="small bad-text">✗ missing validation evidence on a DONE task</p>
-      <p class="small muted">Alguma task DONE não tem a evidência exigida pelo seu modo de validação.</p>
+      <p class="small muted">✓ each DONE has evidence appropriate to its validation kind</p>
       
-    </article><article class="card gate bad">
-      <header class="gate-head"><h3>Imutabilidade</h3><span class="pts" aria-label="0 de 2 pontos">0<span class="of">/2</span></span></header>
+      
+    </article><article class="card gate ok">
+      <header class="gate-head"><h3>Imutabilidade</h3><span class="pts" aria-label="2 de 2 pontos">2<span class="of">/2</span></span></header>
       <p class="small">Testes de contrato (payload, invariantes, caminhos vizinhos) travam o que não podia mudar, e estão verdes.</p>
-      <p class="small bad-text">✗ immutability.json not green</p>
-      <p class="small muted">immutability.json ausente ou green=false: nada prova que o contrato existente ficou parado.</p>
+      <p class="small muted">✓ 4 contract test(s) green</p>
       
-    </article><article class="card gate bad">
-      <header class="gate-head"><h3>Review 3/3</h3><span class="pts" aria-label="0 de 2 pontos">0<span class="of">/2</span></span></header>
+      <ul class="taglist"><li><code>segmented tabs render/switch/persist/garbage-fallback</code></li><li><code>rail follows active tab (tags/folders)</code></li><li><code>folders tree: grouping, protected subtree (child+grandchild), orphan, active, click, action, empty</code></li></ul>
+    <details class="more"><summary>mostrar todos os 4 itens</summary><ul class="taglist"><li><code>locale parity en/pt/es (locales.test.ts)</code></li></ul></details>
+    </article><article class="card gate ok">
+      <header class="gate-head"><h3>Review 3/3</h3><span class="pts" aria-label="2 de 2 pontos">2<span class="of">/2</span></span></header>
       <p class="small">Os três eixos (Standards, Spec, Correctness) precisam aprovar com evidência válida. Spec ausente ou recusado não permite fechamento.</p>
-      <p class="small bad-text">✗ standards=missing spec=missing correctness=missing</p>
-      <p class="small muted">Algum eixo está REJECT ou não votou.</p>
+      <p class="small muted">✓ standards=APPROVE spec=APPROVE correctness=APPROVE</p>
       
-    </article><article class="card gate bad">
-      <header class="gate-head"><h3>Worktrees</h3><span class="pts" aria-label="0 de 2 pontos">0<span class="of">/2</span></span></header>
+      
+    </article><article class="card gate ok">
+      <header class="gate-head"><h3>Worktrees</h3><span class="pts" aria-label="2 de 2 pontos">2<span class="of">/2</span></span></header>
       <p class="small">Toda slice foi mergeada na branch into e a worktree/branch foi removida (verify-clean).</p>
-      <p class="small bad-text">✗ 0/1 merged+removed</p>
-      <p class="small muted">Slice sem merge ou worktree/branch mmh/slice-* ainda no disco.</p>
+      <p class="small muted">✓ 1/1 merged+removed</p>
+      
       
     </article></div></section>
-<section class="panel" role="tabpanel" id="panel-gates" aria-labelledby="tab-gates" tabindex="0" hidden data-panel="gates"><div class="card"><h2>Gates do projeto</h2><p class="muted">O que o repositório exige além dos 3 eixos do pack (CLAUDE.md / AGENTS.md / CONTRIBUTING.md). Estes gates são obrigatórios para fechar, embora não acrescentem pontos ao score.</p><div class="empty" role="note">
-    <div class="empty-icon" aria-hidden="true">∅</div>
-    <div><strong>Gates do projeto</strong> — não registrado pelo pack.
-      <div class="muted">Arquivo esperado: <code>project-gates.json</code> · produzido por <code>Oracle (passo 8)</code></div>
-      <div class="muted">[{name, source, status: DONE|OPEN|FAILED|N/A, evidence}]</div>
+<section class="panel" role="tabpanel" id="panel-gates" aria-labelledby="tab-gates" tabindex="0" hidden data-panel="gates"><div class="card"><h2>Gates do projeto <span class="muted">· 6/9 DONE</span></h2><p class="muted">O que o repositório exige além dos 3 eixos do pack (CLAUDE.md / AGENTS.md / CONTRIBUTING.md). Estes gates são obrigatórios para fechar, embora não acrescentem pontos ao score.</p>
+      
+      
+      <div class="table-wrap"><table>
+        <thead><tr><th scope="col">Gate</th><th scope="col">Status</th><th scope="col">Fonte</th><th scope="col">Evidência</th></tr></thead>
+        <tbody><tr><th scope="row">web typecheck</th><td><span class="chip ok">DONE</span></td><td>—</td><td class="small">tsc --noEmit exit 0 (round 2, f7ee4ce)</td></tr><tr><th scope="row">web vitest + coverage</th><td><span class="chip ok">DONE</span></td><td>—</td><td class="small">2042 testes · 160 arquivos · 95.48% stmts / 91.25% branches (gates 85/80); tocados: FoldersPanel 100/100, TagSidebar 100/97.26, AppShell 97.59/88.88</td></tr><tr><th scope="row">guard css-orphan-classes</th><td><span class="chip ok">DONE</span></td><td>—</td><td class="small">1122 regras · blind spot multi-linha registrado como follow-up</td></tr><tr><th scope="row">guard permission-parity</th><td><span class="chip ok">DONE</span></td><td>—</td><td class="small">19 permissões · Go/TS/3 locales</td></tr><tr><th scope="row">backend go suite</th><td><span class="chip neutral">N/A</span></td><td>—</td><td class="small">diff 100% web/src — diff-facts: 14 arquivos, 0 rotas, 0 migrações, 0 deps, nenhum arquivo Go</td></tr><tr><th scope="row">actionlint/workflows</th><td><span class="chip neutral">N/A</span></td><td>—</td><td class="small">nenhum workflow tocado no diff</td></tr><tr><th scope="row">AGENTS.md §9 sweep 5 agentes</th><td><span class="chip ok">DONE</span></td><td>—</td><td class="small">5 relatórios + re-review dos blockers: ambos RESOLVIDOS, sem regressões (reviews/* e hooks/* do pack)</td></tr><tr><th scope="row">graphify update</th><td><span class="chip ok">DONE</span></td><td>—</td><td class="small">graphify update . executado pós-implementação (AGENTS.md §6)</td></tr><tr><th scope="row">atlas-docs delta</th><td><span class="chip neutral">N/A</span></td><td>—</td><td class="small">nenhum entrypoint/rota nova; scan incremental fica para o próximo delta no merge em main — fluxos estruturalmente inalterados</td></tr></tbody>
+      </table></div>
     </div>
-  </div></div></section>
+    </section>
 </main>
-<footer class="foot">Gerado por <code>make-me-happy/scripts/build-report.mjs</code> a partir de <code>docs/impl/make-me-happy/2026-11-03-main-77d8b98a-7832-4b33-8f4c-70d3c83376d3</code> · 15 arquivo(s) no pack · schemas em <code>references/pack-schemas.md</code></footer>
+<footer class="foot">Gerado por <code>make-me-happy/scripts/build-report.mjs</code> a partir de <code>docs/impl/make-me-happy/2026-11-03-main-77d8b98a-7832-4b33-8f4c-70d3c83376d3</code> · 51 arquivo(s) no pack · schemas em <code>references/pack-schemas.md</code></footer>
 </div>
 <script>
 (function(){

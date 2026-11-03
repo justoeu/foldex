@@ -1,0 +1,71 @@
+{
+  "execution_id": "fbfd14f3-5269-483e-854d-c48987fcbee3",
+  "screen": "sidebar-navegar",
+  "mode": "drive",
+  "base_url": "http://localhost:5174",
+  "verdict": "REJECT",
+  "at": "2026-11-03T22:46:19.872Z",
+  "steps": [
+    {
+      "n": 1,
+      "action": "goto",
+      "ok": true,
+      "url": "/"
+    },
+    {
+      "n": 2,
+      "action": "wait",
+      "ok": true
+    },
+    {
+      "n": 3,
+      "action": "assert_visible",
+      "ok": false,
+      "error": "TimeoutError: page.waitForSelector: Timeout 5000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('.fx-side-title') to be visible\u001b[22m\n",
+      "file": "docs/impl/make-me-happy/2026-11-03-main-77d8b98a-7832-4b33-8f4c-70d3c83376d3/ui/screenshots/fbfd14f3-5269-483e-854d-c48987fcbee3/sidebar-navegar-03-fail.png"
+    }
+  ],
+  "console_errors": [
+    {
+      "text": "Failed to load resource: net::ERR_FAILED",
+      "step": 0,
+      "location": {
+        "url": "https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Nunito+Sans:wght@400;600;700;800;900&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@500;600&display=swap",
+        "line": 0,
+        "column": 0,
+        "lineNumber": 0,
+        "columnNumber": 0
+      },
+      "argument_count": 0
+    }
+  ],
+  "network_errors": [],
+  "screenshots": [
+    "docs/impl/make-me-happy/2026-11-03-main-77d8b98a-7832-4b33-8f4c-70d3c83376d3/ui/screenshots/fbfd14f3-5269-483e-854d-c48987fcbee3/sidebar-navegar-03-fail.png"
+  ],
+  "assertions": {
+    "ok": 2,
+    "total": 3,
+    "failed": [
+      "TimeoutError: page.waitForSelector: Timeout 5000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('.fx-side-title') to be visible\u001b[22m\n"
+    ]
+  },
+  "error": "current drive did not complete successfully",
+  "spec_ref": "SDD-SIDEBAR-FOLDERS §Requisitos 1,2,3",
+  "unexpected_console_errors": [
+    {
+      "text": "Failed to load resource: net::ERR_FAILED",
+      "step": 0,
+      "location": {
+        "url": "https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Nunito+Sans:wght@400;600;700;800;900&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@500;600&display=swap",
+        "line": 0,
+        "column": 0,
+        "lineNumber": 0,
+        "columnNumber": 0
+      },
+      "argument_count": 0
+    }
+  ],
+  "unexpected_network_errors": [],
+  "exit": 1
+}

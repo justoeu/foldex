@@ -14,12 +14,18 @@
       "output_excerpt": "Test Files 2 passed (2) · Tests 28 passed (28); TYPECHECK_OK"
     },
     "commits": [
-      { "sha": "a86d865", "message": "feat(web): rail colapsado segue a aba ativa da sidebar (T-003)" }
+      {
+        "sha": "a86d865",
+        "message": "feat(web): rail colapsado segue a aba ativa da sidebar (T-003)"
+      }
     ],
     "files": [
       "web/src/components/TagSidebar.tsx",
       "web/src/components/TagSidebar.test.tsx"
     ],
-    "reversal": { "done": false, "note": "rail por aba é incremental; branch tags preserva comportamento anterior" }
+    "reversal": {
+      "done": false,
+      "note": "rail por aba é incremental; branch tags preserva comportamento anterior"
+    }
   }
 }
