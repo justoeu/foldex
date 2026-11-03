@@ -68,6 +68,13 @@ export function TagSidebar({
   const [freqOpen, setFreqOpen] = usePersistedState(FREQ_OPEN_KEY, true, isBoolean)
   const [otherOpen, setOtherOpen] = usePersistedState(OTHER_OPEN_KEY, true, isBoolean)
   const [otherShowAll, setOtherShowAll] = useState(false)
+  // Segmented Pastas|Tabs (sketch 001, variant B): the active panel persists
+  // like the section toggles above — a reload restores the last tab.
+  const [tab, setTab] = usePersistedState(
+    'foldex.sidebar.tab',
+    'tags',
+    (v): v is 'tags' | 'folders' => v === 'tags' || v === 'folders',
+  )
 
   // Esc closes the mobile drawer when it's open, through the escape
   // stack so it does not also pop the folder underneath.
@@ -131,7 +138,7 @@ export function TagSidebar({
     <aside className={'fx-sidebar' + railClass}>
       <div className="fx-side-head">
         <div className="fx-side-title">
-          <Icon d={I.tag} size={15} /> <span>{t('sidebar.tags')}</span>
+          <Icon d={I.layers} size={15} /> <span>{t('sidebar.navigate')}</span>
         </div>
         <div className="fx-side-head-actions">
           {mobileOpen && (
@@ -155,6 +162,29 @@ export function TagSidebar({
         </div>
       </div>
 
+      <div className="fx-segmented" role="tablist" aria-label={t('sidebar.navigate')}>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === 'folders'}
+          className={tab === 'folders' ? 'fx-seg-tab fx-seg-tab-active' : 'fx-seg-tab'}
+          onClick={() => setTab('folders')}
+        >
+          <Icon d={I.folder} size={13} />
+          <span>{t('sidebar.folders')}</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === 'tags'}
+          className={tab === 'tags' ? 'fx-seg-tab fx-seg-tab-active' : 'fx-seg-tab'}
+          onClick={() => setTab('tags')}
+        >
+          <Icon d={I.tag} size={13} />
+          <span>{t('sidebar.tags')}</span>
+        </button>
+      </div>
+
       <div className="fx-sidebar-scroll">
         <button
           className={
@@ -173,6 +203,12 @@ export function TagSidebar({
 
         {isLoading && <div style={{ padding: 12, color: 'var(--fx-ink-4)' }}>{t('sidebar.loading')}</div>}
 
+        {tab === 'folders' && (
+          <div className="fx-side-empty">{t('sidebar.empty_folders')}</div>
+        )}
+
+        {tab === 'tags' && (
+          <>
         {freq.length > 0 && (
           <>
             <SectionHeader
@@ -226,26 +262,28 @@ export function TagSidebar({
             )}
           </>
         )}
-      </div>
 
-      <div className="fx-side-actions">
-        <button
-          className="fx-side-action"
-          onClick={() => setCreating(true)}
-          data-tooltip={t('sidebar.new_tag_tooltip')}
-        >
-          <Icon d={I.plus} size={13} />
-          <span>{t('sidebar.new')}</span>
-        </button>
-        <button
-          className="fx-side-action"
-          onClick={() => setManaging(true)}
-          disabled={tags.length === 0}
-          data-tooltip={t('sidebar.manage_tags_tooltip')}
-        >
-          <Icon d={I.pen} size={13} />
-          <span>{t('sidebar.manage')}</span>
-        </button>
+        <div className="fx-side-actions">
+          <button
+            className="fx-side-action"
+            onClick={() => setCreating(true)}
+            data-tooltip={t('sidebar.new_tag_tooltip')}
+          >
+            <Icon d={I.plus} size={13} />
+            <span>{t('sidebar.new')}</span>
+          </button>
+          <button
+            className="fx-side-action"
+            onClick={() => setManaging(true)}
+            disabled={tags.length === 0}
+            data-tooltip={t('sidebar.manage_tags_tooltip')}
+          >
+            <Icon d={I.pen} size={13} />
+            <span>{t('sidebar.manage')}</span>
+          </button>
+        </div>
+          </>
+        )}
       </div>
 
       <div className="fx-side-version" aria-label={`foldex ${VERSION} build ${BUILD_DATE}`}>

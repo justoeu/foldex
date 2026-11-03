@@ -132,7 +132,10 @@
     "new_tag_tooltip": "Criar nova tag",
     "manage_tags_tooltip": "Editar ou excluir tags existentes",
     "expand": "Expandir sidebar",
-    "collapse": "Recolher"
+    "collapse": "Recolher",
+    "navigate": "Navegar",
+    "folders": "Pastas",
+    "empty_folders": "Sem pastas ainda"
   },
   "status": {
     "unreachable": "Não foi possível conectar: {{names}}",

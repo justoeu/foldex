@@ -11,7 +11,7 @@ let state: MockState
 beforeEach(() => {
   // Section open/closed state is persisted; a test that collapses Frequent
   // would otherwise hide every tag from the next test in this file.
-  for (const k of ['foldex.sidebar.freqOpen', 'foldex.sidebar.otherOpen', 'foldex.sidebar.recentOpen']) {
+  for (const k of ['foldex.sidebar.freqOpen', 'foldex.sidebar.otherOpen', 'foldex.sidebar.recentOpen', 'foldex.sidebar.tab']) {
     localStorage.removeItem(k)
   }
   state = freshState()
@@ -240,4 +240,51 @@ describe('TagSidebar', () => {
     await waitFor(() => expect(screen.getByText(/Changed page/i)).toBeInTheDocument())
   })
 })
+
+describe('TagSidebar · segmented tabs', () => {
+  it('shows the Navigate header with Folders/Tags tabs, Tags active by default', async () => {
+    renderWithProviders(
+      <TagSidebar selected={[]} onToggle={vi.fn()} onClear={vi.fn()} totalLinks={0} collapsed={false} onToggleCollapsed={vi.fn()} />,
+    )
+    expect(screen.getByText('Navigate')).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Tags' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('tab', { name: 'Folders' })).toHaveAttribute('aria-selected', 'false')
+    // Tags panel visible by default — a tag row renders.
+    await waitFor(() => expect(screen.getByText('jira')).toBeInTheDocument())
+  })
+
+  it('switches panels: Folders hides tag rows and tag actions, shows the empty state', async () => {
+    renderWithProviders(
+      <TagSidebar selected={[]} onToggle={vi.fn()} onClear={vi.fn()} totalLinks={0} collapsed={false} onToggleCollapsed={vi.fn()} />,
+    )
+    await waitFor(() => expect(screen.getByText('jira')).toBeInTheDocument())
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('tab', { name: 'Folders' }))
+    expect(screen.queryByText('jira')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^New$/i })).not.toBeInTheDocument()
+    expect(screen.getByText('No folders yet')).toBeInTheDocument()
+    // Shared rows stay visible outside the tabs.
+    expect(screen.getByText('All links')).toBeInTheDocument()
+    // Back to Tags restores rows and actions.
+    await user.click(screen.getByRole('tab', { name: 'Tags' }))
+    expect(await screen.findByText('jira')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^New$/i })).toBeInTheDocument()
+  })
+
+  it('persists the active tab across mounts', async () => {
+    const { unmount } = renderWithProviders(
+      <TagSidebar selected={[]} onToggle={vi.fn()} onClear={vi.fn()} totalLinks={0} collapsed={false} onToggleCollapsed={vi.fn()} />,
+    )
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('tab', { name: 'Folders' }))
+    unmount()
+    renderWithProviders(
+      <TagSidebar selected={[]} onToggle={vi.fn()} onClear={vi.fn()} totalLinks={0} collapsed={false} onToggleCollapsed={vi.fn()} />,
+    )
+    expect(screen.getByRole('tab', { name: 'Folders' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByText('No folders yet')).toBeInTheDocument()
+    localStorage.removeItem('foldex.sidebar.tab')
+  })
+})
+
 

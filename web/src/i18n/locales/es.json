@@ -132,7 +132,10 @@
     "new_tag_tooltip": "Crear nueva etiqueta",
     "manage_tags_tooltip": "Editar o eliminar etiquetas existentes",
     "expand": "Expandir barra lateral",
-    "collapse": "Contraer"
+    "collapse": "Contraer",
+    "navigate": "Navegar",
+    "folders": "Carpetas",
+    "empty_folders": "Aún no hay carpetas"
   },
   "status": {
     "unreachable": "No fue posible conectar: {{names}}",
