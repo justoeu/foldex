@@ -132,7 +132,12 @@
     "new_tag_tooltip": "Create new tag",
     "manage_tags_tooltip": "Edit or delete existing tags",
     "expand": "Expand sidebar",
-    "collapse": "Collapse"
+    "collapse": "Collapse",
+    "navigate": "Navigate",
+    "folders": "Folders",
+    "empty_folders": "No folders yet",
+    "new_folder": "New folder",
+    "new_folder_tooltip": "Create a new folder"
   },
   "status": {
     "unreachable": "Could not connect: {{names}}",
