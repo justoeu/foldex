@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { screen, waitFor, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { TagSidebar } from './TagSidebar'
+import { TagSidebar, TAB_KEY } from './TagSidebar'
 import { renderWithProviders } from '../test/renderWithProviders'
 import { freshState, installAxiosMock, type MockState } from '../test/server'
 import { http } from '../api/client'
@@ -11,7 +11,7 @@ let state: MockState
 beforeEach(() => {
   // Section open/closed state is persisted; a test that collapses Frequent
   // would otherwise hide every tag from the next test in this file.
-  for (const k of ['foldex.sidebar.freqOpen', 'foldex.sidebar.otherOpen', 'foldex.sidebar.recentOpen', 'foldex.sidebar.tab']) {
+  for (const k of ['foldex.sidebar.freqOpen', 'foldex.sidebar.otherOpen', 'foldex.sidebar.recentOpen', TAB_KEY]) {
     localStorage.removeItem(k)
   }
   state = freshState()
@@ -271,6 +271,15 @@ describe('TagSidebar · segmented tabs', () => {
     expect(screen.getByRole('button', { name: /^New$/i })).toBeInTheDocument()
   })
 
+  it('falls back to the Tags tab when the stored tab value is garbage', () => {
+    localStorage.setItem(TAB_KEY, JSON.stringify('banana'))
+    renderWithProviders(
+      <TagSidebar selected={[]} onToggle={vi.fn()} onClear={vi.fn()} totalLinks={0} collapsed={false} onToggleCollapsed={vi.fn()} />,
+    )
+    expect(screen.getByRole('tab', { name: 'Tags' })).toHaveAttribute('aria-selected', 'true')
+    expect(localStorage.getItem(TAB_KEY)).toBeNull()
+  })
+
   it('persists the active tab across mounts', async () => {
     const { unmount } = renderWithProviders(
       <TagSidebar selected={[]} onToggle={vi.fn()} onClear={vi.fn()} totalLinks={0} collapsed={false} onToggleCollapsed={vi.fn()} />,
@@ -283,7 +292,7 @@ describe('TagSidebar · segmented tabs', () => {
     )
     expect(screen.getByRole('tab', { name: 'Folders' })).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByText('No folders yet')).toBeInTheDocument()
-    localStorage.removeItem('foldex.sidebar.tab')
+    localStorage.removeItem(TAB_KEY)
   })
 })
 
@@ -298,7 +307,7 @@ describe('TagSidebar · collapsed rail follows the active tab', () => {
   })
 
   it('shows the new-folder action on the rail when the folders tab is active', () => {
-    localStorage.setItem('foldex.sidebar.tab', JSON.stringify('folders'))
+    localStorage.setItem(TAB_KEY, JSON.stringify('folders'))
     const onNewFolder = vi.fn()
     renderWithProviders(
       <TagSidebar

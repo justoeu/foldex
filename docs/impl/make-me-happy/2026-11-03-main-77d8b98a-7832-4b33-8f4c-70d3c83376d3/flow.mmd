@@ -1,0 +1,23 @@
+flowchart TD
+  "usuário" --> "Sidebar Navegar"
+  subgraph "T-001 · Abas"
+    A["Segmented Pastas|Tags<br/>(persistência localStorage)"] --> B["Painel Tags<br/>Frequentes/Outras + ações"]
+    A --> C["Painel Pastas<br/>(placeholder → T-002)"]
+  end
+  subgraph "T-002 · Painel Pastas"
+    D["allFolders (useFolders<br/>scope null, minimal)"] --> E{"has_password?"}
+    E -- "true → oculta<br/>subárvore inteira" --> X["não renderiza"]
+    E -- false --> F["árvore parent_id<br/>dot+nome+link_count"]
+    F --> G["click na pasta"]
+  end
+  subgraph "Navegação existente (AppNavigation)"
+    G --> H["requestOpenFolder(id)<br/>gate ADR-28"]
+    H --> I["openFolder + folderPath"]
+    I --> J["HomeView filtrado<br/>?parent_id= + breadcrumb"]
+  end
+  subgraph "T-003 · Rail"
+    K["aba ativa"] --> L["ações do rail<br/>por aba"]
+  end
+  B --> M["TagDialog/TagManagerDialog<br/>(existente)"]
+  C --> N["Nova pasta / Gerenciar<br/>dialogs controller (existente)"]
+  T004["T-004 · i18n en/pt/es<br/>+ cobertura ≥90% tocados"]

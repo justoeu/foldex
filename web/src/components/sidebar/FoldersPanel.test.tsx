@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { screen } from '@testing-library/react'
+import { screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { FoldersPanel } from './FoldersPanel'
 import { renderWithProviders } from '../../test/renderWithProviders'
@@ -25,8 +25,8 @@ beforeEach(() => {
 })
 
 describe('FoldersPanel', () => {
-  it('renders the tree with children grouped under their parent', () => {
-    renderWithProviders(
+  it('groups children under their parent inside the indent container', () => {
+    const { container } = renderWithProviders(
       <FoldersPanel
         folders={[
           folder(1, 'Dev', null),
@@ -34,14 +34,16 @@ describe('FoldersPanel', () => {
           folder(3, 'Backend', 1),
           folder(4, 'Leitura', null),
         ]}
-        openFolder={null}
+        openFolderId={null}
         onOpenFolder={vi.fn()}
         onNewFolder={vi.fn()}
       />,
     )
+    const groups = container.querySelectorAll('.fx-folder-children')
+    expect(groups).toHaveLength(1)
+    expect(within(groups[0] as HTMLElement).getByText('Frontend')).toBeInTheDocument()
+    expect(within(groups[0] as HTMLElement).getByText('Backend')).toBeInTheDocument()
     expect(screen.getByText('Dev')).toBeInTheDocument()
-    expect(screen.getByText('Frontend')).toBeInTheDocument()
-    expect(screen.getByText('Backend')).toBeInTheDocument()
     expect(screen.getByText('Leitura')).toBeInTheDocument()
   })
 
@@ -54,7 +56,7 @@ describe('FoldersPanel', () => {
           folder(3, 'Backend', 1),
           folder(4, 'Leitura', null),
         ]}
-        openFolder={null}
+        openFolderId={null}
         onOpenFolder={vi.fn()}
         onNewFolder={vi.fn()}
       />,
@@ -73,7 +75,7 @@ describe('FoldersPanel', () => {
           folder(2, 'Frontend', 1, { has_password: true }),
           folder(3, 'Backend', 1),
         ]}
-        openFolder={null}
+        openFolderId={null}
         onOpenFolder={vi.fn()}
         onNewFolder={vi.fn()}
       />,
@@ -83,11 +85,43 @@ describe('FoldersPanel', () => {
     expect(screen.getByText('Backend')).toBeInTheDocument()
   })
 
+  it('hides a grandchild under a protected child, keeping deeper unprotected branches', () => {
+    renderWithProviders(
+      <FoldersPanel
+        folders={[
+          folder(1, 'Dev', null),
+          folder(2, 'Frontend', 1, { has_password: true }),
+          folder(5, 'Hooks', 2),
+          folder(3, 'Backend', 1),
+        ]}
+        openFolderId={null}
+        onOpenFolder={vi.fn()}
+        onNewFolder={vi.fn()}
+      />,
+    )
+    expect(screen.queryByText('Frontend')).not.toBeInTheDocument()
+    expect(screen.queryByText('Hooks')).not.toBeInTheDocument()
+    expect(screen.getByText('Backend')).toBeInTheDocument()
+  })
+
+  it('renders an orphan folder at the root instead of dropping it', () => {
+    renderWithProviders(
+      <FoldersPanel
+        folders={[folder(1, 'Dev', null), folder(9, 'Órfã', 999)]}
+        openFolderId={null}
+        onOpenFolder={vi.fn()}
+        onNewFolder={vi.fn()}
+      />,
+    )
+    expect(screen.getByText('Dev')).toBeInTheDocument()
+    expect(screen.getByText('Órfã')).toBeInTheDocument()
+  })
+
   it('highlights the currently open folder', () => {
     renderWithProviders(
       <FoldersPanel
         folders={[folder(1, 'Dev', null), folder(2, 'Frontend', 1)]}
-        openFolder={2}
+        openFolderId={2}
         onOpenFolder={vi.fn()}
         onNewFolder={vi.fn()}
       />,
@@ -102,7 +136,7 @@ describe('FoldersPanel', () => {
   it('calls onOpenFolder with the folder id on click', async () => {
     const onOpenFolder = vi.fn()
     renderWithProviders(
-      <FoldersPanel folders={[folder(1, 'Dev', null)]} openFolder={null} onOpenFolder={onOpenFolder} onNewFolder={vi.fn()} />,
+      <FoldersPanel folders={[folder(1, 'Dev', null)]} openFolderId={null} onOpenFolder={onOpenFolder} onNewFolder={vi.fn()} />,
     )
     const user = userEvent.setup()
     await user.click(screen.getByText('Dev'))
@@ -112,7 +146,7 @@ describe('FoldersPanel', () => {
   it('calls onNewFolder from the panel action', async () => {
     const onNewFolder = vi.fn()
     renderWithProviders(
-      <FoldersPanel folders={[folder(1, 'Dev', null)]} openFolder={null} onOpenFolder={vi.fn()} onNewFolder={onNewFolder} />,
+      <FoldersPanel folders={[folder(1, 'Dev', null)]} openFolderId={null} onOpenFolder={vi.fn()} onNewFolder={onNewFolder} />,
     )
     const user = userEvent.setup()
     await user.click(screen.getByRole('button', { name: /New folder/i }))
@@ -123,7 +157,7 @@ describe('FoldersPanel', () => {
     renderWithProviders(
       <FoldersPanel
         folders={[folder(1, 'Privado', null, { has_password: true })]}
-        openFolder={null}
+        openFolderId={null}
         onOpenFolder={vi.fn()}
         onNewFolder={vi.fn()}
       />,

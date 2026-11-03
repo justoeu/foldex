@@ -1,0 +1,74 @@
+{
+  "base": "388b511",
+  "head": "HEAD",
+  "commits": [
+    "956b3e3 Merge commit 'a86d865bc687b2e4224dcb551129702e5f36c365' into feature/sidebar-pastas-tags",
+    "a86d865 feat(web): rail colapsado segue a aba ativa da sidebar (T-003)",
+    "3b653b3 feat(web): painel de pastas na sidebar — árvore sem pastas com senha, clique entra (T-002)",
+    "7c00771 feat(web): sidebar Navegar — abas segmentadas Pastas|Tags com ações por aba (T-001)",
+    "9db8f8b docs(sdd): sidebar Navegar — pastas+tags por abas (sketch 001 variante B aprovada)"
+  ],
+  "files": [
+    {
+      "status": "A",
+      "file": ".planning/sketches/001-sidebar-pastas-tags/README.md"
+    },
+    {
+      "status": "A",
+      "file": ".planning/sketches/001-sidebar-pastas-tags/index.html"
+    },
+    {
+      "status": "A",
+      "file": ".planning/sketches/MANIFEST.md"
+    },
+    {
+      "status": "A",
+      "file": ".planning/sketches/themes/default.css"
+    },
+    {
+      "status": "A",
+      "file": "docs/SDD-SIDEBAR-FOLDERS.md"
+    },
+    {
+      "status": "M",
+      "file": "web/src/AppShell.tsx"
+    },
+    {
+      "status": "M",
+      "file": "web/src/components/TagSidebar.test.tsx"
+    },
+    {
+      "status": "M",
+      "file": "web/src/components/TagSidebar.tsx"
+    },
+    {
+      "status": "A",
+      "file": "web/src/components/sidebar/FoldersPanel.test.tsx"
+    },
+    {
+      "status": "A",
+      "file": "web/src/components/sidebar/FoldersPanel.tsx"
+    },
+    {
+      "status": "M",
+      "file": "web/src/i18n/locales/en.json"
+    },
+    {
+      "status": "M",
+      "file": "web/src/i18n/locales/es.json"
+    },
+    {
+      "status": "M",
+      "file": "web/src/i18n/locales/pt.json"
+    },
+    {
+      "status": "M",
+      "file": "web/src/styles/foldex.css"
+    }
+  ],
+  "manifests": [],
+  "migrations": [],
+  "suspicious_files": [],
+  "routes": [],
+  "at": "2026-11-03T03:53:42.172Z"
+}

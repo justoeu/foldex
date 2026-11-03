@@ -1,0 +1,11 @@
+{
+  "status": "OPEN",
+  "reason": "repo sem runner e2e (sem playwright/cypress no package.json, sem dir e2e); a UI exige stack completa (backend+postgres) para passar do AuthGate",
+  "coverage_instead": [
+    "jornada visual aprovada pelo owner via sketch interativo (.planning/sketches/001-sidebar-pastas-tags, variante B + emenda ações por aba)",
+    "12 testes de componente novos cobrem os comportamentos: troca/persistência de aba, ocultação de pasta protegida e subárvore, clique→onOpenFolder, ações por aba, rail por aba, estado vazio",
+    "suíte completa 2039 testes verde na integração"
+  ],
+  "expected_network_errors": [],
+  "resolution": "passa a valer como aceite humano quando o owner abrir a branch feature/sidebar-pastas-tags no dev (bun run dev) e navegar pelas abas"
+}

@@ -1,0 +1,30 @@
+{
+  "run_id": "77d8b98a-7832-4b33-8f4c-70d3c83376d3",
+  "prefix": "mmh-77d8b98a",
+  "count": 1,
+  "into": "feature/sidebar-pastas-tags",
+  "base": "feature/sidebar-pastas-tags",
+  "head": "9db8f8bffbf45532256ba728db55914569d5bebe",
+  "gitignore_appended": false,
+  "gitignore_path": "/Users/justoeu/Developer/Workspace/foldex/.gitignore",
+  "gitignore_content_hash": "0265af69ae3e5f1eb9f740e1e95557d75780dcab9a4c9bb90e509c30e0ca713e",
+  "baseline_green": true,
+  "slices": [
+    {
+      "index": 1,
+      "branch": "mmh-77d8b98a/slice-1",
+      "dir": "/Users/justoeu/Developer/Workspace/foldex/.worktrees/mmh-77d8b98a-1",
+      "base": "feature/sidebar-pastas-tags",
+      "head": "9db8f8bffbf45532256ba728db55914569d5bebe",
+      "created": true,
+      "merged": true,
+      "removed": true,
+      "tested_head": "a86d865bc687b2e4224dcb551129702e5f36c365",
+      "integrated_head": "a86d865bc687b2e4224dcb551129702e5f36c365",
+      "merged_into": "feature/sidebar-pastas-tags",
+      "integration_validated": true,
+      "partial_merge": false,
+      "worktree_removed": true
+    }
+  ]
+}

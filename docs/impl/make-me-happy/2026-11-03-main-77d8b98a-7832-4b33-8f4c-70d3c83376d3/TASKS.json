@@ -1,0 +1,204 @@
+{
+  "kind": "feature",
+  "spec": "docs/SDD-SIDEBAR-FOLDERS.md",
+  "tasks": [
+    {
+      "id": "T-001",
+      "title": "Abas segmentadas Pastas|Tags com ações por aba",
+      "worktree": 1,
+      "version": 1,
+      "slice": "Remodelar TagSidebar em Navegar: segmented control, painéis, ações migradas para dentro da aba Tags.",
+      "description": "Renomeie o cabeçalho da sidebar de Tags para Navegar. Adicione o controle segmentado 📁 Pastas | # Tags abaixo do cabeçalho. A aba ativa persiste em localStorage (chave foldex.sidebar.tab, valores 'folders'|'tags', default 'tags'). 'Todos os links' e 'Atualizações recentes' permanecem fora das abas, sempre visíveis. Mova as ações 'Nova tag' e 'Gerenciar' do rodapé global para dentro do painel Tags. O painel Pastas nesta task é um estado vazio provisório (mensagem i18n).",
+      "acceptance": [
+        "A sidebar renderiza o segmented control com duas abas e o cabeçalho Navegar.",
+        "Trocar de aba troca o painel visível; recarregar restaura a última aba ativa.",
+        "As ações Nova tag e Gerenciar aparecem apenas no painel Tags, não no rodapé global.",
+        "Os testes existentes de TagSidebar continuam verdes após o re-arranjo."
+      ],
+      "status": "DONE",
+      "validation": "red-green",
+      "depends_on": [],
+      "refs": [
+        "SDD-SIDEBAR-FOLDERS §Requisitos 1,3"
+      ],
+      "tests_added": 3,
+      "red_green": true,
+      "immutability": false,
+      "red": {
+        "command": "cd web && bun run test src/components/TagSidebar.test.tsx",
+        "output_excerpt": "Tests  3 failed | 16 passed (19) — getByRole('tab', { name: 'Folders' }) not found"
+      },
+      "green": {
+        "command": "cd web && bun run test src/components/TagSidebar.test.tsx && bun run typecheck && cd .. && node scripts/test-css-orphan-classes.mjs",
+        "output_excerpt": "Test Files 1 passed (1) · Tests 19 passed (19); tsc --noEmit ok; ok: every fx-* class in the markup has a rule (1121 declared)"
+      },
+      "commits": [
+        {
+          "sha": "7c00771",
+          "message": "feat(web): sidebar Navegar — abas segmentadas Pastas|Tags com ações por aba (T-001)"
+        }
+      ],
+      "files": [
+        "web/src/components/TagSidebar.tsx",
+        "web/src/components/TagSidebar.test.tsx",
+        "web/src/styles/foldex.css",
+        "web/src/i18n/locales/en.json",
+        "web/src/i18n/locales/pt.json",
+        "web/src/i18n/locales/es.json"
+      ],
+      "reversal": {
+        "done": false,
+        "note": "reversão não viável: teste novo depende do componente novo; a suíte base segue verde"
+      }
+    },
+    {
+      "id": "T-002",
+      "title": "Painel de pastas: árvore sem pastas com senha, clique entra na pasta",
+      "worktree": 1,
+      "version": 1,
+      "slice": "Novo painel de pastas na sidebar conectado à navegação existente.",
+      "description": "Crie o painel Pastas dentro da aba correspondente. Ele recebe a lista plana de todas as pastas (useFolders scope null, fields minimal — já carregada em App.tsx), constrói a árvore por parent_id, remove pastas com has_password=true e toda a sua subárvore, e renderiza cada pasta com dot colorido, nome, contagem (link_count) e subpastas indentadas com guia vertical (padrão fx-side-row + classe nova fx-folder-children). A pasta atualmente aberta (prop openFolder) fica destacada (fx-side-row-active). Clicar numa pasta chama onOpenFolder(id) — AppShell conecta ao requestOpenFolder existente do AppNavigation (gate ADR-28; pastas protegidas nunca chegam aqui, mas o pipe é o mesmo). O rodapé do painel tem a ação Nova pasta (callback para o dialogs.openNewFolder existente — sem diálogo novo; 'Gerenciar pastas' não existe como superfície no app hoje, e criação/edição segue no FolderDialog/FolderCard). Estado vazio com mensagem i18n quando não há pastas sem senha.",
+      "acceptance": [
+        "Pastas com has_password=true não são renderizadas, nem seus descendentes.",
+        "Subpastas aparecem indentadas sob a pasta-mãe com guia vertical.",
+        "Clicar numa pasta invoca onOpenFolder com o id correto; a pasta aberta fica ativa.",
+        "Nova pasta dispara o callback recebido por props (dialogs.openNewFolder no AppShell).",
+        "O painel não faz novas requisições HTTP próprias (usa a lista já carregada)."
+      ],
+      "status": "DONE",
+      "validation": "red-green",
+      "depends_on": [
+        "T-001"
+      ],
+      "refs": [
+        "SDD-SIDEBAR-FOLDERS §Requisitos 2"
+      ],
+      "tests_added": 7,
+      "red_green": true,
+      "immutability": false,
+      "red": {
+        "command": "cd web && bun run test src/components/sidebar/FoldersPanel.test.tsx",
+        "output_excerpt": "Test Files 1 failed (1) · Tests no tests — FoldersPanel não existia (import falhou)"
+      },
+      "green": {
+        "command": "cd web && bun run test src/components/sidebar/FoldersPanel.test.tsx src/components/TagSidebar.test.tsx && bun run typecheck && cd .. && node scripts/test-css-orphan-classes.mjs",
+        "output_excerpt": "Test Files 2 passed (2) · Tests 26 passed (26); tsc ok; ok: every fx-* class in the markup has a rule (1122 declared)"
+      },
+      "commits": [
+        {
+          "sha": "3b653b3",
+          "message": "feat(web): painel de pastas na sidebar — árvore sem pastas com senha, clique entra (T-002)"
+        }
+      ],
+      "files": [
+        "web/src/components/sidebar/FoldersPanel.tsx",
+        "web/src/components/sidebar/FoldersPanel.test.tsx",
+        "web/src/components/TagSidebar.tsx",
+        "web/src/AppShell.tsx",
+        "web/src/styles/foldex.css",
+        "web/src/i18n/locales/en.json",
+        "web/src/i18n/locales/pt.json",
+        "web/src/i18n/locales/es.json"
+      ],
+      "reversal": {
+        "done": false,
+        "note": "componente novo puro — reversão = remover arquivo e integração; suíte base verde"
+      }
+    },
+    {
+      "id": "T-003",
+      "title": "Rail colapsado segue a aba ativa",
+      "worktree": 1,
+      "version": 1,
+      "slice": "Atualizar o rail fino da sidebar para o modelo de abas.",
+      "description": "No estado colapsado, o ícone do rail reflete Navegar e as ações exibidas são as da aba ativa: aba Tags mantém Nova tag e Gerenciar tags; aba Pastas mostra Nova pasta. O clique nas ações do rail segue os mesmos callbacks/estado da aba expandida.",
+      "acceptance": [
+        "Rail colapsado na aba Tags mostra as ações de tag (comportamento atual preservado).",
+        "Rail colapsado na aba Pastas mostra a ação de nova pasta.",
+        "A aba ativa persiste entre colapsar e expandir."
+      ],
+      "status": "DONE",
+      "validation": "red-green",
+      "depends_on": [
+        "T-002"
+      ],
+      "refs": [
+        "SDD-SIDEBAR-FOLDERS §Requisitos 4"
+      ],
+      "tests_added": 2,
+      "red_green": true,
+      "immutability": false,
+      "red": {
+        "command": "cd web && bun run test src/components/TagSidebar.test.tsx",
+        "output_excerpt": "Tests 1 failed | 20 passed (21) — shows the new-folder action on the rail when the folders tab is active"
+      },
+      "green": {
+        "command": "cd web && bun run test src/components/TagSidebar.test.tsx src/components/sidebar/FoldersPanel.test.tsx && bun run typecheck",
+        "output_excerpt": "Test Files 2 passed (2) · Tests 28 passed (28); TYPECHECK_OK"
+      },
+      "commits": [
+        {
+          "sha": "a86d865",
+          "message": "feat(web): rail colapsado segue a aba ativa da sidebar (T-003)"
+        }
+      ],
+      "files": [
+        "web/src/components/TagSidebar.tsx",
+        "web/src/components/TagSidebar.test.tsx"
+      ],
+      "reversal": {
+        "done": false,
+        "note": "rail por aba é incremental; branch tags preserva comportamento anterior"
+      }
+    },
+    {
+      "id": "T-004",
+      "title": "i18n en/pt/es e verificação de cobertura da slice",
+      "worktree": 1,
+      "version": 1,
+      "slice": "Fechar as chaves de tradução e apurar cobertura sobre o código tocado.",
+      "description": "Confira e complete as chaves novas (sidebar.navigate, sidebar.folders, sidebar.tags_tab, sidebar.new_folder, sidebar.manage_folders, sidebar.empty_folders, sidebar.tab tooltip) nos três locales com o mesmo tom das existentes. Rode typecheck e vitest coverage; declare o escopo de cobertura (arquivos tocados) e garanta piso ≥90% statements nos novos/editados, respeitando o gate global do repo (85/80).",
+      "acceptance": [
+        "Os três locales têm todas as chaves novas, sem fallback pendurado.",
+        "bun run typecheck verde; cobertura dos arquivos tocados declarada e ≥90% statements.",
+        "O teste de paridade de permissões/CSS (guard scripts) segue verde."
+      ],
+      "status": "DONE",
+      "validation": "check",
+      "validation_reason": "verificação sem comportamento novo: paridade de locales coberta pelo locales.test.ts existente, cobertura medida sobre os arquivos tocados",
+      "depends_on": [
+        "T-003"
+      ],
+      "refs": [
+        "SDD-SIDEBAR-FOLDERS §Requisitos 8, §Aceite"
+      ],
+      "tests_added": 0,
+      "red_green": false,
+      "immutability": false,
+      "checks": [
+        {
+          "ok": true,
+          "command": "cd web && bun run coverage",
+          "output_excerpt": "Test Files 160 passed (160) · Tests 2039 passed (2039) · All files 95.47% stmts / 91.25% branches (gates 85/80); locales.test.ts incluído e verde"
+        },
+        {
+          "ok": true,
+          "command": "coverage/coverage-summary.json (arquivos tocados)",
+          "output_excerpt": "sidebar/FoldersPanel.tsx 100% stmts / 100% branches; TagSidebar.tsx 98.43% stmts / 97.26% branches — piso 90 atendido"
+        },
+        {
+          "ok": true,
+          "command": "cd web && bun run typecheck",
+          "output_excerpt": "tsc --noEmit sem erros"
+        },
+        {
+          "ok": true,
+          "command": "node scripts/test-css-orphan-classes.mjs",
+          "output_excerpt": "ok: every fx-* class in the markup has a rule (1122 declared)"
+        }
+      ],
+      "commits": [],
+      "files": []
+    }
+  ]
+}

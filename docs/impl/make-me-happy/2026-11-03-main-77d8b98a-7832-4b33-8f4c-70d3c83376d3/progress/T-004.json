@@ -1,0 +1,17 @@
+{
+  "id": "T-004",
+  "expected_version": 0,
+  "patch": {
+    "status": "DONE",
+    "tests_added": 0,
+    "validation_reason": "verificação sem comportamento novo: paridade de locales coberta pelo locales.test.ts existente, cobertura medida sobre os arquivos tocados",
+    "checks": [
+      { "ok": true, "command": "cd web && bun run coverage", "output_excerpt": "Test Files 160 passed (160) · Tests 2039 passed (2039) · All files 95.47% stmts / 91.25% branches (gates 85/80); locales.test.ts incluído e verde" },
+      { "ok": true, "command": "coverage/coverage-summary.json (arquivos tocados)", "output_excerpt": "sidebar/FoldersPanel.tsx 100% stmts / 100% branches; TagSidebar.tsx 98.43% stmts / 97.26% branches — piso 90 atendido" },
+      { "ok": true, "command": "cd web && bun run typecheck", "output_excerpt": "tsc --noEmit sem erros" },
+      { "ok": true, "command": "node scripts/test-css-orphan-classes.mjs", "output_excerpt": "ok: every fx-* class in the markup has a rule (1122 declared)" }
+    ],
+    "commits": [],
+    "files": []
+  }
+}

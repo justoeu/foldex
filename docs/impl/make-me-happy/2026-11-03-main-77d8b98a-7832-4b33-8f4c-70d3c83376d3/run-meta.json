@@ -1,0 +1,22 @@
+{
+  "schema_version": 2,
+  "run_id": "77d8b98a-7832-4b33-8f4c-70d3c83376d3",
+  "repo_root": "/Users/justoeu/Developer/Workspace/foldex",
+  "app": "foldex",
+  "branch": "main",
+  "base": "388b511fab79e4f777f2875dd36c8ebe6703031f",
+  "head": "388b511fab79e4f777f2875dd36c8ebe6703031f",
+  "kind": "feature",
+  "loop": "full",
+  "worktree_n": 1,
+  "worktree_prefix": "mmh-77d8b98a",
+  "spec": "docs/SDD-SIDEBAR-FOLDERS.md",
+  "spec_status": "confirmed",
+  "coverage_floor": 90,
+  "ui_drive": "fast",
+  "test_cmd": "cd web && bun run typecheck && bun run coverage",
+  "status": "in_progress",
+  "started_at": "2026-11-03T03:19:32.153Z",
+  "updated_at": "2026-11-03T03:49:14.115Z",
+  "steps": {}
+}

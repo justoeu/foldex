@@ -17,10 +17,15 @@ senha **não são renderizadas** nesta superfície.
    - "Todos os links" e "Atualizações recentes" ficam **fora** das abas,
      sempre visíveis.
 2. **Painel Pastas**: árvore de `useFolders` com subpastas indentadas
-   (guia vertical, como no sketch), dot colorido por pasta, contagem.
-   - Filtra `has_password === true` (flag já existe no DTO).
-   - Ações **dentro da aba**: "Nova pasta" e "Gerenciar" → `FolderDialog`
-     (existente).
+   (guia vertical, como no sketch), dot colorido por pasta.
+   - **Sem badge de contagem** (decisão do owner, 03/11, no review round): a
+     projeção slim do backend zera counts de propósito (`repository.go:222`) —
+     trazer counts exigiria mudança de backend fora do escopo. Contagens
+     continuam nos cards do HomeView.
+   - Filtra `has_password === true` **e toda a subárvore** (flag já existe no DTO).
+   - Ação **dentro da aba**: "Nova pasta" → callback para o `FolderDialog`
+     existente (não há superfície "gerenciar pastas" no app; edição segue nos
+     FolderCards do grid).
    - Clicar numa pasta: seleciona a pasta como filtro de contexto + breadcrumb
      na área principal; o grid lista o conteúdo da pasta (inclui subpastas —
      containment ADR-19: listing de pasta mostra seus links/notas diretos E
