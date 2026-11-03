@@ -135,7 +135,9 @@
     "collapse": "Recolher",
     "navigate": "Navegar",
     "folders": "Pastas",
-    "empty_folders": "Sem pastas ainda"
+    "empty_folders": "Sem pastas ainda",
+    "new_folder": "Nova pasta",
+    "new_folder_tooltip": "Criar nova pasta"
   },
   "status": {
     "unreachable": "Não foi possível conectar: {{names}}",

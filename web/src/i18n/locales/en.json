@@ -135,7 +135,9 @@
     "collapse": "Collapse",
     "navigate": "Navigate",
     "folders": "Folders",
-    "empty_folders": "No folders yet"
+    "empty_folders": "No folders yet",
+    "new_folder": "New folder",
+    "new_folder_tooltip": "Create a new folder"
   },
   "status": {
     "unreachable": "Could not connect: {{names}}",

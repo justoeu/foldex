@@ -10,6 +10,8 @@ import { VERSION, BUILD_DATE, formatBuildDate } from '../version'
 import { useEscape } from '../hooks/useEscape'
 import { isBoolean, usePersistedState } from '../hooks/usePersistedState'
 import { TagRow } from './sidebar/TagRow'
+import { FoldersPanel } from './sidebar/FoldersPanel'
+import type { Folder } from '../api/types'
 
 type Props = Readonly<{
   selected: number[]
@@ -23,6 +25,12 @@ type Props = Readonly<{
   // without otherwise affecting the desktop collapsed state.
   mobileOpen?: boolean
   onMobileClose?: () => void
+  // Pastas (sketch 001 · variante B). Opcionais: sem integração de navegação
+  // a aba Pastas cai no estado vazio e o restante funciona como antes.
+  folders?: Folder[]
+  openFolder?: number | null
+  onOpenFolder?: (id: number) => void
+  onNewFolder?: () => void
 }>
 
 // Bucket sizes: top 5 by usage live in the always-shown "Frequentes" group.
@@ -56,6 +64,10 @@ export function TagSidebar({
   onToggleCollapsed,
   mobileOpen = false,
   onMobileClose,
+  folders = [],
+  openFolder = null,
+  onOpenFolder,
+  onNewFolder,
 }: Props) {
   const { t } = useTranslation()
   const { data: tags = [], isLoading } = useTags()
@@ -204,7 +216,12 @@ export function TagSidebar({
         {isLoading && <div style={{ padding: 12, color: 'var(--fx-ink-4)' }}>{t('sidebar.loading')}</div>}
 
         {tab === 'folders' && (
-          <div className="fx-side-empty">{t('sidebar.empty_folders')}</div>
+          <FoldersPanel
+            folders={folders}
+            openFolder={openFolder}
+            onOpenFolder={onOpenFolder ?? (() => {})}
+            onNewFolder={onNewFolder ?? (() => {})}
+          />
         )}
 
         {tab === 'tags' && (

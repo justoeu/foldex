@@ -90,7 +90,7 @@ function MobileBackdrop({ workspace }: Readonly<{ workspace: AppWorkspaceControl
   )
 }
 
-function AppSidebar({ workspace, totalLinks }: Props) {
+function AppSidebar({ workspace, totalLinks, content, navigation, dialogs }: Props) {
   return (
     <TagSidebar
       collapsed={workspace.sidebarCollapsed}
@@ -101,6 +101,12 @@ function AppSidebar({ workspace, totalLinks }: Props) {
       onToggle={workspace.toggleTag}
       onClear={workspace.clearTags}
       totalLinks={totalLinks}
+      folders={content.allFolders}
+      openFolder={navigation.openFolder}
+      onOpenFolder={(id) => {
+        void navigation.requestOpenFolder(id)
+      }}
+      onNewFolder={dialogs.openNewFolder}
     />
   )
 }

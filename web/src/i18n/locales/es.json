@@ -135,7 +135,9 @@
     "collapse": "Contraer",
     "navigate": "Navegar",
     "folders": "Carpetas",
-    "empty_folders": "Aún no hay carpetas"
+    "empty_folders": "Aún no hay carpetas",
+    "new_folder": "Nueva carpeta",
+    "new_folder_tooltip": "Crear una carpeta nueva"
   },
   "status": {
     "unreachable": "No fue posible conectar: {{names}}",
