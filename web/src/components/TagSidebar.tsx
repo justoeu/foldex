@@ -111,28 +111,42 @@ export function TagSidebar({
           <Icon d={I.chevronRight} size={14} />
         </button>
         <div className="fx-sidebar-rail-icon">
-          <Icon d={I.tag} size={15} />
+          <Icon d={tab === 'folders' ? I.folder : I.tag} size={15} />
         </div>
         <div className="fx-sidebar-rail-actions">
-          <button
-            className="fx-iconbtn"
-            aria-label={t('sidebar.new_tag_tooltip')}
-            data-tooltip={t('sidebar.new_tag_tooltip')}
-            data-tooltip-side="right"
-            onClick={() => setCreating(true)}
-          >
-            <Icon d={I.plus} size={14} />
-          </button>
-          <button
-            className="fx-iconbtn"
-            aria-label={t('sidebar.manage_tags_tooltip')}
-            data-tooltip={t('sidebar.manage_tags_tooltip')}
-            data-tooltip-side="right"
-            disabled={tags.length === 0}
-            onClick={() => setManaging(true)}
-          >
-            <Icon d={I.pen} size={13} />
-          </button>
+          {tab === 'folders' ? (
+            <button
+              className="fx-iconbtn"
+              aria-label={t('sidebar.new_folder_tooltip')}
+              data-tooltip={t('sidebar.new_folder_tooltip')}
+              data-tooltip-side="right"
+              onClick={() => onNewFolder?.()}
+            >
+              <Icon d={I.plus} size={14} />
+            </button>
+          ) : (
+            <>
+              <button
+                className="fx-iconbtn"
+                aria-label={t('sidebar.new_tag_tooltip')}
+                data-tooltip={t('sidebar.new_tag_tooltip')}
+                data-tooltip-side="right"
+                onClick={() => setCreating(true)}
+              >
+                <Icon d={I.plus} size={14} />
+              </button>
+              <button
+                className="fx-iconbtn"
+                aria-label={t('sidebar.manage_tags_tooltip')}
+                data-tooltip={t('sidebar.manage_tags_tooltip')}
+                data-tooltip-side="right"
+                disabled={tags.length === 0}
+                onClick={() => setManaging(true)}
+              >
+                <Icon d={I.pen} size={13} />
+              </button>
+            </>
+          )}
         </div>
         <TagDialog open={creating} onClose={() => setCreating(false)} />
         <TagManagerDialog open={managing} onClose={() => setManaging(false)} />

@@ -287,4 +287,33 @@ describe('TagSidebar · segmented tabs', () => {
   })
 })
 
+describe('TagSidebar · collapsed rail follows the active tab', () => {
+  it('keeps the tag actions on the rail when the tags tab is active', () => {
+    renderWithProviders(
+      <TagSidebar selected={[]} onToggle={vi.fn()} onClear={vi.fn()} totalLinks={0} collapsed onToggleCollapsed={vi.fn()} />,
+    )
+    expect(screen.getByRole('button', { name: 'Create new tag' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Edit or delete existing tags' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Create a new folder' })).not.toBeInTheDocument()
+  })
+
+  it('shows the new-folder action on the rail when the folders tab is active', () => {
+    localStorage.setItem('foldex.sidebar.tab', JSON.stringify('folders'))
+    const onNewFolder = vi.fn()
+    renderWithProviders(
+      <TagSidebar
+        selected={[]}
+        onToggle={vi.fn()}
+        onClear={vi.fn()}
+        totalLinks={0}
+        collapsed
+        onToggleCollapsed={vi.fn()}
+        onNewFolder={onNewFolder}
+      />,
+    )
+    expect(screen.getByRole('button', { name: 'Create a new folder' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Create new tag' })).not.toBeInTheDocument()
+  })
+})
+
 
