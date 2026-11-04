@@ -26,7 +26,7 @@ func TestRustfsImageIsDigestPinned(t *testing.T) {
 	require.NotContains(t, image, "main-ubuntu22.04",
 		"rustfs must stay on a digest-pinned release, not the floating main tag")
 	require.Contains(t, image, "@sha256:", "rustfs image must be digest-pinned")
-	require.True(t, strings.HasPrefix(image, "rustfs/rustfs:1.0.3@sha256:"),
+	require.True(t, strings.HasPrefix(image, "rustfs/rustfs:1.0.4@sha256:"),
 		"unexpected rustfs pin %q — bump compose + STACK.md + storage tests together", image)
 
 	stack, err := os.ReadFile(filepath.Join(root, "docs/STACK.md"))
