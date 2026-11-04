@@ -1,0 +1,45 @@
+{
+  "green": true,
+  "command": "cd web && bun run test src/components/TagSidebar.test.tsx src/components/sidebar/FoldersPanel.test.tsx && node scripts/test-css-orphan-classes.mjs",
+  "tests": [
+    {
+      "name": "segmented tabs render/switch/persist/garbage-fallback",
+      "task": "T-001",
+      "file": "web/src/components/TagSidebar.test.tsx",
+      "green": true
+    },
+    {
+      "name": "rail follows active tab (tags/folders)",
+      "task": "T-003",
+      "file": "web/src/components/TagSidebar.test.tsx",
+      "green": true
+    },
+    {
+      "name": "folders tree: grouping, protected subtree (child+grandchild), orphan, active, click, action, empty",
+      "task": "T-002",
+      "file": "web/src/components/sidebar/FoldersPanel.test.tsx",
+      "green": true
+    },
+    {
+      "name": "locale parity en/pt/es (locales.test.ts)",
+      "task": "T-004",
+      "file": "web/src/i18n/locales.test.ts",
+      "green": true
+    }
+  ],
+  "tasks_covered": [
+    "T-001",
+    "T-002",
+    "T-003",
+    "T-004"
+  ],
+  "measured_at": "2026-11-03T11:21:28.418192+00:00",
+  "evidence": {
+    "run_id": "77d8b98a-7832-4b33-8f4c-70d3c83376d3",
+    "head": "f7ee4cec4a1f7bc9678ef6cedb90bd09205eee00",
+    "source_hash": "9f75ae4344e4f1760b2d4b1a4459998044671659490afb8f7e83b1e8ac1e386b",
+    "input_hash": "763c0b6e470a57956af26728ac26bf35f9f4dfd5788a5eb3685380bc7423bd48",
+    "at": "2026-11-03T22:52:49.858Z",
+    "result_hash": "df9c67c565a40747eafc9c4f1130289061c676c6bdfc2bcc5f864195692e0613"
+  }
+}

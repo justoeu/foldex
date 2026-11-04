@@ -1,0 +1,32 @@
+{
+  "pct": 95.48,
+  "floor": 90,
+  "tool": "vitest v8",
+  "scope": "statements no produto integrado (repo gate 85/80); tocados: FoldersPanel 100, TagSidebar 100, AppShell 97.59",
+  "report": "web/coverage/index.html",
+  "covered": 7571,
+  "total": 7929,
+  "measured_at": "2026-11-03T11:21:28.418192+00:00",
+  "modules": [
+    {
+      "name": "AppShell.tsx",
+      "pct": 97.59
+    },
+    {
+      "name": "components/TagSidebar.tsx",
+      "pct": 100
+    },
+    {
+      "name": "components/sidebar/FoldersPanel.tsx",
+      "pct": 100
+    }
+  ],
+  "evidence": {
+    "run_id": "77d8b98a-7832-4b33-8f4c-70d3c83376d3",
+    "head": "f7ee4cec4a1f7bc9678ef6cedb90bd09205eee00",
+    "source_hash": "9f75ae4344e4f1760b2d4b1a4459998044671659490afb8f7e83b1e8ac1e386b",
+    "input_hash": "763c0b6e470a57956af26728ac26bf35f9f4dfd5788a5eb3685380bc7423bd48",
+    "at": "2026-11-03T22:52:49.759Z",
+    "result_hash": "279d288c853da7967c9d2fcf6c4c6376c98e26700dd1a31130ae7db6973c1044"
+  }
+}

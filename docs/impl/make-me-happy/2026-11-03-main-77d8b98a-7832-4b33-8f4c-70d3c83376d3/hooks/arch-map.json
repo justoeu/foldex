@@ -1,0 +1,232 @@
+{
+  "source": "atlas",
+  "generated_from": "docs/atlas/app-model.json",
+  "style": "Monólito modular Go (handlers→service→repository, pgx direto sem ORM) + SPA estática em nginx + workers in-process (ADR-1) + dois processos satélite (mailer AMQP-only, backup-agent S3-only). Async por outbox/tabela + RabbitMQ apenas para e-mail.",
+  "layers": [],
+  "libs": [
+    {
+      "name": "chi v5.5.0",
+      "ver": "v5.5.0",
+      "use": "roteamento + middleware"
+    },
+    {
+      "name": "pgx/v5",
+      "ver": "v5.11.0",
+      "use": "pool + tx + scans"
+    },
+    {
+      "name": "minio-go v7",
+      "ver": "v7",
+      "use": "cliente S3 (RustFS)"
+    },
+    {
+      "name": "amqp091-go",
+      "ver": "-",
+      "use": "publicador/consumidor RabbitMQ"
+    },
+    {
+      "name": "go-rod",
+      "ver": "v0.116.2",
+      "use": "Chromium p/ screenshot"
+    },
+    {
+      "name": "webpush-go",
+      "ver": "v1.4.0",
+      "use": "Web Push VAPID"
+    },
+    {
+      "name": "age",
+      "ver": "v1.3.2",
+      "use": "encriptação de backups"
+    },
+    {
+      "name": "madmin-go v3",
+      "ver": "v3.0.110",
+      "use": "IAM bootstrap RustFS"
+    },
+    {
+      "name": "otelpgx + otlptracegrpc",
+      "ver": "v0.13.0",
+      "use": "tracing/metrics opt-in"
+    },
+    {
+      "name": "bluemonday",
+      "ver": "v1.0.27",
+      "use": "sanitização HTML de notas"
+    },
+    {
+      "name": "React + MUI",
+      "ver": "-",
+      "use": "SPA workspace única, sem router"
+    },
+    {
+      "name": "TanStack Query",
+      "ver": "5.104.5",
+      "use": "cache server-state"
+    },
+    {
+      "name": "i18next",
+      "ver": "26.5.3",
+      "use": "en/pt/es"
+    },
+    {
+      "name": "vite-plugin-pwa",
+      "ver": "-",
+      "use": "SW injectManifest"
+    }
+  ],
+  "adrs": [
+    {
+      "id": "ADR-1",
+      "title": "Worker in-process em vez de Redis/queue",
+      "status": "aceito"
+    },
+    {
+      "id": "ADR-2",
+      "title": "golang-migrate sobre goose/tern",
+      "status": "aceito"
+    },
+    {
+      "id": "ADR-5",
+      "title": "/go/:id fora de /api",
+      "status": "aceito"
+    },
+    {
+      "id": "ADR-7",
+      "title": "/go/{id-or-slug} aceita ambos",
+      "status": "aceito"
+    },
+    {
+      "id": "ADR-8",
+      "title": "SSRF guard no preview fetcher",
+      "status": "aceito"
+    },
+    {
+      "id": "ADR-9",
+      "title": "click_log como única fonte de verdade",
+      "status": "aceito"
+    },
+    {
+      "id": "ADR-15",
+      "title": "Coverage gate de 85%",
+      "status": "aceito"
+    },
+    {
+      "id": "ADR-16",
+      "title": "Screenshot só como fallback",
+      "status": "aceito"
+    },
+    {
+      "id": "ADR-19",
+      "title": "Folders 1:N (containment) + tags M:N (labels)",
+      "status": "aceito"
+    },
+    {
+      "id": "ADR-20",
+      "title": "Backup ZIP único idempotente, 3 modos de conflito",
+      "status": "aceito"
+    },
+    {
+      "id": "ADR-23",
+      "title": "Change detection: fingerprint híbrido feed+conteúdo",
+      "status": "aceito"
+    },
+    {
+      "id": "ADR-24",
+      "title": "Web Push: VAPID auto-gen on boot",
+      "status": "aceito"
+    },
+    {
+      "id": "ADR-25",
+      "title": "oEmbed via o mesmo preview.Fetcher",
+      "status": "aceito"
+    },
+    {
+      "id": "ADR-26",
+      "title": "Camadas de segurança no CI: SAST+DAST+Dependabot",
+      "status": "aceito"
+    },
+    {
+      "id": "ADR-27",
+      "title": "Notes como terceira entidade polimórfica",
+      "status": "aceito"
+    },
+    {
+      "id": "ADR-28",
+      "title": "Senha por pasta: redação sempre-ativa + token curto-vivo",
+      "status": "aceito"
+    },
+    {
+      "id": "ADR-29",
+      "title": "Senha master + palavra-dica por pasta",
+      "status": "aceito"
+    },
+    {
+      "id": "ADR-30/31/32",
+      "title": "Identidade própria: 12 tabelas",
+      "status": "aceito"
+    },
+    {
+      "id": "ADR-43",
+      "title": "Backup & restore operado por agente dedicado",
+      "status": "aceito"
+    },
+    {
+      "id": "ADR-48",
+      "title": "instance.backup_download é owner-only e travada",
+      "status": "aceito"
+    }
+  ],
+  "containers": [
+    {
+      "id": "backend",
+      "name": "foldex-backend (server)",
+      "group": "dominio",
+      "tech": "Go 1.26 · chi · pgx"
+    },
+    {
+      "id": "web",
+      "name": "foldex-web (nginx)",
+      "group": "borda",
+      "tech": "nginx · React/MUI PWA"
+    },
+    {
+      "id": "mailer",
+      "name": "foldex-mailer",
+      "group": "dominio",
+      "tech": "Go · amqp091 · net/smtp"
+    },
+    {
+      "id": "backupagent",
+      "name": "foldex-backup-agent",
+      "group": "dominio",
+      "tech": "Go · pgx · age · minio-go"
+    },
+    {
+      "id": "rustfsinit",
+      "name": "rustfs-init (one-shot)",
+      "group": "dados",
+      "tech": "Go · madmin-go"
+    },
+    {
+      "id": "postgres",
+      "name": "Postgres 18.6",
+      "group": "dados",
+      "tech": "postgres:18.6-alpine"
+    },
+    {
+      "id": "rustfs",
+      "name": "RustFS (S3)",
+      "group": "dados",
+      "tech": "rustfs/rustfs:1.0.3 digest-pinned"
+    },
+    {
+      "id": "mailpit",
+      "name": "Mailpit (dev)",
+      "group": "externos",
+      "tech": "axllent/mailpit v1.31.6"
+    }
+  ],
+  "notes": "derivado do atlas-docs em 2026-11-02T22:28:30+00:00",
+  "at": "2026-11-03T03:19:32.216Z"
+}

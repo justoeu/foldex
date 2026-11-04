@@ -1,0 +1,31 @@
+{
+  "id": "T-003",
+  "expected_version": 0,
+  "patch": {
+    "status": "DONE",
+    "tests_added": 2,
+    "red_green": true,
+    "red": {
+      "command": "cd web && bun run test src/components/TagSidebar.test.tsx",
+      "output_excerpt": "Tests 1 failed | 20 passed (21) — shows the new-folder action on the rail when the folders tab is active"
+    },
+    "green": {
+      "command": "cd web && bun run test src/components/TagSidebar.test.tsx src/components/sidebar/FoldersPanel.test.tsx && bun run typecheck",
+      "output_excerpt": "Test Files 2 passed (2) · Tests 28 passed (28); TYPECHECK_OK"
+    },
+    "commits": [
+      {
+        "sha": "a86d865",
+        "message": "feat(web): rail colapsado segue a aba ativa da sidebar (T-003)"
+      }
+    ],
+    "files": [
+      "web/src/components/TagSidebar.tsx",
+      "web/src/components/TagSidebar.test.tsx"
+    ],
+    "reversal": {
+      "done": false,
+      "note": "rail por aba é incremental; branch tags preserva comportamento anterior"
+    }
+  }
+}

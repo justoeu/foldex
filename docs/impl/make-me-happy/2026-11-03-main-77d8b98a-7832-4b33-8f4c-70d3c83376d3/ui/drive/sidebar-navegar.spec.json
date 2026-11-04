@@ -1,0 +1,135 @@
+{
+  "screen": "sidebar-navegar",
+  "spec_ref": "SDD-SIDEBAR-FOLDERS §Requisitos 1,2,3 · bootstrap de primeira execução",
+  "base_url": "http://localhost:5174",
+  "auth": null,
+  "steps": [
+    {
+      "action": "goto",
+      "path": "/"
+    },
+    {
+      "action": "wait",
+      "ms": 1500
+    },
+    {
+      "action": "fill",
+      "selector": "#fx-setup-name",
+      "value": "Drive Aceitacao"
+    },
+    {
+      "action": "fill",
+      "selector": "#fx-setup-email",
+      "value": "drive@aceitacao.local"
+    },
+    {
+      "action": "fill",
+      "selector": "#fx-setup-password",
+      "value": "Senh@Forte123"
+    },
+    {
+      "action": "fill",
+      "selector": "#fx-setup-confirm",
+      "value": "Senh@Forte123"
+    },
+    {
+      "action": "click",
+      "selector": ".fx-auth-form button[type=submit]"
+    },
+    {
+      "action": "wait",
+      "ms": 2200
+    },
+    {
+      "action": "assert_visible",
+      "selector": ".fx-side-title"
+    },
+    {
+      "action": "assert_visible",
+      "selector": "[role=tab][aria-selected=true]"
+    },
+    {
+      "action": "click",
+      "selector": ":nth-match([role=tab], 1)"
+    },
+    {
+      "action": "wait",
+      "ms": 300
+    },
+    {
+      "action": "assert_visible",
+      "selector": ".fx-side-empty"
+    },
+    {
+      "action": "click",
+      "selector": ".fx-side-actions button"
+    },
+    {
+      "action": "assert_visible",
+      "selector": "[role=dialog]"
+    },
+    {
+      "action": "fill",
+      "selector": ":nth-match([role=dialog] input, 1)",
+      "value": "Drive UI Pasta Aceitacao"
+    },
+    {
+      "action": "click",
+      "selector": ".fx-confirm-btn-primary"
+    },
+    {
+      "action": "wait",
+      "ms": 1000
+    },
+    {
+      "action": "assert_visible",
+      "selector": ".fx-side-row:not(.fx-side-all)"
+    },
+    {
+      "action": "click",
+      "selector": ".fx-side-row:not(.fx-side-all)"
+    },
+    {
+      "action": "wait",
+      "ms": 800
+    },
+    {
+      "action": "assert_visible",
+      "selector": ".fx-side-row-active:not(.fx-side-all)"
+    },
+    {
+      "action": "screenshot",
+      "name": "dentro-da-pasta"
+    },
+    {
+      "action": "click",
+      "selector": ":nth-match([role=tab], 2)"
+    },
+    {
+      "action": "wait",
+      "ms": 300
+    },
+    {
+      "action": "assert_visible",
+      "selector": ".fx-side-actions button"
+    },
+    {
+      "action": "screenshot",
+      "name": "aba-tags"
+    }
+  ],
+  "expected_network_errors": [
+    {
+      "status": 401,
+      "path": "/api/status"
+    },
+    {
+      "status": 401,
+      "path": "/api/auth/refresh"
+    },
+    {
+      "status": 401,
+      "path": "/api/admin/policy"
+    }
+  ]
+}

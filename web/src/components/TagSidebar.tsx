@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Icon, I } from './icons'
 import { TagDialog } from './TagDialog'
@@ -10,6 +10,8 @@ import { VERSION, BUILD_DATE, formatBuildDate } from '../version'
 import { useEscape } from '../hooks/useEscape'
 import { isBoolean, usePersistedState } from '../hooks/usePersistedState'
 import { TagRow } from './sidebar/TagRow'
+import { FoldersPanel } from './sidebar/FoldersPanel'
+import type { Folder } from '../api/types'
 
 type Props = Readonly<{
   selected: number[]
@@ -23,6 +25,12 @@ type Props = Readonly<{
   // without otherwise affecting the desktop collapsed state.
   mobileOpen?: boolean
   onMobileClose?: () => void
+  // Pastas (sketch 001 · variante B). Opcionais: sem integração de navegação
+  // a aba Pastas cai no estado vazio e o restante funciona como antes.
+  folders?: Folder[]
+  openFolder?: number | null
+  onOpenFolder?: (id: number) => void
+  onNewFolder?: () => void
 }>
 
 // Bucket sizes: top 5 by usage live in the always-shown "Frequentes" group.
@@ -34,6 +42,8 @@ const OTHER_INITIAL = 15
 const FREQ_OPEN_KEY = 'foldex.sidebar.freqOpen'
 const OTHER_OPEN_KEY = 'foldex.sidebar.otherOpen'
 const RECENT_OPEN_KEY = 'foldex.sidebar.recentOpen'
+// Segmented Pastas|Tags (docs/SDD-SIDEBAR-FOLDERS.md). Exported for tests.
+export const TAB_KEY = 'foldex.sidebar.tab'
 
 function migrateLegacyBoolKeys(keys: string[]) {
   try {
@@ -56,6 +66,10 @@ export function TagSidebar({
   onToggleCollapsed,
   mobileOpen = false,
   onMobileClose,
+  folders = [],
+  openFolder = null,
+  onOpenFolder = () => {},
+  onNewFolder = () => {},
 }: Props) {
   const { t } = useTranslation()
   const { data: tags = [], isLoading } = useTags()
@@ -68,6 +82,13 @@ export function TagSidebar({
   const [freqOpen, setFreqOpen] = usePersistedState(FREQ_OPEN_KEY, true, isBoolean)
   const [otherOpen, setOtherOpen] = usePersistedState(OTHER_OPEN_KEY, true, isBoolean)
   const [otherShowAll, setOtherShowAll] = useState(false)
+  // Segmented Pastas|Tags (docs/SDD-SIDEBAR-FOLDERS.md): the active panel
+  // persists like the section toggles above — a reload restores the last tab.
+  const [tab, setTab] = usePersistedState(
+    TAB_KEY,
+    'tags',
+    (v): v is 'tags' | 'folders' => v === 'tags' || v === 'folders',
+  )
 
   // Esc closes the mobile drawer when it's open, through the escape
   // stack so it does not also pop the folder underneath.
@@ -92,28 +113,23 @@ export function TagSidebar({
           <Icon d={I.chevronRight} size={14} />
         </button>
         <div className="fx-sidebar-rail-icon">
-          <Icon d={I.tag} size={15} />
+          <Icon d={tab === 'folders' ? I.folder : I.tag} size={15} />
         </div>
         <div className="fx-sidebar-rail-actions">
-          <button
-            className="fx-iconbtn"
-            aria-label={t('sidebar.new_tag_tooltip')}
-            data-tooltip={t('sidebar.new_tag_tooltip')}
-            data-tooltip-side="right"
-            onClick={() => setCreating(true)}
-          >
-            <Icon d={I.plus} size={14} />
-          </button>
-          <button
-            className="fx-iconbtn"
-            aria-label={t('sidebar.manage_tags_tooltip')}
-            data-tooltip={t('sidebar.manage_tags_tooltip')}
-            data-tooltip-side="right"
-            disabled={tags.length === 0}
-            onClick={() => setManaging(true)}
-          >
-            <Icon d={I.pen} size={13} />
-          </button>
+          {tab === 'folders' ? (
+            <RailAction label={t('sidebar.new_folder_tooltip')} icon={I.plus} onClick={onNewFolder} />
+          ) : (
+            <>
+              <RailAction label={t('sidebar.new_tag_tooltip')} icon={I.plus} onClick={() => setCreating(true)} />
+              <RailAction
+                label={t('sidebar.manage_tags_tooltip')}
+                icon={I.pen}
+                size={13}
+                disabled={tags.length === 0}
+                onClick={() => setManaging(true)}
+              />
+            </>
+          )}
         </div>
         <TagDialog open={creating} onClose={() => setCreating(false)} />
         <TagManagerDialog open={managing} onClose={() => setManaging(false)} />
@@ -131,7 +147,7 @@ export function TagSidebar({
     <aside className={'fx-sidebar' + railClass}>
       <div className="fx-side-head">
         <div className="fx-side-title">
-          <Icon d={I.tag} size={15} /> <span>{t('sidebar.tags')}</span>
+          <Icon d={I.layers} size={15} /> <span>{t('sidebar.navigate')}</span>
         </div>
         <div className="fx-side-head-actions">
           {mobileOpen && (
@@ -155,6 +171,29 @@ export function TagSidebar({
         </div>
       </div>
 
+      <div className="fx-segmented" role="tablist" aria-label={t('sidebar.navigate')}>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === 'folders'}
+          className={tab === 'folders' ? 'fx-seg-tab fx-seg-tab-active' : 'fx-seg-tab'}
+          onClick={() => setTab('folders')}
+        >
+          <Icon d={I.folder} size={13} />
+          <span>{t('sidebar.folders')}</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === 'tags'}
+          className={tab === 'tags' ? 'fx-seg-tab fx-seg-tab-active' : 'fx-seg-tab'}
+          onClick={() => setTab('tags')}
+        >
+          <Icon d={I.tag} size={13} />
+          <span>{t('sidebar.tags')}</span>
+        </button>
+      </div>
+
       <div className="fx-sidebar-scroll">
         <button
           className={
@@ -173,36 +212,25 @@ export function TagSidebar({
 
         {isLoading && <div style={{ padding: 12, color: 'var(--fx-ink-4)' }}>{t('sidebar.loading')}</div>}
 
-        {freq.length > 0 && (
-          <>
-            <SectionHeader
-              label={t('sidebar.frequent')}
-              open={freqOpen}
-              onToggle={() => setFreqOpen((v) => !v)}
-            />
-            {freqOpen && freq.map((tag) => (
-              <TagRow
-                key={tag.id}
-                name={tag.name}
-                color={tag.color}
-                count={tag.link_count ?? 0}
-                active={selected.includes(tag.id)}
-                onClick={() => onToggle(tag.id)}
-              />
-            ))}
-          </>
+        {tab === 'folders' && (
+          <FoldersPanel
+            folders={folders}
+            openFolderId={openFolder}
+            onOpenFolder={onOpenFolder}
+            onNewFolder={onNewFolder}
+          />
         )}
 
-        {other.length > 0 && (
+        {tab === 'tags' && (
           <>
-            <SectionHeader
-              label={t('sidebar.others')}
-              open={otherOpen}
-              onToggle={() => setOtherOpen((v) => !v)}
-            />
-            {otherOpen && (
+            {freq.length > 0 && (
               <>
-                {otherVisible.map((tag) => (
+                <SectionHeader
+                  label={t('sidebar.frequent')}
+                  open={freqOpen}
+                  onToggle={() => setFreqOpen((v) => !v)}
+                />
+                {freqOpen && freq.map((tag) => (
                   <TagRow
                     key={tag.id}
                     name={tag.name}
@@ -212,40 +240,64 @@ export function TagSidebar({
                     onClick={() => onToggle(tag.id)}
                   />
                 ))}
-                {otherHidden > 0 && (
-                  <button
-                    type="button"
-                    className="fx-side-more"
-                    onClick={() => setOtherShowAll(true)}
-                    data-tooltip={t('sidebar.load_more', { count: otherHidden })}
-                  >
-                    {t('sidebar.load_more', { count: otherHidden })}
-                  </button>
+              </>
+            )}
+
+            {other.length > 0 && (
+              <>
+                <SectionHeader
+                  label={t('sidebar.others')}
+                  open={otherOpen}
+                  onToggle={() => setOtherOpen((v) => !v)}
+                />
+                {otherOpen && (
+                  <>
+                    {otherVisible.map((tag) => (
+                      <TagRow
+                        key={tag.id}
+                        name={tag.name}
+                        color={tag.color}
+                        count={tag.link_count ?? 0}
+                        active={selected.includes(tag.id)}
+                        onClick={() => onToggle(tag.id)}
+                      />
+                    ))}
+                    {otherHidden > 0 && (
+                      <button
+                        type="button"
+                        className="fx-side-more"
+                        onClick={() => setOtherShowAll(true)}
+                        data-tooltip={t('sidebar.load_more', { count: otherHidden })}
+                      >
+                        {t('sidebar.load_more', { count: otherHidden })}
+                      </button>
+                    )}
+                  </>
                 )}
               </>
             )}
+
+            <div className="fx-side-actions">
+              <button
+                className="fx-side-action"
+                onClick={() => setCreating(true)}
+                data-tooltip={t('sidebar.new_tag_tooltip')}
+              >
+                <Icon d={I.plus} size={13} />
+                <span>{t('sidebar.new')}</span>
+              </button>
+              <button
+                className="fx-side-action"
+                onClick={() => setManaging(true)}
+                disabled={tags.length === 0}
+                data-tooltip={t('sidebar.manage_tags_tooltip')}
+              >
+                <Icon d={I.pen} size={13} />
+                <span>{t('sidebar.manage')}</span>
+              </button>
+            </div>
           </>
         )}
-      </div>
-
-      <div className="fx-side-actions">
-        <button
-          className="fx-side-action"
-          onClick={() => setCreating(true)}
-          data-tooltip={t('sidebar.new_tag_tooltip')}
-        >
-          <Icon d={I.plus} size={13} />
-          <span>{t('sidebar.new')}</span>
-        </button>
-        <button
-          className="fx-side-action"
-          onClick={() => setManaging(true)}
-          disabled={tags.length === 0}
-          data-tooltip={t('sidebar.manage_tags_tooltip')}
-        >
-          <Icon d={I.pen} size={13} />
-          <span>{t('sidebar.manage')}</span>
-        </button>
       </div>
 
       <div className="fx-side-version" aria-label={`foldex ${VERSION} build ${BUILD_DATE}`}>
@@ -289,6 +341,35 @@ function RecentChangesSection({ enabled }: Readonly<{ enabled: boolean }>) {
         </a>
       ))}
     </>
+  )
+}
+
+// One rail button = one tooltip trio (aria-label + data-tooltip + side), so
+// the per-tab actions stay in sync by construction.
+function RailAction({
+  label,
+  icon,
+  size = 14,
+  disabled = false,
+  onClick,
+}: Readonly<{
+  label: string
+  icon: ReactNode
+  size?: number
+  disabled?: boolean
+  onClick: () => void
+}>) {
+  return (
+    <button
+      className="fx-iconbtn"
+      aria-label={label}
+      data-tooltip={label}
+      data-tooltip-side="right"
+      disabled={disabled}
+      onClick={onClick}
+    >
+      <Icon d={icon} size={size} />
+    </button>
   )
 }
 

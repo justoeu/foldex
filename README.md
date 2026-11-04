@@ -36,6 +36,7 @@ Load checks are manual and stay out of CI. [`load/k6/README.md`](load/k6/README.
 ## What you get
 
 - Links + notes in one grid (tags, folders, pin, search)
+- Sidebar "Navigate" with segmented **Folders | Tags** tabs — folder tree (password-protected folders stay hidden), one click enters the folder; each tab owns its actions
 - OG / favicon / screenshot previews
 - Per-folder passwords and a master recovery password, on one screen with separate tabs
 - Account activity is paged (25, 50 or 100). The last three days start open; older days stay collapsed

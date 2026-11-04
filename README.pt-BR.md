@@ -36,6 +36,7 @@ A carga é manual e fica fora do CI. [`load/k6/README.md`](load/k6/README.md) de
 ## O que vem
 
 - Links e notas no mesmo grid (tags, pastas, pin, busca)
+- Sidebar "Navegar" com abas **Pastas | Tags** — árvore de pastas (pastas com senha ficam ocultas), um clique entra na pasta; cada aba é dona das suas ações
 - Previews OG / favicon / screenshot
 - Senha por pasta e senha master de recuperação, na mesma tela em abas separadas
 - A atividade da conta é paginada (25, 50 ou 100). Os últimos três dias começam abertos; os mais antigos ficam recolhidos

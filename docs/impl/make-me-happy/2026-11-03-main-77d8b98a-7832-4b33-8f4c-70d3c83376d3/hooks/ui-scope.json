@@ -1,0 +1,27 @@
+{
+  "ui_touched": true,
+  "evidence_known": true,
+  "how": "8 arquivo(s) de frontend no diff",
+  "frontend_files": [
+    ".planning/sketches/001-sidebar-pastas-tags/index.html",
+    ".planning/sketches/themes/default.css",
+    "web/src/AppShell.tsx",
+    "web/src/components/TagSidebar.test.tsx",
+    "web/src/components/TagSidebar.tsx",
+    "web/src/components/sidebar/FoldersPanel.test.tsx",
+    "web/src/components/sidebar/FoldersPanel.tsx",
+    "web/src/styles/foldex.css"
+  ],
+  "screens": [],
+  "frameworks": [],
+  "e2e_runner": null,
+  "at": "2026-11-03T22:52:49.497Z",
+  "evidence": {
+    "run_id": "77d8b98a-7832-4b33-8f4c-70d3c83376d3",
+    "head": "f7ee4cec4a1f7bc9678ef6cedb90bd09205eee00",
+    "source_hash": "9f75ae4344e4f1760b2d4b1a4459998044671659490afb8f7e83b1e8ac1e386b",
+    "input_hash": "763c0b6e470a57956af26728ac26bf35f9f4dfd5788a5eb3685380bc7423bd48",
+    "at": "2026-11-03T22:52:49.549Z",
+    "result_hash": "a3b6bf80e16ae3470252665f06899d97fabbd61c64b422717396e38ff560f372"
+  }
+}

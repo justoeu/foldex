@@ -1,0 +1,353 @@
+{
+  "execution_id": "7e9538ea-aca6-4858-a8e8-809fee5cc681",
+  "screen": "sidebar-navegar",
+  "mode": "drive",
+  "base_url": "http://localhost:5174",
+  "verdict": "REJECT",
+  "at": "2026-11-03T22:49:45.296Z",
+  "steps": [
+    {
+      "n": 1,
+      "action": "goto",
+      "ok": true,
+      "url": "/"
+    },
+    {
+      "n": 2,
+      "action": "wait",
+      "ok": true
+    },
+    {
+      "n": 3,
+      "action": "fill",
+      "ok": true,
+      "selector": "#fx-setup-name"
+    },
+    {
+      "n": 4,
+      "action": "fill",
+      "ok": true,
+      "selector": "#fx-setup-email"
+    },
+    {
+      "n": 5,
+      "action": "fill",
+      "ok": true,
+      "selector": "#fx-setup-password"
+    },
+    {
+      "n": 6,
+      "action": "fill",
+      "ok": true,
+      "selector": "#fx-setup-confirm"
+    },
+    {
+      "n": 7,
+      "action": "click",
+      "ok": true,
+      "selector": ".fx-auth-form button[type=submit]"
+    },
+    {
+      "n": 8,
+      "action": "wait",
+      "ok": true
+    },
+    {
+      "n": 9,
+      "action": "assert_visible",
+      "ok": true,
+      "selector": ".fx-side-title"
+    },
+    {
+      "n": 10,
+      "action": "assert_visible",
+      "ok": true,
+      "selector": "[role=tab][aria-selected=true]"
+    },
+    {
+      "n": 11,
+      "action": "click",
+      "ok": true,
+      "selector": ":nth-match([role=tab], 1)"
+    },
+    {
+      "n": 12,
+      "action": "wait",
+      "ok": true
+    },
+    {
+      "n": 13,
+      "action": "assert_visible",
+      "ok": true,
+      "selector": ".fx-side-empty"
+    },
+    {
+      "n": 14,
+      "action": "click",
+      "ok": true,
+      "selector": ".fx-side-actions button"
+    },
+    {
+      "n": 15,
+      "action": "assert_visible",
+      "ok": true,
+      "selector": "[role=dialog]"
+    },
+    {
+      "n": 16,
+      "action": "fill",
+      "ok": false,
+      "error": "TimeoutError: page.fill: Timeout 5000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('[role=dialog] input[type=text]')\u001b[22m\n",
+      "file": "docs/impl/make-me-happy/2026-11-03-main-77d8b98a-7832-4b33-8f4c-70d3c83376d3/ui/screenshots/7e9538ea-aca6-4858-a8e8-809fee5cc681/sidebar-navegar-16-fail.png"
+    }
+  ],
+  "console_errors": [
+    {
+      "text": "Failed to load resource: net::ERR_FAILED",
+      "step": 0,
+      "location": {
+        "url": "https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Nunito+Sans:wght@400;600;700;800;900&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@500;600&display=swap",
+        "line": 0,
+        "column": 0,
+        "lineNumber": 0,
+        "columnNumber": 0
+      },
+      "argument_count": 0
+    },
+    {
+      "text": "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+      "step": 1,
+      "location": {
+        "url": "http://localhost:5174/api/status",
+        "line": 0,
+        "column": 0,
+        "lineNumber": 0,
+        "columnNumber": 0
+      },
+      "argument_count": 0
+    },
+    {
+      "text": "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+      "step": 1,
+      "location": {
+        "url": "http://localhost:5174/api/auth/refresh",
+        "line": 0,
+        "column": 0,
+        "lineNumber": 0,
+        "columnNumber": 0
+      },
+      "argument_count": 0
+    },
+    {
+      "text": "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+      "step": 1,
+      "location": {
+        "url": "http://localhost:5174/api/admin/policy",
+        "line": 0,
+        "column": 0,
+        "lineNumber": 0,
+        "columnNumber": 0
+      },
+      "argument_count": 0
+    },
+    {
+      "text": "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+      "step": 1,
+      "location": {
+        "url": "http://localhost:5174/api/auth/refresh",
+        "line": 0,
+        "column": 0,
+        "lineNumber": 0,
+        "columnNumber": 0
+      },
+      "argument_count": 0
+    },
+    {
+      "text": "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+      "step": 1,
+      "location": {
+        "url": "http://localhost:5174/api/status",
+        "line": 0,
+        "column": 0,
+        "lineNumber": 0,
+        "columnNumber": 0
+      },
+      "argument_count": 0
+    },
+    {
+      "text": "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+      "step": 1,
+      "location": {
+        "url": "http://localhost:5174/api/auth/refresh",
+        "line": 0,
+        "column": 0,
+        "lineNumber": 0,
+        "columnNumber": 0
+      },
+      "argument_count": 0
+    }
+  ],
+  "network_errors": [
+    {
+      "status": 401,
+      "url": "http://localhost:5174/api/status",
+      "step": 1
+    },
+    {
+      "status": 401,
+      "url": "http://localhost:5174/api/auth/refresh",
+      "step": 1
+    },
+    {
+      "status": 401,
+      "url": "http://localhost:5174/api/admin/policy",
+      "step": 1
+    },
+    {
+      "status": 401,
+      "url": "http://localhost:5174/api/auth/refresh",
+      "step": 1
+    },
+    {
+      "status": 401,
+      "url": "http://localhost:5174/api/status",
+      "step": 1
+    },
+    {
+      "status": 401,
+      "url": "http://localhost:5174/api/auth/refresh",
+      "step": 1
+    }
+  ],
+  "screenshots": [
+    "docs/impl/make-me-happy/2026-11-03-main-77d8b98a-7832-4b33-8f4c-70d3c83376d3/ui/screenshots/7e9538ea-aca6-4858-a8e8-809fee5cc681/sidebar-navegar-16-fail.png"
+  ],
+  "assertions": {
+    "ok": 15,
+    "total": 16,
+    "failed": [
+      "TimeoutError: page.fill: Timeout 5000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('[role=dialog] input[type=text]')\u001b[22m\n"
+    ]
+  },
+  "error": "current drive did not complete successfully",
+  "spec_ref": "SDD-SIDEBAR-FOLDERS §Requisitos 1,2,3 · bootstrap de primeira execução",
+  "unexpected_console_errors": [
+    {
+      "text": "Failed to load resource: net::ERR_FAILED",
+      "step": 0,
+      "location": {
+        "url": "https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Nunito+Sans:wght@400;600;700;800;900&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@500;600&display=swap",
+        "line": 0,
+        "column": 0,
+        "lineNumber": 0,
+        "columnNumber": 0
+      },
+      "argument_count": 0
+    },
+    {
+      "text": "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+      "step": 1,
+      "location": {
+        "url": "http://localhost:5174/api/status",
+        "line": 0,
+        "column": 0,
+        "lineNumber": 0,
+        "columnNumber": 0
+      },
+      "argument_count": 0
+    },
+    {
+      "text": "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+      "step": 1,
+      "location": {
+        "url": "http://localhost:5174/api/auth/refresh",
+        "line": 0,
+        "column": 0,
+        "lineNumber": 0,
+        "columnNumber": 0
+      },
+      "argument_count": 0
+    },
+    {
+      "text": "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+      "step": 1,
+      "location": {
+        "url": "http://localhost:5174/api/admin/policy",
+        "line": 0,
+        "column": 0,
+        "lineNumber": 0,
+        "columnNumber": 0
+      },
+      "argument_count": 0
+    },
+    {
+      "text": "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+      "step": 1,
+      "location": {
+        "url": "http://localhost:5174/api/auth/refresh",
+        "line": 0,
+        "column": 0,
+        "lineNumber": 0,
+        "columnNumber": 0
+      },
+      "argument_count": 0
+    },
+    {
+      "text": "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+      "step": 1,
+      "location": {
+        "url": "http://localhost:5174/api/status",
+        "line": 0,
+        "column": 0,
+        "lineNumber": 0,
+        "columnNumber": 0
+      },
+      "argument_count": 0
+    },
+    {
+      "text": "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+      "step": 1,
+      "location": {
+        "url": "http://localhost:5174/api/auth/refresh",
+        "line": 0,
+        "column": 0,
+        "lineNumber": 0,
+        "columnNumber": 0
+      },
+      "argument_count": 0
+    }
+  ],
+  "unexpected_network_errors": [
+    {
+      "status": 401,
+      "url": "http://localhost:5174/api/status",
+      "step": 1
+    },
+    {
+      "status": 401,
+      "url": "http://localhost:5174/api/auth/refresh",
+      "step": 1
+    },
+    {
+      "status": 401,
+      "url": "http://localhost:5174/api/admin/policy",
+      "step": 1
+    },
+    {
+      "status": 401,
+      "url": "http://localhost:5174/api/auth/refresh",
+      "step": 1
+    },
+    {
+      "status": 401,
+      "url": "http://localhost:5174/api/status",
+      "step": 1
+    },
+    {
+      "status": 401,
+      "url": "http://localhost:5174/api/auth/refresh",
+      "step": 1
+    }
+  ],
+  "exit": 1
+}

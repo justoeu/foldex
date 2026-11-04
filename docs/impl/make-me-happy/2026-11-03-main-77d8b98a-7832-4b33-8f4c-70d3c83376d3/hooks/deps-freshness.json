@@ -1,0 +1,39 @@
+{
+  "hook": "deps-freshness",
+  "verdict": "APPROVE",
+  "round": 3,
+  "rounds": [
+    {
+      "round": 1,
+      "verdict": "APPROVE",
+      "at": "2026-11-03T03:55:07.366Z",
+      "findings": []
+    },
+    {
+      "round": 2,
+      "verdict": "APPROVE",
+      "at": "2026-11-03T11:21:49.236Z",
+      "findings": []
+    },
+    {
+      "round": 3,
+      "verdict": "APPROVE",
+      "at": "2026-11-03T22:52:49.333Z",
+      "findings": []
+    }
+  ],
+  "scope": "new",
+  "registry": "not-needed",
+  "summary": "0 dep(s) no escopo new; 0 achado(s); registry not-needed.",
+  "deps": [],
+  "findings": [],
+  "at": "2026-11-03T22:52:49.333Z",
+  "evidence": {
+    "run_id": "77d8b98a-7832-4b33-8f4c-70d3c83376d3",
+    "head": "f7ee4cec4a1f7bc9678ef6cedb90bd09205eee00",
+    "source_hash": "9f75ae4344e4f1760b2d4b1a4459998044671659490afb8f7e83b1e8ac1e386b",
+    "input_hash": "763c0b6e470a57956af26728ac26bf35f9f4dfd5788a5eb3685380bc7423bd48",
+    "at": "2026-11-03T22:52:49.374Z",
+    "result_hash": "f3ccf0b53bd8aac9e5da97120ebb7ecde532b84dad067cc6f3432d586bb10144"
+  }
+}

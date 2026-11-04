@@ -1,0 +1,71 @@
+{
+  "hook": "performance",
+  "verdict": "APPROVE",
+  "round": 2,
+  "summary": "sweep performance: zero HIGH; buildVisibleTree memoizado no round 2 (identidade estável da query faz o memo valer), acumulação O(k²) trocada por push; sem re-render storm novo, sem effects, bundle ~1KB no chunk já eager",
+  "findings": [
+    {
+      "id": "PERF-1",
+      "severity": "medium",
+      "title": "buildVisibleTree em todo render (incl. keystrokes de busca)",
+      "description": "App-level q re-renderiza o shell; árvore rebuild a cada tecla.",
+      "file": "web/src/components/sidebar/FoldersPanel.tsx",
+      "line": 43,
+      "status": "fixed",
+      "round": 1,
+      "fixed_in_round": 2
+    },
+    {
+      "id": "PERF-2",
+      "severity": "low",
+      "title": "Spread acumulativo no childrenOf (O(k²) degenerado)",
+      "description": "fetch-or-create + push.",
+      "file": "web/src/components/sidebar/FoldersPanel.tsx",
+      "line": 32,
+      "status": "fixed",
+      "round": 1,
+      "fixed_in_round": 2
+    },
+    {
+      "id": "PERF-3",
+      "severity": "info",
+      "title": "React.memo no FoldersPanel derrotado por callbacks inline",
+      "description": "memo da árvore basta; memo do componente seria código morto sem useCallback nos handlers — wontfix com racional.",
+      "status": "wontfix",
+      "round": 1
+    },
+    {
+      "id": "PERF-4",
+      "severity": "info",
+      "title": "migrateLegacyBoolKeys roda 3 getItem por render (pré-existente)",
+      "description": "fora do diff; follow-up sugerido (guard module-level).",
+      "file": "web/src/components/TagSidebar.tsx",
+      "line": 79,
+      "status": "wontfix",
+      "round": 1
+    }
+  ],
+  "rounds": [
+    {
+      "round": 1,
+      "verdict": "APPROVE",
+      "findings": [
+        "PERF-1",
+        "PERF-2"
+      ]
+    },
+    {
+      "round": 2,
+      "verdict": "APPROVE",
+      "findings": []
+    }
+  ],
+  "evidence": {
+    "run_id": "77d8b98a-7832-4b33-8f4c-70d3c83376d3",
+    "head": "f7ee4cec4a1f7bc9678ef6cedb90bd09205eee00",
+    "source_hash": "9f75ae4344e4f1760b2d4b1a4459998044671659490afb8f7e83b1e8ac1e386b",
+    "input_hash": "763c0b6e470a57956af26728ac26bf35f9f4dfd5788a5eb3685380bc7423bd48",
+    "at": "2026-11-03T22:52:50.594Z",
+    "result_hash": "8304b3dd07f42ac8b9eed0cca65441f8c41f5df4a501a24957e113400adfdffb"
+  }
+}

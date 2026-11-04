@@ -1,0 +1,52 @@
+/* Foldex sketch theme — tokens extraídos de web/src/styles/foldex.css (light + dark).
+   Sketches linkam aqui para manter as decisões de design on-brand. */
+:root {
+  --fx-display: 'Space Grotesk', system-ui, sans-serif;
+  --fx-ui: 'Nunito Sans', system-ui, sans-serif;
+  --fx-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  --fx-bg: #F5F4FB;
+  --fx-bg-tint: #ECE9F7;
+  --fx-surface: rgba(255, 255, 255, 0.62);
+  --fx-surface-2: rgba(255, 255, 255, 0.78);
+  --fx-surface-3: rgba(255, 255, 255, 0.92);
+  --fx-border: rgba(20, 16, 46, 0.08);
+  --fx-border-2: rgba(20, 16, 46, 0.04);
+  --fx-ink: #16132E;
+  --fx-ink-2: #353058;
+  --fx-ink-3: #5C5680;
+  --fx-ink-4: #8E89AE;
+  --fx-ink-5: #B6B2CC;
+  --fx-accent: #6366F1;
+  --fx-accent-2: #8B7CF6;
+  --fx-accent-3: #4F46E5;
+  --fx-accent-soft: rgba(99, 102, 241, 0.10);
+  --fx-accent-soft-2: rgba(99, 102, 241, 0.18);
+  --fx-success: #10B981;
+  --fx-warn: #F59E0B;
+  --fx-danger: #F43F5E;
+  --fx-shadow-1: 0 1px 2px rgba(20, 16, 46, 0.05), 0 8px 24px rgba(20, 16, 46, 0.06);
+}
+[data-theme='dark'] {
+  --fx-bg: #0F0D1F;
+  --fx-bg-tint: #17142B;
+  --fx-surface: rgba(30, 27, 54, 0.55);
+  --fx-surface-2: rgba(34, 31, 61, 0.72);
+  --fx-surface-3: rgba(40, 36, 72, 0.92);
+  --fx-border: rgba(235, 233, 255, 0.09);
+  --fx-border-2: rgba(235, 233, 255, 0.05);
+  --fx-ink: #EDEBFF;
+  --fx-ink-2: #C9C5E8;
+  --fx-ink-3: #A6A1CC;
+  --fx-ink-4: #7E79A6;
+  --fx-ink-5: #5D5982;
+  --fx-accent: #8B7CF6;
+  --fx-accent-2: #A78BFA;
+  --fx-accent-3: #A78BFA;
+  --fx-accent-soft: rgba(139, 133, 255, 0.10);
+  --fx-accent-soft-2: rgba(139, 133, 255, 0.18);
+  --fx-success: #34D399;
+  --fx-warn: #FBBF24;
+  --fx-danger: #FB7185;
+  --fx-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.35);
+}

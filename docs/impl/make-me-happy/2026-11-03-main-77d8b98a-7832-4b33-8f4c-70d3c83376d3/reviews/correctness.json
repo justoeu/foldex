@@ -1,0 +1,80 @@
+{
+  "axis": "correctness",
+  "verdict": "APPROVE",
+  "round": 2,
+  "summary": "sweep code-review round 1 achou 2 blockers; ambos corrigidos no round 2 (f7ee4ce) — badge de contagem zero removido por decisão do owner, READMEs atualizados",
+  "findings": [
+    {
+      "id": "C-1",
+      "severity": "high",
+      "title": "Badge de contagem sempre 0 — projeção slim zera counts",
+      "description": "useFolders(scope null, fields minimal) usa a projeção slim do backend que zera link_count/folder_count de propósito (repository.go:222, integração 'slim omits counts'); o painel mostrava 0 enganoso em toda pasta. Teste mascarava fabricando counts.",
+      "file": "web/src/components/sidebar/FoldersPanel.tsx",
+      "line": 59,
+      "status": "fixed",
+      "round": 1,
+      "fixed_in_round": 2,
+      "resolution": "badge removido (decisão do owner 03/11: client-only); SDD §Requisitos 2 amendado; contagens seguem nos FolderCards do HomeView"
+    },
+    {
+      "id": "C-2",
+      "severity": "medium",
+      "title": "README/README.pt-BR não tocados (CLAUDE.md §3)",
+      "description": "mudança visível de usuário sem atualização de docs é incompleta por DoD.",
+      "file": "README.md",
+      "line": 38,
+      "status": "fixed",
+      "round": 1,
+      "fixed_in_round": 2
+    },
+    {
+      "id": "C-3",
+      "severity": "info",
+      "title": "Classe fx-folder-child-row sem regra CSS (família INV-159)",
+      "description": "classe morta; guard não via por concatenação multi-linha (blind spot registrado como follow-up).",
+      "file": "web/src/components/sidebar/FoldersPanel.tsx",
+      "status": "fixed",
+      "round": 1,
+      "fixed_in_round": 2
+    },
+    {
+      "id": "C-4",
+      "severity": "info",
+      "title": "role=tablist sem navegação por setas/aria-controls",
+      "description": "consistente com os 4 tablists existentes; primeira superfície de navegação — melhoria barata como follow-up.",
+      "status": "wontfix",
+      "round": 1
+    },
+    {
+      "id": "C-5",
+      "severity": "info",
+      "title": "Quarta família CSS de segmented control",
+      "description": "fx-segmented soma a fx-seg/fx-viewseg/fx-hub-seg/fx-mode-tab; unificação em próximo toque.",
+      "status": "wontfix",
+      "round": 1
+    }
+  ],
+  "rounds": [
+    {
+      "round": 1,
+      "verdict": "REJECT",
+      "findings": [
+        "C-1",
+        "C-2"
+      ]
+    },
+    {
+      "round": 2,
+      "verdict": "APPROVE",
+      "findings": []
+    }
+  ],
+  "evidence": {
+    "run_id": "77d8b98a-7832-4b33-8f4c-70d3c83376d3",
+    "head": "f7ee4cec4a1f7bc9678ef6cedb90bd09205eee00",
+    "source_hash": "9f75ae4344e4f1760b2d4b1a4459998044671659490afb8f7e83b1e8ac1e386b",
+    "input_hash": "763c0b6e470a57956af26728ac26bf35f9f4dfd5788a5eb3685380bc7423bd48",
+    "at": "2026-11-03T22:52:50.195Z",
+    "result_hash": "fedf9f0b158b71829ee4a2748d41f7044eb8d7d1c5f0bdbf8994f610d2d861ab"
+  }
+}

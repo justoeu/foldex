@@ -1,0 +1,37 @@
+{
+  "id": "T-002",
+  "expected_version": 0,
+  "patch": {
+    "status": "DONE",
+    "tests_added": 7,
+    "red_green": true,
+    "red": {
+      "command": "cd web && bun run test src/components/sidebar/FoldersPanel.test.tsx",
+      "output_excerpt": "Test Files 1 failed (1) · Tests no tests — FoldersPanel não existia (import falhou)"
+    },
+    "green": {
+      "command": "cd web && bun run test src/components/sidebar/FoldersPanel.test.tsx src/components/TagSidebar.test.tsx && bun run typecheck && cd .. && node scripts/test-css-orphan-classes.mjs",
+      "output_excerpt": "Test Files 2 passed (2) · Tests 26 passed (26); tsc ok; ok: every fx-* class in the markup has a rule (1122 declared)"
+    },
+    "commits": [
+      {
+        "sha": "3b653b3",
+        "message": "feat(web): painel de pastas na sidebar — árvore sem pastas com senha, clique entra (T-002)"
+      }
+    ],
+    "files": [
+      "web/src/components/sidebar/FoldersPanel.tsx",
+      "web/src/components/sidebar/FoldersPanel.test.tsx",
+      "web/src/components/TagSidebar.tsx",
+      "web/src/AppShell.tsx",
+      "web/src/styles/foldex.css",
+      "web/src/i18n/locales/en.json",
+      "web/src/i18n/locales/pt.json",
+      "web/src/i18n/locales/es.json"
+    ],
+    "reversal": {
+      "done": false,
+      "note": "componente novo puro — reversão = remover arquivo e integração; suíte base verde"
+    }
+  }
+}

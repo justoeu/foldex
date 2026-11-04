@@ -1,0 +1,35 @@
+{
+  "id": "T-001",
+  "expected_version": 0,
+  "patch": {
+    "status": "DONE",
+    "tests_added": 3,
+    "red_green": true,
+    "red": {
+      "command": "cd web && bun run test src/components/TagSidebar.test.tsx",
+      "output_excerpt": "Tests  3 failed | 16 passed (19) — getByRole('tab', { name: 'Folders' }) not found"
+    },
+    "green": {
+      "command": "cd web && bun run test src/components/TagSidebar.test.tsx && bun run typecheck && cd .. && node scripts/test-css-orphan-classes.mjs",
+      "output_excerpt": "Test Files 1 passed (1) · Tests 19 passed (19); tsc --noEmit ok; ok: every fx-* class in the markup has a rule (1121 declared)"
+    },
+    "commits": [
+      {
+        "sha": "7c00771",
+        "message": "feat(web): sidebar Navegar — abas segmentadas Pastas|Tags com ações por aba (T-001)"
+      }
+    ],
+    "files": [
+      "web/src/components/TagSidebar.tsx",
+      "web/src/components/TagSidebar.test.tsx",
+      "web/src/styles/foldex.css",
+      "web/src/i18n/locales/en.json",
+      "web/src/i18n/locales/pt.json",
+      "web/src/i18n/locales/es.json"
+    ],
+    "reversal": {
+      "done": false,
+      "note": "reversão não viável: teste novo depende do componente novo; a suíte base segue verde"
+    }
+  }
+}

@@ -1,0 +1,686 @@
+<!doctype html>
+<html lang="pt-BR" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sketch 001 · Sidebar com Pastas + Tags</title>
+<link rel="stylesheet" href="../themes/default.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Nunito+Sans:wght@400;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--fx-bg);
+    color: var(--fx-ink);
+    font-family: var(--fx-ui);
+    padding-top: 52px;
+    min-height: 100vh;
+    transition: background .25s;
+  }
+  body::before {
+    content: '';
+    position: fixed; inset: 0; z-index: -1;
+    background:
+      radial-gradient(600px 300px at 85% -5%, var(--fx-accent-soft), transparent 70%),
+      radial-gradient(500px 260px at 5% 105%, var(--fx-accent-soft), transparent 70%);
+    pointer-events: none;
+  }
+
+  /* ── nav de variantes (ferramenta do sketch, não faz parte do app) ── */
+  #variant-nav {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 9998;
+    background: var(--fx-surface-3);
+    backdrop-filter: blur(20px);
+    border-bottom: 1px solid var(--fx-border);
+    padding: 10px 16px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  #variant-nav .nav-title { font-family: var(--fx-display); font-weight: 700; font-size: 13px; margin-right: 10px; color: var(--fx-ink); }
+  .variant-tab {
+    font-family: var(--fx-ui); font-size: 12.5px; font-weight: 700;
+    padding: 7px 14px; border-radius: 10px; border: 1px solid var(--fx-border);
+    background: transparent; color: var(--fx-ink-3); cursor: pointer; transition: all .15s;
+  }
+  .variant-tab:hover { background: var(--fx-accent-soft); color: var(--fx-ink); }
+  .variant-tab.active { background: var(--fx-accent); border-color: var(--fx-accent); color: #fff; }
+  #theme-toggle {
+    margin-left: auto; font-size: 12.5px; font-weight: 700; padding: 7px 12px;
+    border-radius: 10px; border: 1px solid var(--fx-border); background: transparent;
+    color: var(--fx-ink-3); cursor: pointer;
+  }
+  .variant { display: none; }
+  .variant.active { display: block; }
+
+  /* ── frame do app ── */
+  .fx-frame {
+    display: grid;
+    grid-template-columns: 250px 1fr;
+    gap: 14px;
+    max-width: 1280px;
+    margin: 14px auto;
+    padding: 0 14px 40px;
+    min-height: calc(100vh - 80px);
+  }
+
+  /* sidebar — fiel ao .fx-sidebar real */
+  .fx-sidebar {
+    margin: 0; padding: 18px 14px 14px;
+    display: flex; flex-direction: column; gap: 4px;
+    background: var(--fx-surface);
+    backdrop-filter: blur(20px) saturate(140%);
+    border: 1px solid var(--fx-border);
+    border-radius: 18px;
+    box-shadow: var(--fx-shadow-1);
+    overflow: hidden;
+    align-self: start;
+    position: sticky; top: 66px;
+    max-height: calc(100vh - 80px);
+  }
+  .fx-side-head { display: flex; align-items: center; justify-content: space-between; padding: 0 6px 8px; }
+  .fx-side-title { display: flex; align-items: center; gap: 7px; font-family: var(--fx-display); font-size: 13px; color: var(--fx-ink); letter-spacing: -.01em; font-weight: 600; }
+  .fx-side-title .tico { color: var(--fx-accent); display: inline-flex; }
+  .fx-sidebar-scroll { overflow-y: auto; flex: 1; margin: 0 -6px; padding: 0 6px; }
+  .fx-sidebar-scroll::-webkit-scrollbar { width: 4px; }
+  .fx-sidebar-scroll::-webkit-scrollbar-thumb { background: var(--fx-ink-5); border-radius: 4px; }
+
+  .fx-side-row {
+    display: grid; grid-template-columns: 18px 1fr auto; align-items: center; gap: 10px;
+    padding: 8px 16px; border: 0; background: none; border-radius: 0; text-align: left;
+    color: var(--fx-ink-2); font-size: 13px; font-family: var(--fx-ui);
+    cursor: pointer; transition: background .15s, color .15s; width: 100%;
+  }
+  .fx-side-row:hover { background: var(--fx-accent-soft); color: var(--fx-ink); }
+  .fx-side-row-active { background: var(--fx-accent-soft-2); color: var(--fx-ink); box-shadow: inset 0 0 0 1px rgba(99,102,241,.20); }
+  .fx-side-dot { width: 10px; height: 10px; border-radius: 4px; margin-left: 6px; box-shadow: 0 0 0 3px color-mix(in srgb, var(--fx-bg) 60%, transparent); }
+  .fx-side-label { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .fx-side-count { font-family: var(--fx-mono); font-size: 11px; color: var(--fx-ink-4); margin-right: 6px; }
+  .fx-side-row-active .fx-side-count { color: var(--fx-accent-3); }
+  .fx-side-all { color: var(--fx-ink); }
+  .fx-all-dot { width: 18px; height: 18px; display: grid; place-items: center; border-radius: 6px; background: linear-gradient(135deg, var(--fx-accent), var(--fx-accent-2)); color: #fff; margin-left: 6px; font-size: 10px; }
+  .fx-side-row.fx-side-all .fx-side-label { font-weight: 700; }
+
+  .fx-side-sep {
+    margin: 14px 8px 4px; font-family: var(--fx-mono); font-size: 10px; letter-spacing: .12em;
+    color: var(--fx-ink-4); text-transform: uppercase;
+    display: flex; align-items: center; gap: 6px;
+    background: none; border: 0; cursor: pointer; padding: 2px 0;
+  }
+  .fx-side-sep .chev { transition: transform .15s; font-size: 8px; }
+  .fx-side-sep.fx-side-sep-collapsed .chev { transform: rotate(-90deg); }
+
+  /* pastas */
+  .fx-folder-row { position: relative; }
+  .fx-folder-row .fdot { width: 14px; height: 14px; margin-left: 3px; display: grid; place-items: center; }
+  .fx-folder-children .fx-side-row { padding-left: 34px; }
+  .fx-folder-children { position: relative; }
+  .fx-folder-children::before {
+    content: ''; position: absolute; left: 24px; top: 4px; bottom: 4px;
+    width: 1px; background: var(--fx-border);
+  }
+  .fx-folder-child-link { position: relative; }
+  .fx-folder-children .fx-side-dot { margin-left: 0; }
+
+  /* segmented (variante B) */
+  .fx-segmented {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 4px;
+    background: var(--fx-bg-tint); border: 1px solid var(--fx-border);
+    border-radius: 11px; padding: 4px; margin: 4px 4px 8px;
+  }
+  .fx-segmented button {
+    display: flex; align-items: center; justify-content: center; gap: 7px;
+    padding: 7px 0; border-radius: 8px; border: 0; background: none;
+    font-family: var(--fx-ui); font-weight: 700; font-size: 12.5px;
+    color: var(--fx-ink-3); cursor: pointer; transition: all .15s;
+  }
+  .fx-segmented button.active { background: var(--fx-surface-3); color: var(--fx-ink); box-shadow: 0 1px 3px rgba(20,16,46,.12); }
+  .fx-seg-panel { display: none; }
+  .fx-seg-panel.active { display: block; }
+
+  /* contexto de pasta (variante C) */
+  .fx-folder-context { display: none; }
+  .fx-folder-context.active { display: block; }
+  .fx-back-row {
+    display: flex; align-items: center; gap: 8px; margin: 2px 4px 10px;
+    padding: 7px 12px; border-radius: 9px; border: 1px dashed var(--fx-border);
+    background: none; color: var(--fx-ink-3); font-family: var(--fx-ui);
+    font-size: 12.5px; font-weight: 700; cursor: pointer; width: calc(100% - 8px);
+  }
+  .fx-back-row:hover { color: var(--fx-ink); border-color: var(--fx-accent); }
+  .fx-context-title {
+    display: flex; align-items: center; gap: 9px; padding: 2px 6px 10px;
+    font-family: var(--fx-display); font-size: 14px; font-weight: 700; color: var(--fx-ink);
+    border-bottom: 1px solid var(--fx-border); margin-bottom: 6px;
+  }
+  .fx-context-title .fdot { width: 16px; height: 16px; border-radius: 5px; }
+
+  .fx-side-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+  .fx-side-action {
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+    padding: 9px 10px; border-radius: 10px; font-size: 12.5px; font-weight: 700;
+    border: 1px solid var(--fx-border); background: var(--fx-surface-2); color: var(--fx-ink-2);
+    cursor: pointer; font-family: var(--fx-ui);
+  }
+  .fx-side-action:hover { border-color: var(--fx-accent); color: var(--fx-ink); }
+  .fx-side-version { font-family: var(--fx-mono); font-size: 10px; color: var(--fx-ink-5); text-align: center; padding-top: 10px; }
+
+  /* ── main ── */
+  .fx-main { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+  .fx-topbar {
+    display: flex; align-items: center; gap: 12px;
+    background: var(--fx-surface); backdrop-filter: blur(20px) saturate(140%);
+    border: 1px solid var(--fx-border); border-radius: 16px;
+    padding: 12px 16px; box-shadow: var(--fx-shadow-1);
+  }
+  .fx-search {
+    flex: 1; display: flex; align-items: center; gap: 10px;
+    background: var(--fx-bg-tint); border: 1px solid var(--fx-border);
+    border-radius: 10px; padding: 9px 12px; color: var(--fx-ink-4); font-size: 13px;
+  }
+  .fx-search kbd {
+    margin-left: auto; font-family: var(--fx-mono); font-size: 10px;
+    border: 1px solid var(--fx-border); border-radius: 5px; padding: 2px 5px; color: var(--fx-ink-4);
+  }
+  .fx-btn-primary {
+    display: flex; align-items: center; gap: 7px; border: 0; cursor: pointer;
+    background: linear-gradient(135deg, var(--fx-accent), var(--fx-accent-2));
+    color: #fff; font-weight: 700; font-size: 13px; font-family: var(--fx-ui);
+    padding: 10px 16px; border-radius: 11px; box-shadow: 0 4px 14px var(--fx-accent-soft-2);
+  }
+
+  .fx-breadcrumb {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    font-size: 13px; color: var(--fx-ink-4); min-height: 20px;
+  }
+  .fx-breadcrumb .crumb { cursor: pointer; }
+  .fx-breadcrumb .crumb:hover { color: var(--fx-accent); text-decoration: underline; }
+  .fx-breadcrumb .crumb.current { color: var(--fx-ink); font-weight: 700; cursor: default; }
+  .fx-breadcrumb .crumb.current:hover { text-decoration: none; color: var(--fx-ink); }
+  .fx-breadcrumb .sep { color: var(--fx-ink-5); }
+  .fx-breadcrumb .fld-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--fx-accent-soft-2); color: var(--fx-ink);
+    border-radius: 8px; padding: 3px 9px; font-weight: 700; font-size: 12px;
+  }
+
+  .fx-content-head { display: flex; align-items: baseline; gap: 10px; }
+  .fx-content-title { font-family: var(--fx-display); font-size: 19px; font-weight: 700; letter-spacing: -.01em; }
+  .fx-content-sub { font-size: 12.5px; color: var(--fx-ink-4); font-family: var(--fx-mono); }
+
+  .fx-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px;
+  }
+  .fx-card {
+    background: var(--fx-surface); backdrop-filter: blur(20px) saturate(140%);
+    border: 1px solid var(--fx-border); border-radius: 15px;
+    padding: 14px; box-shadow: var(--fx-shadow-1);
+    display: flex; flex-direction: column; gap: 9px; transition: border-color .15s, transform .15s;
+  }
+  .fx-card:hover { border-color: var(--fx-accent); transform: translateY(-1px); }
+  .fx-card-top { display: flex; align-items: center; gap: 9px; }
+  .fx-favicon { width: 20px; height: 20px; border-radius: 6px; display: grid; place-items: center; font-size: 11px; font-weight: 700; color: #fff; flex: none; }
+  .fx-card-title { font-weight: 700; font-size: 13.5px; color: var(--fx-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .fx-card-url { font-family: var(--fx-mono); font-size: 11px; color: var(--fx-ink-4); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .fx-card-chips { display: flex; gap: 5px; flex-wrap: wrap; }
+  .fx-chip {
+    font-size: 10.5px; font-weight: 700; padding: 3px 8px; border-radius: 7px;
+    color: var(--fx-ink-2); background: var(--fx-bg-tint); border: 1px solid var(--fx-border);
+  }
+  .fx-chip-folder { background: var(--fx-accent-soft); color: var(--fx-accent-3); }
+  .fx-chip-changed { background: rgba(16,185,129,.12); color: var(--fx-success); border-color: transparent; }
+
+  /* nota do rodapé de cada variante */
+  .sketch-note {
+    max-width: 1280px; margin: 0 auto 30px; padding: 12px 18px;
+    border: 1px dashed var(--fx-border); border-radius: 13px;
+    font-size: 12.5px; color: var(--fx-ink-3); line-height: 1.6;
+    background: var(--fx-surface);
+  }
+  .sketch-note b { color: var(--fx-ink); }
+  .sketch-note .rule { color: var(--fx-accent-3); font-weight: 700; }
+</style>
+</head>
+<body>
+
+<nav id="variant-nav">
+  <span class="nav-title">Foldex · Sidebar Pastas+Tags</span>
+  <button class="variant-tab active" onclick="showVariant('a', event)">A · Seções</button>
+  <button class="variant-tab" onclick="showVariant('b', event)">B · Abas</button>
+  <button class="variant-tab" onclick="showVariant('c', event)">C · Drill-down</button>
+  <button id="theme-toggle" onclick="toggleTheme(event)">🌙 escuro</button>
+</nav>
+
+<!-- ══════════════════ VARIANTE A · seções empilhadas ══════════════════ -->
+<div id="variant-a" class="variant active">
+  <div class="fx-frame">
+    <aside class="fx-sidebar" data-variant="a">
+      <div class="fx-side-head">
+        <div class="fx-side-title"><span class="tico">◈</span> <span>Navegar</span></div>
+        <div style="display:flex; gap:2px;">
+          <button class="fx-side-action" style="padding:4px 8px; border:0; background:none; box-shadow:none;" title="Recolher">‹</button>
+        </div>
+      </div>
+      <div class="fx-sidebar-scroll">
+        <button class="fx-side-row fx-side-all fx-side-row-active" data-folder="" onclick="enterFolder(this)">
+          <span class="fx-all-dot">≡</span>
+          <span class="fx-side-label">Todos os links</span>
+          <span class="fx-side-count">61</span>
+        </button>
+
+        <button class="fx-side-sep fx-side-sep-toggle"><span class="chev">▼</span> PASTAS</button>
+        <button class="fx-side-row fx-folder-row" data-folder="leitura" onclick="enterFolder(this)">
+          <span class="fdot" style="color:#F59E0B">▸</span>
+          <span class="fx-side-label">Leitura</span>
+          <span class="fx-side-count">12</span>
+        </button>
+        <div class="fx-folder-children">
+          <button class="fx-side-row fx-folder-child-link" data-folder="dev" onclick="enterFolder(this)">
+            <span class="fx-side-dot" style="background:#6366F1"></span>
+            <span class="fx-side-label">Dev</span>
+            <span class="fx-side-count">34</span>
+          </button>
+          <button class="fx-side-row fx-folder-child-link" data-folder="frontend" onclick="enterFolder(this)">
+            <span class="fx-side-dot" style="background:#8B7CF6"></span>
+            <span class="fx-side-label">Frontend</span>
+            <span class="fx-side-count">14</span>
+          </button>
+          <button class="fx-side-row fx-folder-child-link" data-folder="backend" onclick="enterFolder(this)">
+            <span class="fx-side-dot" style="background:#4F46E5"></span>
+            <span class="fx-side-label">Backend</span>
+            <span class="fx-side-count">18</span>
+          </button>
+        </div>
+        <button class="fx-side-row fx-folder-row" data-folder="financas" onclick="enterFolder(this)">
+          <span class="fdot" style="color:#10B981">▸</span>
+          <span class="fx-side-label">Finanças</span>
+          <span class="fx-side-count">7</span>
+        </button>
+        <button class="fx-side-row fx-folder-row" data-folder="receitas" onclick="enterFolder(this)">
+          <span class="fdot" style="color:#F43F5E">▸</span>
+          <span class="fx-side-label">Receitas</span>
+          <span class="fx-side-count">5</span>
+        </button>
+
+        <button class="fx-side-sep fx-side-sep-toggle"><span class="chev">▼</span> ATUALIZAÇÕES RECENTES</button>
+        <a class="fx-side-row" style="cursor:pointer; text-decoration:none">
+          <span class="fx-side-dot" style="background:var(--fx-ink-5)"></span>
+          <span class="fx-side-label">Go 1.26 release notes</span>
+          <span class="fx-side-count">2h</span>
+        </a>
+        <a class="fx-side-row" style="cursor:pointer; text-decoration:none">
+          <span class="fx-side-dot" style="background:var(--fx-ink-5)"></span>
+          <span class="fx-side-label">CSS grid masonry</span>
+          <span class="fx-side-count">1d</span>
+        </a>
+
+        <button class="fx-side-sep fx-side-sep-toggle"><span class="chev">▼</span> FREQUENTES</button>
+        <button class="fx-side-row" onclick="toggleActive(this)">
+          <span class="fx-side-dot" style="background:#00ADD8"></span>
+          <span class="fx-side-label">go</span>
+          <span class="fx-side-count">21</span>
+        </button>
+        <button class="fx-side-row" onclick="toggleActive(this)">
+          <span class="fx-side-dot" style="background:#61DAFB"></span>
+          <span class="fx-side-label">react</span>
+          <span class="fx-side-count">14</span>
+        </button>
+        <button class="fx-side-row" onclick="toggleActive(this)">
+          <span class="fx-side-dot" style="background:#FF9A00"></span>
+          <span class="fx-side-label">aws</span>
+          <span class="fx-side-count">9</span>
+        </button>
+        <button class="fx-side-row" onclick="toggleActive(this)">
+          <span class="fx-side-dot" style="background:#F43F5E"></span>
+          <span class="fx-side-label">ia</span>
+          <span class="fx-side-count">8</span>
+        </button>
+
+        <button class="fx-side-sep fx-side-sep-toggle"><span class="chev">▼</span> OUTRAS</button>
+        <button class="fx-side-row" onclick="toggleActive(this)">
+          <span class="fx-side-dot" style="background:#10B981"></span>
+          <span class="fx-side-label">devops</span>
+          <span class="fx-side-count">6</span>
+        </button>
+        <button class="fx-side-row" onclick="toggleActive(this)">
+          <span class="fx-side-dot" style="background:#6366F1"></span>
+          <span class="fx-side-label">postgres</span>
+          <span class="fx-side-count">6</span>
+        </button>
+        <button class="fx-side-row fx-side-more" style="color:var(--fx-ink-4); font-size:11.5px; padding-left:34px;">… carregar mais 6</button>
+      </div>
+      <div class="fx-side-actions">
+        <button class="fx-side-action">＋ Nova</button>
+        <button class="fx-side-action">✎ Gerenciar</button>
+      </div>
+      <div class="fx-side-version">foldex v3.4.5 · 02 nov 2026</div>
+    </aside>
+
+    <main class="fx-main" id="main-a">
+      <div class="fx-topbar">
+        <div class="fx-search">🔍 Buscar links, notas… <kbd>⌘K</kbd></div>
+        <button class="fx-btn-primary">＋ Novo link</button>
+      </div>
+      <div class="fx-breadcrumb" id="crumb-a">
+        <span style="font-size:11px; color:var(--fx-ink-5); letter-spacing:.08em;">VISTA GERAL</span>
+      </div>
+      <div class="fx-content-head">
+        <span class="fx-content-title" id="title-a">Todos os links</span>
+        <span class="fx-content-sub" id="sub-a">61 itens</span>
+      </div>
+      <div class="fx-grid" id="grid-a"></div>
+    </main>
+  </div>
+  <div class="sketch-note">
+    <b>Variante A — Seções empilhadas.</b> Evolução mais conservadora da sidebar atual: as pastas entram como uma nova
+    seção colapsável (<i>PASTAS</i>) acima das tags, seguindo exatamente o padrão visual existente (dot colorido + contagem).
+    Subpastas ficam indentadas com guia vertical; clicar numa pasta <b>entra</b> nela (breadcrumb + grid filtrado) —
+    <span class="rule">clique numa pasta aí na sidebar para ver</span>. Pastas com senha <b>não são renderizadas</b>
+    (a pasta “Privado” existe no mock e está omitida). Cabeçalho muda de “Tags” para “Navegar”.
+  </div>
+</div>
+
+<!-- ══════════════════ VARIANTE B · abas segmentadas ══════════════════ -->
+<div id="variant-b" class="variant">
+  <div class="fx-frame">
+    <aside class="fx-sidebar">
+      <div class="fx-side-head">
+        <div class="fx-side-title"><span class="tico">◈</span> <span>Navegar</span></div>
+        <button class="fx-side-action" style="padding:4px 8px; border:0; background:none; box-shadow:none;" title="Recolher">‹</button>
+      </div>
+      <div class="fx-segmented">
+        <button class="active" onclick="segTab(this, 'b-pastas')">📁 Pastas</button>
+        <button onclick="segTab(this, 'b-tags')"># Tags</button>
+      </div>
+      <div class="fx-sidebar-scroll">
+        <button class="fx-side-row fx-side-all fx-side-row-active" onclick="enterFolderB(this)" data-folder="">
+          <span class="fx-all-dot">≡</span>
+          <span class="fx-side-label">Todos os links</span>
+          <span class="fx-side-count">61</span>
+        </button>
+
+        <div class="fx-seg-panel active" id="b-pastas">
+          <div class="fx-folder-children" style="margin-top:6px">
+            <button class="fx-side-row fx-folder-child-link" onclick="enterFolderB(this)" data-folder="leitura">
+              <span class="fx-side-dot" style="background:#F59E0B"></span>
+              <span class="fx-side-label">Leitura</span>
+              <span class="fx-side-count">12</span>
+            </button>
+            <button class="fx-side-row fx-folder-child-link" onclick="enterFolderB(this)" data-folder="dev">
+              <span class="fx-side-dot" style="background:#6366F1"></span>
+              <span class="fx-side-label">Dev</span>
+              <span class="fx-side-count">34</span>
+            </button>
+            <button class="fx-side-row fx-folder-child-link" onclick="enterFolderB(this)" data-folder="frontend">
+              <span class="fx-side-dot" style="background:#8B7CF6"></span>
+              <span class="fx-side-label">└ Frontend</span>
+              <span class="fx-side-count">14</span>
+            </button>
+            <button class="fx-side-row fx-folder-child-link" onclick="enterFolderB(this)" data-folder="backend">
+              <span class="fx-side-dot" style="background:#4F46E5"></span>
+              <span class="fx-side-label">└ Backend</span>
+              <span class="fx-side-count">18</span>
+            </button>
+            <button class="fx-side-row fx-folder-child-link" onclick="enterFolderB(this)" data-folder="financas">
+              <span class="fx-side-dot" style="background:#10B981"></span>
+              <span class="fx-side-label">Finanças</span>
+              <span class="fx-side-count">7</span>
+            </button>
+            <button class="fx-side-row fx-folder-child-link" onclick="enterFolderB(this)" data-folder="receitas">
+              <span class="fx-side-dot" style="background:#F43F5E"></span>
+              <span class="fx-side-label">Receitas</span>
+              <span class="fx-side-count">5</span>
+            </button>
+          </div>
+          <div class="fx-side-actions">
+            <button class="fx-side-action">＋ Nova pasta</button>
+            <button class="fx-side-action">✎ Gerenciar</button>
+          </div>
+        </div>
+
+        <div class="fx-seg-panel" id="b-tags">
+          <button class="fx-side-sep fx-side-sep-toggle" style="margin-top:6px"><span class="chev">▼</span> FREQUENTES</button>
+          <button class="fx-side-row" onclick="toggleActive(this)"><span class="fx-side-dot" style="background:#00ADD8"></span><span class="fx-side-label">go</span><span class="fx-side-count">21</span></button>
+          <button class="fx-side-row" onclick="toggleActive(this)"><span class="fx-side-dot" style="background:#61DAFB"></span><span class="fx-side-label">react</span><span class="fx-side-count">14</span></button>
+          <button class="fx-side-row" onclick="toggleActive(this)"><span class="fx-side-dot" style="background:#FF9A00"></span><span class="fx-side-label">aws</span><span class="fx-side-count">9</span></button>
+          <button class="fx-side-row" onclick="toggleActive(this)"><span class="fx-side-dot" style="background:#F43F5E"></span><span class="fx-side-label">ia</span><span class="fx-side-count">8</span></button>
+          <button class="fx-side-sep fx-side-sep-toggle"><span class="chev">▼</span> OUTRAS</button>
+          <button class="fx-side-row" onclick="toggleActive(this)"><span class="fx-side-dot" style="background:#10B981"></span><span class="fx-side-label">devops</span><span class="fx-side-count">6</span></button>
+          <button class="fx-side-row" onclick="toggleActive(this)"><span class="fx-side-dot" style="background:#6366F1"></span><span class="fx-side-label">postgres</span><span class="fx-side-count">6</span></button>
+          <div class="fx-side-actions">
+            <button class="fx-side-action">＋ Nova tag</button>
+            <button class="fx-side-action">✎ Gerenciar</button>
+          </div>
+        </div>
+
+        <button class="fx-side-sep fx-side-sep-toggle"><span class="chev">▼</span> ATUALIZAÇÕES RECENTES</button>
+        <a class="fx-side-row" style="cursor:pointer; text-decoration:none">
+          <span class="fx-side-dot" style="background:var(--fx-ink-5)"></span>
+          <span class="fx-side-label">Go 1.26 release notes</span>
+          <span class="fx-side-count">2h</span>
+        </a>
+      </div>
+      <div class="fx-side-version">foldex v3.4.5 · 02 nov 2026</div>
+    </aside>
+
+    <main class="fx-main">
+      <div class="fx-topbar">
+        <div class="fx-search">🔍 Buscar links, notas… <kbd>⌘K</kbd></div>
+        <button class="fx-btn-primary">＋ Novo link</button>
+      </div>
+      <div class="fx-breadcrumb" id="crumb-b"><span style="font-size:11px; color:var(--fx-ink-5); letter-spacing:.08em;">VISTA GERAL</span></div>
+      <div class="fx-content-head">
+        <span class="fx-content-title" id="title-b">Todos os links</span>
+        <span class="fx-content-sub" id="sub-b">61 itens</span>
+      </div>
+      <div class="fx-grid" id="grid-b"></div>
+    </main>
+  </div>
+  <div class="sketch-note">
+    <b>Variante B — Abas segmentadas.</b> Controle <i>Pastas | Tags</i> logo abaixo do cabeçalho: a sidebar mostra um
+    conjunto por vez e nunca cresce além de uma tela, mesmo com muitas pastas E muitas tags. A aba ativa persiste
+    (localStorage, como as seções de hoje). “Todos os links” e “Atualizações recentes” ficam fora das abas, sempre visíveis.
+    <b>As ações ficam DENTRO de cada aba</b>: “Nova pasta / Gerenciar” no painel de pastas, “Nova tag / Gerenciar” no de tags —
+    e o rail colapsado mostra as ações da aba ativa. Ao clicar numa pasta, entra nela — e a aba Pastas mantém o contexto.
+    <span class="rule">Teste trocar de aba e entrar numa pasta.</span>
+    Pastas com senha seguem omitidas da lista.
+  </div>
+</div>
+
+<!-- ══════════════════ VARIANTE C · drill-down contextual ══════════════════ -->
+<div id="variant-c" class="variant">
+  <div class="fx-frame">
+    <aside class="fx-sidebar" id="side-c">
+      <!-- estado HOME -->
+      <div id="side-c-home">
+        <div class="fx-side-head">
+          <div class="fx-side-title"><span class="tico">◈</span> <span>Navegar</span></div>
+          <button class="fx-side-action" style="padding:4px 8px; border:0; background:none; box-shadow:none;" title="Recolher">‹</button>
+        </div>
+        <div class="fx-sidebar-scroll">
+          <button class="fx-side-row fx-side-all fx-side-row-active" onclick="enterFolderC('')">
+            <span class="fx-all-dot">≡</span>
+            <span class="fx-side-label">Todos os links</span>
+            <span class="fx-side-count">61</span>
+          </button>
+          <button class="fx-side-sep fx-side-sep-toggle"><span class="chev">▼</span> PASTAS</button>
+          <div class="fx-folder-children">
+            <button class="fx-side-row fx-folder-child-link" onclick="enterFolderC('leitura')"><span class="fx-side-dot" style="background:#F59E0B"></span><span class="fx-side-label">Leitura</span><span class="fx-side-count">12</span></button>
+            <button class="fx-side-row fx-folder-child-link" onclick="enterFolderC('dev')"><span class="fx-side-dot" style="background:#6366F1"></span><span class="fx-side-label">Dev</span><span class="fx-side-count">34</span></button>
+            <button class="fx-side-row fx-folder-child-link" onclick="enterFolderC('frontend')"><span class="fx-side-dot" style="background:#8B7CF6"></span><span class="fx-side-label">Frontend</span><span class="fx-side-count">14</span></button>
+            <button class="fx-side-row fx-folder-child-link" onclick="enterFolderC('backend')"><span class="fx-side-dot" style="background:#4F46E5"></span><span class="fx-side-label">Backend</span><span class="fx-side-count">18</span></button>
+          </div>
+          <button class="fx-side-sep fx-side-sep-toggle"><span class="chev">▼</span> FREQUENTES</button>
+          <button class="fx-side-row" onclick="toggleActive(this)"><span class="fx-side-dot" style="background:#00ADD8"></span><span class="fx-side-label">go</span><span class="fx-side-count">21</span></button>
+          <button class="fx-side-row" onclick="toggleActive(this)"><span class="fx-side-dot" style="background:#61DAFB"></span><span class="fx-side-label">react</span><span class="fx-side-count">14</span></button>
+        </div>
+      </div>
+
+      <!-- estado DENTRO DA PASTA -->
+      <div id="side-c-folder" class="fx-folder-context">
+        <button class="fx-back-row" onclick="enterFolderC('')">← Todas as pastas</button>
+        <div class="fx-context-title"><span class="fdot" id="c-fdot" style="background:#6366F1"></span> <span id="c-fname">Dev</span></div>
+        <div class="fx-sidebar-scroll">
+          <button class="fx-side-sep fx-side-sep-toggle"><span class="chev">▼</span> SUBPASTAS</button>
+          <div class="fx-folder-children">
+            <button class="fx-side-row fx-folder-child-link" onclick="enterFolderC('frontend')"><span class="fx-side-dot" style="background:#8B7CF6"></span><span class="fx-side-label">Frontend</span><span class="fx-side-count">14</span></button>
+            <button class="fx-side-row fx-folder-child-link" onclick="enterFolderC('backend')"><span class="fx-side-dot" style="background:#4F46E5"></span><span class="fx-side-label">Backend</span><span class="fx-side-count">18</span></button>
+          </div>
+          <button class="fx-side-sep fx-side-sep-toggle"><span class="chev">▼</span> TAGS NESTA PASTA</button>
+          <button class="fx-side-row" onclick="toggleActive(this)"><span class="fx-side-dot" style="background:#00ADD8"></span><span class="fx-side-label">go</span><span class="fx-side-count">11</span></button>
+          <button class="fx-side-row" onclick="toggleActive(this)"><span class="fx-side-dot" style="background:#6366F1"></span><span class="fx-side-label">postgres</span><span class="fx-side-count">5</span></button>
+          <button class="fx-side-row" onclick="toggleActive(this)"><span class="fx-side-dot" style="background:#10B981"></span><span class="fx-side-label">devops</span><span class="fx-side-count">4</span></button>
+          <button class="fx-side-sep fx-side-sep-toggle"><span class="chev">▼</span> ATUALIZAÇÕES RECENTES</button>
+          <a class="fx-side-row" style="cursor:pointer; text-decoration:none"><span class="fx-side-dot" style="background:var(--fx-ink-5)"></span><span class="fx-side-label">pgx v5.11 notes</span><span class="fx-side-count">2h</span></a>
+        </div>
+      </div>
+
+      <div class="fx-side-actions">
+        <button class="fx-side-action">＋ Nova</button>
+        <button class="fx-side-action">✎ Gerenciar</button>
+      </div>
+      <div class="fx-side-version">foldex v3.4.5 · 02 nov 2026</div>
+    </aside>
+
+    <main class="fx-main">
+      <div class="fx-topbar">
+        <div class="fx-search">🔍 Buscar em Dev… <kbd>⌘K</kbd></div>
+        <button class="fx-btn-primary">＋ Novo link</button>
+      </div>
+      <div class="fx-breadcrumb" id="crumb-c"><span style="font-size:11px; color:var(--fx-ink-5); letter-spacing:.08em;">VISTA GERAL</span></div>
+      <div class="fx-content-head">
+        <span class="fx-content-title" id="title-c">Todos os links</span>
+        <span class="fx-content-sub" id="sub-c">61 itens</span>
+      </div>
+      <div class="fx-grid" id="grid-c"></div>
+    </main>
+  </div>
+  <div class="sketch-note">
+    <b>Variante C — Drill-down contextual.</b> A home é igual à variante A, mas ao entrar numa pasta a <b>própria sidebar
+    muda de contexto</b>: título da pasta, subpastas, tags mais usadas <i>naquela pasta</i> e “Atualizações recentes” filtradas —
+    com um botão “← Todas as pastas” para voltar. É o modeloFinder/Explorer: cada nível de navegação reescreve o painel.
+    <span class="rule">Clique em “Dev” e depois em “Backend” para sentir a navegação.</span> Exige cache de contagens por pasta
+    (endpoint de counts já existe em <code>/api/entries/counts</code>).
+  </div>
+</div>
+
+<script>
+  /* ── dados mock ── */
+  const FOLDERS = {
+    '':        { name: 'Todos os links', color: '#6366F1', count: 61, crumb: [] },
+    leitura:   { name: 'Leitura',   color: '#F59E0B', count: 12, crumb: [{ n: 'Todos os links', id: '' }] },
+    dev:       { name: 'Dev',       color: '#6366F1', count: 34, crumb: [{ n: 'Todos os links', id: '' }] },
+    frontend:  { name: 'Frontend',  color: '#8B7CF6', count: 14, crumb: [{ n: 'Todos os links', id: '' }, { n: 'Dev', id: 'dev' }] },
+    backend:   { name: 'Backend',   color: '#4F46E5', count: 18, crumb: [{ n: 'Todos os links', id: '' }, { n: 'Dev', id: 'dev' }] },
+    financas:  { name: 'Finanças',  color: '#10B981', count: 7,  crumb: [{ n: 'Todos os links', id: '' }] },
+    receitas:  { name: 'Receitas',  color: '#F43F5E', count: 5,  crumb: [{ n: 'Todos os links', id: '' }] },
+  };
+  const CARDS = [
+    { t: 'Go 1.26 Release Notes', u: 'go.dev/blog/go1.26', f: '#00ADD8', tags: ['go', 'release'], folder: 'Dev/Backend', changed: true },
+    { t: 'pgx v5 — pool & tx', u: 'github.com/jackc/pgx', f: '#6366F1', tags: ['go', 'postgres'], folder: 'Dev/Backend' },
+    { t: 'React 19 migration guide', u: 'react.dev/blog', f: '#61DAFB', tags: ['react'], folder: 'Dev/Frontend', changed: true },
+    { t: 'Masonry layout com CSS grid', u: 'developer.mozilla.org/…', f: '#F59E0B', tags: ['css', 'design'], folder: 'Dev/Frontend' },
+    { t: 'The Pragmatic Engineer — platform teams', u: 'newsletter.pragmaticengineer.com', f: '#F43F5E', tags: ['leitura'], folder: 'Leitura' },
+    { t: 'IR 2026 — tabela progressiva', u: 'gov.br/receita', f: '#10B981', tags: ['impostos'], folder: 'Finanças' },
+    { t: 'Pão de fermentação natural', u: 'culinaria.caseira/pao', f: '#F43F5E', tags: ['receita'], folder: 'Receitas' },
+    { t: 'chi router — middleware stack', u: 'go-chi.io', f: '#00ADD8', tags: ['go', 'devops'], folder: 'Dev/Backend' },
+  ];
+
+  function renderGrid(el, folderId) {
+    const f = FOLDERS[folderId];
+    const cards = folderId === '' ? CARDS : CARDS.filter(c => (f ? c.folder.startsWith(f.name) : true));
+    el.innerHTML = cards.map(c => `
+      <div class="fx-card">
+        <div class="fx-card-top">
+          <span class="fx-favicon" style="background:${c.f}">${c.t[0]}</span>
+          <span class="fx-card-title">${c.t}</span>
+        </div>
+        <div class="fx-card-url">${c.u}</div>
+        <div class="fx-card-chips">
+          <span class="fx-chip fx-chip-folder">▸ ${c.folder}</span>
+          ${c.tags.map(t => `<span class="fx-chip">#${t}</span>`).join('')}
+          ${c.changed ? '<span class="fx-chip fx-chip-changed">● mudou</span>' : '' }
+        </div>
+      </div>`).join('');
+  }
+  function renderCrumb(el, folderId, cb) {
+    const f = FOLDERS[folderId];
+    if (folderId === '') { el.innerHTML = '<span style="font-size:11px; color:var(--fx-ink-5); letter-spacing:.08em;">VISTA GERAL</span>'; return; }
+    el.innerHTML = f.crumb.map(c => `<span class="crumb" onclick="${cb}('${c.id}')">${c.n}</span><span class="sep">/</span>`).join('')
+      + `<span class="fld-badge"><span style="width:8px;height:8px;border-radius:3px;background:${f.color};display:inline-block"></span>${f.name}</span>`;
+  }
+  function setHead(suffix, folderId) {
+    const f = FOLDERS[folderId];
+    document.getElementById('title-' + suffix).textContent = f.name;
+    document.getElementById('sub-' + suffix).textContent = folderId === '' ? '61 itens' : f.count + ' itens';
+  }
+
+  /* variante A */
+  function enterFolder(btn) {
+    const aside = btn.closest('.fx-sidebar');
+    aside.querySelectorAll('.fx-side-row').forEach(r => r.classList.remove('fx-side-row-active'));
+    btn.classList.add('fx-side-row-active');
+    const id = btn.dataset.folder || '';
+    renderCrumb(document.getElementById('crumb-a'), id, 'enterFolderById');
+    setHead('a', id);
+    renderGrid(document.getElementById('grid-a'), id);
+  }
+  function enterFolderById(id) {
+    const btn = document.querySelector('#variant-a [data-folder="' + id + '"]') || document.querySelector('#variant-a .fx-side-all');
+    enterFolder(btn);
+  }
+
+  /* variante B */
+  function enterFolderB(btn) {
+    document.querySelectorAll('#variant-b .fx-side-row').forEach(r => r.classList.remove('fx-side-row-active'));
+    btn.classList.add('fx-side-row-active');
+    const id = btn.dataset.folder || '';
+    renderCrumb(document.getElementById('crumb-b'), id, 'noopB');
+    setHead('b', id);
+    renderGrid(document.getElementById('grid-b'), id);
+  }
+  function noopB(){}
+  function segTab(btn, panel) {
+    btn.parentElement.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    document.querySelectorAll('#variant-b .fx-seg-panel').forEach(p => p.classList.remove('active'));
+    document.getElementById(panel).classList.add('active');
+  }
+
+  /* variante C */
+  function enterFolderC(id) {
+    const home = document.getElementById('side-c-home');
+    const ctx  = document.getElementById('side-c-folder');
+    if (id === '') { home.style.display = ''; ctx.classList.remove('active'); }
+    else {
+      home.style.display = 'none'; ctx.classList.add('active');
+      const f = FOLDERS[id];
+      document.getElementById('c-fname').textContent = f.name;
+      document.getElementById('c-fdot').style.background = f.color;
+    }
+    renderCrumb(document.getElementById('crumb-c'), id, 'noopC');
+    setHead('c', id);
+    renderGrid(document.getElementById('grid-c'), id);
+  }
+
+  function toggleActive(btn) { btn.classList.toggle('fx-side-row-active'); }
+
+  function showVariant(id, ev) {
+    document.querySelectorAll('.variant').forEach(v => v.style.display = 'none');
+    document.querySelectorAll('.variant-tab').forEach(t => t.classList.remove('active'));
+    document.getElementById('variant-' + id).style.display = 'block';
+    if (ev && ev.target) ev.target.classList.add('active');
+  }
+  function toggleTheme(ev) {
+    const html = document.documentElement;
+    const dark = html.dataset.theme === 'dark';
+    html.dataset.theme = dark ? 'light' : 'dark';
+    ev.target.textContent = dark ? '🌙 escuro' : '☀ claro';
+  }
+
+  /* init */
+  ['a','b','c'].forEach(v => renderGrid(document.getElementById('grid-' + v), ''));
+  document.querySelectorAll('.fx-side-sep-toggle').forEach(sep => {
+    sep.addEventListener('click', () => sep.classList.toggle('fx-side-sep-collapsed'));
+  });
+</script>
+</body>
+</html>

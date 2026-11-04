@@ -1,0 +1,23 @@
+{
+  "cmd": "cd web && bun run dev -- --port 5174 --strictPort",
+  "pid": 43692,
+  "pgid": 43692,
+  "pid_identity": "Tue Nov  3 19:46:06 2026",
+  "execution_id": "05b40897-4604-4489-91ac-eedc7a81b723",
+  "url": "http://localhost:5174/",
+  "port": 5174,
+  "healthcheck": "/",
+  "health": {
+    "ok": true,
+    "status": 200
+  },
+  "status": "stopped",
+  "log": "ui/boot.log",
+  "at": "2026-11-03T22:46:06.724Z",
+  "started_ms": 750,
+  "stopped_at": "2026-11-03T22:51:45.020Z",
+  "teardown": {
+    "killed": true,
+    "identity_matched": true
+  }
+}
