@@ -4,13 +4,13 @@
   "name": "Foldex",
   "repo": "github.com/justoeu/foldex",
   "branch": "main",
-  "commit": "f583aae",
-  "generatedAt": "2026-11-02T22:28:30+00:00",
+  "commit": "cbcc544",
+  "generatedAt": "2026-11-04T02:02:04+00:00",
   "generator": "atlas-docs skill · primeiro scan full",
   "filesCount": 5175,
   "stackSummary": "Go 1.26 (chi · pgx · minio-go · amqp091 · go-rod · age) × 4 binários + React/MUI SPA em nginx + Postgres 18 + RustFS (S3) + RabbitMQ externo",
-  "syncNote": "Scan sobre HEAD f583aae (merge PR #169), worktree limpa.",
-  "commitPrev": null
+  "syncNote": "Delta: release v3.4.6 (sidebar Navegar + deps refresh) sobre base f583aae.",
+  "commitPrev": "f583aae"
  },
  "identity": {
   "what": "Encurtador/bookmark self-hosted multiusuário: o usuário salva links e notas (com pastas 1:N e tags M:N), o sistema enriquece cada URL (fetch SSRF-guarded, oEmbed, screenshot Chromium como fallback) e serve redirecionamento público em /go/{id-ou-slug} com log de cliques. Fonte da verdade: Postgres (click_log como única fonte de contagem — ADR-9), artefatos binários no RustFS/S3. Asa assíncrona: e-mail transacional via outbox+AMQP, backup offline via agente dedicado.",
@@ -141,9 +141,9 @@
      },
      {
       "name": "pgx/v5",
-      "ver": "v5.11.0",
+      "ver": "v5.12.0",
       "use": "pool + tx + scans",
-      "note": "sem ORM (§7)",
+      "note": "sem ORM (§7); 5.11→5.12 no refresh 2026-11-04",
       "state": "ok"
      },
      {
@@ -242,14 +242,14 @@
    {
     "name": "app stack",
     "file": "docker-compose.yml",
-    "sub": "backend(512m) · mailer(profile amqp,128m,sem DB) · backup(profile backup,1g) · web nginx(9088/9444)",
-    "yaml": "services:\n  backend:\n    image: justoeu/foldex-backend:${FOLDEX_VERSION:-3.4.4}\n    ports: ['${BIND_HOST:-127.0.0.1}:9089']\n  mailer: { profiles: [amqp], entrypoint: /foldex-mailer }\n  backup: { profiles: [backup], stop_grace_period: 150s }\n  web:    { image: justoeu/foldex-web, ports: ['127.0.0.1:9088:8080','127.0.0.1:9444:8443'] }"
+    "sub": "backend(512m) · mailer(profile amqp) · backup(profile backup) · web nginx(9088/9444)",
+    "yaml": "services:\n  backend:\n    image: justoeu/foldex-backend:${FOLDEX_VERSION:-3.4.6}"
    },
    {
     "name": "services stack",
     "file": "docker-compose.services.yml",
-    "sub": "postgres 18.6-alpine · rustfs 1.0.3 digest-pinned · rustfs-init one-shot",
-    "yaml": "services:\n  db:      { image: postgres:18.6-alpine }\n  rustfs:  { image: rustfs/rustfs:1.0.3@sha256:9ca95595… }\n  rustfs-init: { restart: 'no', depends_on: [rustfs: healthy] }"
+    "sub": "postgres 18.6-alpine · rustfs 1.0.4 digest-pinned (bootstrap smoke re-verificado) · rustfs-init one-shot",
+    "yaml": "services:\n  rustfs: { image: rustfs/rustfs:1.0.4@sha256:ed9210d6… }"
    }
   ],
   "adrs": [
@@ -705,8 +705,8 @@
     "id": "rustfs",
     "name": "RustFS (S3)",
     "group": "dados",
-    "tech": "rustfs/rustfs:1.0.3 digest-pinned",
-    "desc": "Objetos: screenshots, imagens, mídia de notas, dumps espelhados.",
+    "tech": "rustfs/rustfs:1.0.4 digest-pinned",
+    "desc": "Objetos: screenshots, imagens, mídia de notas, dumps espelhados. 1.0.3→1.0.4 (2026-11-04) com rustfs-init smoke re-verificado.",
     "prov": "code",
     "src": "docker-compose.services.yml:59",
     "flows": [
@@ -7306,6 +7306,17 @@
  "history": {
   "scans": [
    {
+    "id": "dc7055075d4847049bf56f7ae8f16df9",
+    "commit": "cbcc544",
+    "when": "03/11 23:02",
+    "title": "Delta v3.4.6 — sidebar Navegar + deps refresh",
+    "detail": "",
+    "delta": "+0%",
+    "deltaKind": "ok",
+    "previousScore": 87,
+    "score": 87
+   },
+   {
     "id": "0dd4ebe145774d4fb69b9c38748f1f5a",
     "commit": "f583aae",
     "when": "02/11 19:28",
@@ -7323,9 +7334,27 @@
     "v": 87,
     "commit": "f583aae",
     "scan": "0dd4ebe145774d4fb69b9c38748f1f5a"
+   },
+   {
+    "day": "2026-11-04",
+    "v": 87,
+    "commit": "cbcc544",
+    "scan": "dc7055075d4847049bf56f7ae8f16df9"
    }
   ],
   "changelog": [
+   {
+    "tag": "NOVO",
+    "body": "SPA: sidebar Navegar com abas Pastas|Tags — árvore de pastas sem senha, clique entra na pasta (PR #170, sketch 001 variante B)"
+   },
+   {
+    "tag": "DOC",
+    "body": "Deps refresh 2026-11-04 (PR #171): x/net v0.62 (GO-2026-6860 corrigida) · follow-redirects >=1.16.2 (3 HIGH) · bun audit 11→1 · pgx v5.12 · grpc v1.85 · rustfs 1.0.4 · mailpit v1.33 · actions codeql v4.39.2/sonar v8.4.1"
+   },
+   {
+    "tag": "DOC",
+    "body": "Release v3.4.6 publicada (multi-arch) e deployada em produção via Coolify"
+   },
    {
     "tag": "NOVO",
     "body": "Primeiro scan do Atlas: 41 fluxos, 143 rotas inventariadas, 36 tabelas, 95 vars de ambiente, C1+C2, 11 loops async, 4 binários"
