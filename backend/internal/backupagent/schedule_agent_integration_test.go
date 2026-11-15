@@ -51,12 +51,16 @@ func TestAgent_SyncPicksUpScheduleRowsLive(t *testing.T) {
 	}, 15*time.Second, 100*time.Millisecond, "deleting the row must fall the agenda back to env")
 
 	// The heartbeat is written by the same loop — the band's "agent last
-	// seen" and the agenda's source come from one place.
-	state, seen, err := store.AgentSeen(ctx)
-	require.NoError(t, err)
-	require.True(t, seen)
-	assert.True(t, state.Jobs[backupjobs.JobDump].Capable)
-	assert.Equal(t, "env", state.Jobs[backupjobs.JobDump].Source)
+	// seen" and the agenda's source come from one place. The write lands
+	// AFTER the in-memory fallback above, so the store's view is eventually
+	// consistent with what timing() already reported: poll it instead of
+	// reading once, or the read can land between setTimings and the
+	// heartbeat commit and see the previous tick's "db".
+	require.Eventually(t, func() bool {
+		state, seen, err := store.AgentSeen(ctx)
+		return err == nil && seen && state.Jobs[backupjobs.JobDump].Capable &&
+			state.Jobs[backupjobs.JobDump].Source == "env"
+	}, 15*time.Second, 100*time.Millisecond, "the heartbeat must carry the env fallback once the row is deleted")
 }
 
 // The heartbeat is where the admin form learns the ENV agenda. Without the
