@@ -1307,3 +1307,9 @@ configuração; a regra tem que valer sozinha*.
 - `load/k6/` cobre fumaça, sessão, leitura da biblioteca, escrita com limpeza, stats, atividade, settings, admin, redirect e um export único. Perfis `smoke`, `read`, `write` e `stress` (este só com `K6_I_MEAN_IT=1`).
 - Não entra no CI. `make load-k6 FLOW=…`. A conta de carga não pode ter segundo fator.
 - Índices da listagem e de `click_log` já estavam nas migrações 000017 e 000018. A suíte não abre migração sem um `EXPLAIN` que mostre varredura.
+
+## 2026-11-14 — Code scanning: XSS do Atlas triado + docs/ fora do sweep semanal
+
+- Dois alertas High do CodeQL (#123 `js/xss`, #124 `js/xss-through-dom`) apontavam o mesmo sink (`app.innerHTML` em `docs/atlas/index.html`). Verificação exaustiva: todo valor dinâmico escapa via helper `E()` (não modelado pelo CodeQL); `S.screen` nasce de allowlist; a fonte do through-dom é JSON estático de build. Ambos dismissados `false positive` com comentário.
+- O gatilho do ruído: `schedule` não herda `paths-ignore` — o cron semanal varria docs/ inteiro. Raiz cortada com `codeql-config.yml` (`config-file:` no init), excluindo apenas as árvores geradas (`docs/{atlas,audit,audits,impl}/**`); código hand-written em docs/ segue no perímetro.
+- Lições que o review dos 5 agentes pegou (ambas blockers): `config:` é YAML inline, o input de caminho é `config-file:`; a chave é `paths-ignore` (snake_case é descartado silenciosamente — schema com `additionalProperties: true`). Guard novo `scripts/test-codeql-config.sh` no job infra do CI trava forma, globs e wiring.

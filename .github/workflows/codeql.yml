@@ -59,6 +59,8 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
+          # Exclusions and why live in codeql-config.yml.
+          config-file: codeql-config.yml
           # security-extended adds the higher-recall query suite on top of the
           # default — more findings (incl. SSRF / path-traversal patterns the
           # threat model in CLAUDE.md §4 cares about) at the cost of some noise.

@@ -1,0 +1,19 @@
+name: "CodeQL config"
+
+# Only generated trees are excluded — Atlas docs pack, audit and implementation
+# reports. Hand-written code that ever lands under docs/ stays inside the
+# analysis perimeter: the push/PR triggers in codeql.yml skip docs-only events,
+# but a config-level exclusion suppresses docs content in every run, so the
+# glob must not be wider than the artifacts it exists to skip. CodeQL cannot
+# clear these trees: the Atlas index.html escapes every dynamic value through
+# a local E() helper the analyzer does not model as a sanitizer, so the weekly
+# scheduled sweep (no path filter of its own) re-flags DOM XSS that manual
+# verification proved false.
+#
+# Do not add `queries:` here: the workflow's `queries:` input replaces config
+# queries unless prefixed with `+` — security-extended must stay authoritative.
+paths-ignore:
+  - docs/atlas/**
+  - docs/audit/**
+  - docs/audits/**
+  - docs/impl/**

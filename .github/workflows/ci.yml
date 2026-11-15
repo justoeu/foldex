@@ -211,6 +211,14 @@ jobs:
         # past a duplicate YAML key. --no-interpolate keeps it a parse check
         # (the ${VAR:?} gates in services.yml must not fire on a bare runner).
         run: bash scripts/test-compose-config.sh
+      - name: codeql config excludes only the generated trees
+        # The CodeQL runner parses codeql-config.yml at analysis time and
+        # fails silently on a mistyped key (paths-ignore vs paths_ignore),
+        # a duplicate key, or a glob that stops matching — CI stays green
+        # while the weekly sweep re-admits alerts manual verification had
+        # dismissed. actionlint cannot see the file (it reads only
+        # .github/workflows/ and treats `config:` as an opaque string).
+        run: bash scripts/test-codeql-config.sh
       - name: Mailpit publishes on loopback
         # docker-compose.mail.yml used to map :1025/:8025 on all interfaces,
         # so a development inbox with no auth was reachable on the LAN.
